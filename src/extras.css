@@ -83,8 +83,10 @@
   opacity: 0;
   transition: opacity 0.15s;
 }
+/* Hover only. Showing these for the active chat as well meant the chat you
+   were actually in was the one whose title you could never read. */
 .history-item:hover .history-actions,
-.history-item.active .history-actions { opacity: 1; }
+.history-item:focus-within .history-actions { opacity: 1; }
 
 .history-actions button {
   background: transparent;
@@ -2859,12 +2861,27 @@ img.user-avatar { object-fit: cover; padding: 0; }
   background: linear-gradient(
     to var(--history-fade-direction, right),
     transparent,
-    var(--hover-bg) 1.4rem
+    var(--hover-bg) 1.5rem
   );
   pointer-events: none;
 }
 [dir='rtl'] .history-actions { --history-fade-direction: left; }
 .history-item:hover .history-actions,
-.history-item.active .history-actions { pointer-events: auto; }
+.history-item:focus-within .history-actions { pointer-events: auto; }
 
 .history-rename-input { flex: 1; min-width: 0; }
+
+/* Overflow menu on a sidebar row: rename, duplicate, exports and filing all
+   live here so only three icons ever sit over the title. */
+.row-menu-wrap { position: relative; display: inline-flex; }
+.row-menu { min-width: 200px; max-height: 320px; overflow-y: auto; }
+.row-menu-sep {
+  margin-top: 0.3rem;
+  padding: 0.35rem 0.6rem 0.15rem;
+  border-top: 1px solid var(--border-color);
+  font-size: 0.68rem;
+  text-transform: uppercase;
+  letter-spacing: 0.03em;
+  color: var(--text-muted);
+}
+.history-actions button.is-on { color: var(--primary); }

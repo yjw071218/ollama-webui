@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useMemo, memo, useCallback } from 'react';
 import localforage from 'localforage';
-import { ArrowUp, Paperclip, Sparkles, RefreshCcw, Trash2, Copy, Check, Terminal, Settings, Edit, MessageSquare, ChevronDown, Download, Square, X, Play, Mic, MicOff, Volume2, Search, Code, Maximize2, Sun, Moon, Monitor, Pin, PinOff, GitBranch, FileDown, Command, Cpu, Plus, Save, ArrowDown, Zap, Layers, Server, ExternalLink, Star, Info, TriangleAlert, FileText, Minimize2, PanelLeft, ListTree, LogOut, UserPlus, Languages, User, Activity, Globe, Folder, FolderPlus, ChevronLeft, ChevronRight, SlidersHorizontal, CornerDownRight } from 'lucide-react';
+import { ArrowUp, Paperclip, Sparkles, RefreshCcw, Trash2, Copy, Check, Terminal, Settings, Edit, MessageSquare, ChevronDown, Download, Square, X, Play, Mic, MicOff, Volume2, Search, Code, Maximize2, Sun, Moon, Monitor, Pin, PinOff, GitBranch, FileDown, Command, Cpu, Plus, Save, ArrowDown, Zap, Layers, Server, ExternalLink, Star, Info, TriangleAlert, FileText, Minimize2, PanelLeft, ListTree, LogOut, UserPlus, Languages, User, Activity, Globe, Folder, FolderPlus, MoreHorizontal, ChevronLeft, ChevronRight, SlidersHorizontal, CornerDownRight } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -753,7 +753,7 @@ function App() {
   const [folders, setFolders] = useState([]);
   const [collapsedFolders, setCollapsedFolders] = useState({});
   const [folderDialog, setFolderDialog] = useState(null);   // { id?, name, systemPrompt }
-  const [folderMenuFor, setFolderMenuFor] = useState(null);
+  const [rowMenuFor, setRowMenuFor] = useState(null);
 
   // --- Sampling presets ---
   const [presets, setPresets] = useState([]);
@@ -1636,11 +1636,22 @@ function App() {
     const res = await fetch('/mcp/search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ query, limit }),
+      body: JSON.stringify({ query, limit, language: lang }),
     });
     const data = await res.json().catch(() => null);
     if (!data?.success) throw new Error(data?.error || `HTTP ${res.status}`);
     return { results: data.results || [], provider: data.provider, attempts: data.attempts || [] };
+  };
+
+  const mcpFetchNews = async (topic, limit = 8) => {
+    const res = await fetch('/mcp/news', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ topic, limit, language: lang }),
+    });
+    const data = await res.json().catch(() => null);
+    if (!data?.success) throw new Error(data?.error || `HTTP ${res.status}`);
+    return { items: data.items || [], text: data.text || '' };
   };
 
   // Every free search backend blocks eventually. When the chain comes up
@@ -2561,6 +2572,10 @@ Web
   <TOOL_FETCH_URL>https://example.com/page</TOOL_FETCH_URL>
       Opens a page and returns its readable text. This is how you get real
       detail, quotes, dates and numbers.
+  <TOOL_NEWS>topic</TOOL_NEWS>
+      Current headlines with publisher and timestamp. Leave the topic empty for
+      today's top stories. Use this rather than TOOL_WEB_SEARCH for anything
+      about the news — a search returns portal front pages, not stories.
 
 Filesystem
   <TOOL_READ_FILE>absolute_path</TOOL_READ_FILE>
@@ -2819,6 +2834,20 @@ Rules
               const { results, provider, attempts } = await mcpSearchWeb(query, 6);
               if (results.length === 0) return `SEARCH FAILED for '${query}'. ${searchFailureNote(attempts)}`;
               return `Web search results for '${query}' (via ${provider}):\n${formatSearchResults(results)}`;
+            },
+          },
+          {
+            name: 'TOOL_NEWS',
+            pattern: /<TOOL_NEWS>([\s\S]*?)<\/TOOL_NEWS>/,
+            run: async (m) => {
+              const topic = m[1].trim();
+              addLog(`[tool] news: ${topic || 'top stories'}`, 'info');
+              const { items, text } = await mcpFetchNews(topic, 10);
+              if (items.length === 0) {
+                return `No headlines came back${topic ? ` for '${topic}'` : ''}. `
+                  + 'This is a tooling failure, not evidence that nothing is happening.';
+              }
+              return text;
             },
           },
           {
@@ -3276,43 +3305,50 @@ Rules
         </div>
       )}
       <div className="history-actions">
-        <span className="folder-move-wrap">
+        <button
+          className={s.pinned ? 'is-on' : ''}
+          title={s.pinned ? t('sidebar.unpin') : t('sidebar.pin')}
+          onClick={(e) => togglePin(s.id, e)}
+        >
+          {s.pinned ? <PinOff size={13} /> : <Pin size={13} />}
+        </button>
+
+        <span className="row-menu-wrap">
           <button
-            title={t('folders.move')}
-            onClick={(e) => { e.stopPropagation(); setFolderMenuFor(folderMenuFor === s.id ? null : s.id); }}
+            title={t('sidebar.more')}
+            onClick={(e) => { e.stopPropagation(); setRowMenuFor(rowMenuFor === s.id ? null : s.id); }}
           >
-            <Folder size={13} />
+            <MoreHorizontal size={13} />
           </button>
-          <Popover open={folderMenuFor === s.id} onClose={() => setFolderMenuFor(null)} className="folder-menu">
-            <button className="cmd-item" onClick={() => { moveSessionToFolder(s.id, null); setFolderMenuFor(null); }}>
+          <Popover open={rowMenuFor === s.id} onClose={() => setRowMenuFor(null)} className="row-menu">
+            <button className="cmd-item" onClick={() => { setRowMenuFor(null); startRename(s); }}>
+              <Edit size={13} /><span className="cmd-label">{t('sidebar.rename')}</span>
+            </button>
+            <button className="cmd-item" onClick={() => { setRowMenuFor(null); duplicateSession(s.id); }}>
+              <Copy size={13} /><span className="cmd-label">{t('sidebar.duplicate')}</span>
+            </button>
+            <button className="cmd-item" onClick={() => { setRowMenuFor(null); exportSessionMarkdown(s); }}>
+              <FileDown size={13} /><span className="cmd-label">{t('sidebar.exportMd')}</span>
+            </button>
+            <button className="cmd-item" onClick={() => { setRowMenuFor(null); exportSessionHtml(s); }}>
+              <Globe size={13} /><span className="cmd-label">{t('sidebar.exportHtml')}</span>
+            </button>
+
+            <div className="row-menu-sep">{t('folders.move')}</div>
+            <button className="cmd-item" onClick={() => { moveSessionToFolder(s.id, null); setRowMenuFor(null); }}>
               <span className="cmd-label">{t('folders.none')}</span>
               {!s.folderId && <Check size={13} />}
             </button>
             {folders.map(f => (
-              <button key={f.id} className="cmd-item" onClick={() => { moveSessionToFolder(s.id, f.id); setFolderMenuFor(null); }}>
+              <button key={f.id} className="cmd-item" onClick={() => { moveSessionToFolder(s.id, f.id); setRowMenuFor(null); }}>
                 <Folder size={13} />
                 <span className="cmd-label">{f.name}</span>
                 {s.folderId === f.id && <Check size={13} />}
               </button>
             ))}
-            {folders.length === 0 && <div className="cmd-empty">{t('folders.empty')}</div>}
           </Popover>
         </span>
-        <button title={s.pinned ? t('sidebar.unpin') : t('sidebar.pin')} onClick={(e) => togglePin(s.id, e)}>
-          {s.pinned ? <PinOff size={13} /> : <Pin size={13} />}
-        </button>
-        <button title={t('sidebar.rename')} onClick={(e) => startRename(s, e)}>
-          <Edit size={13} />
-        </button>
-        <button title={t('sidebar.duplicate')} onClick={(e) => duplicateSession(s.id, e)}>
-          <Copy size={13} />
-        </button>
-        <button title={t('sidebar.exportMd')} onClick={(e) => { e.stopPropagation(); exportSessionMarkdown(s); }}>
-          <FileDown size={13} />
-        </button>
-        <button title={t('sidebar.exportHtml')} onClick={(e) => { e.stopPropagation(); exportSessionHtml(s); }}>
-          <Globe size={13} />
-        </button>
+
         <button className="danger" title={t('sidebar.delete')} onClick={(e) => deleteSession(s.id, e)}>
           <Trash2 size={13} />
         </button>
@@ -4197,6 +4233,7 @@ Rules
                                                 {isSearch && t('tool.webSearch')}
                                                 {part.tool === 'TOOL_FETCH_URL' && t('tool.fetchUrl')}
                                                 {part.tool === 'TOOL_TIME' && t('tool.time')}
+                                                {part.tool === 'TOOL_NEWS' && t('tool.news')}
                                                 {part.tool === 'TOOL_LIST_MODELS' && t('tool.listModels')}
                                                 {part.tool === 'TOOL_SYSTEM_INFO' && t('tool.systemInfo')}
                                               </span>

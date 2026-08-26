@@ -4,6 +4,7 @@ import fs from 'fs';
 import path from 'path';
 import { spawn, execFile } from 'child_process';
 import os from 'os';
+import { parseNewsFeed, newsFeedUrl, looksLikeNewsQuery, formatNews } from './src/newsFeed.js';
 
 // Previous CPU tick snapshot; usage is only meaningful as a delta.
 let previousCpuSample = null;
@@ -310,8 +311,28 @@ const searchWikipedia = async (query, limit) => {
  * Walks the chain until something returns results, and reports which
  * provider answered plus why the others did not.
  */
-const searchWeb = async (query, limit = 5, env = {}) => {
+// Google News RSS. No key, real headlines with publishers and timestamps, in
+// the reader's language — which is what a question about the news needs and what
+// scraping a search engine conspicuously fails to give.
+const searchGoogleNews = async (query, limit, uiLanguage) => {
+  const res = await fetchWithTimeout(newsFeedUrl(query, uiLanguage), 12000);
+  if (!res.ok) throw new Error(`HTTP ${res.status}`);
+  const items = parseNewsFeed(await res.text(), limit);
+  return items.map(item => trimResult({
+    title: item.title,
+    url: item.url,
+    snippet: [item.source, item.published].filter(Boolean).join(' · '),
+  }));
+};
+
+const searchWeb = async (query, limit = 5, env = {}, uiLanguage = 'en') => {
   const chain = [];
+
+  // A news question goes to a headline feed first. Every other query skips it,
+  // because a feed is a poor answer to "how do I configure keep_alive".
+  if (looksLikeNewsQuery(query)) {
+    chain.push(['google-news', () => searchGoogleNews(query, limit, uiLanguage)]);
+  }
 
   if (env.BRAVE_API_KEY) chain.push(['brave', () => searchBrave(query, limit, env.BRAVE_API_KEY)]);
   if (env.TAVILY_API_KEY) chain.push(['tavily', () => searchTavily(query, limit, env.TAVILY_API_KEY)]);
@@ -491,6 +512,37 @@ const localFsPlugin = (env = {}) => ({
     });
 
     // ---- MCP: web search ----
+    // Headlines, deliberately separate from search: the answer shape is a dated
+    // list from named publishers, not a page of links.
+    server.middlewares.use('/mcp/news', (req, res) => {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      req.on('end', async () => {
+        const json = (payload, status = 200) => {
+          res.statusCode = status;
+          res.setHeader('Content-Type', 'application/json');
+          res.end(JSON.stringify(payload));
+        };
+
+        try {
+          const { topic, limit, language } = JSON.parse(body || '{}');
+          const count = Number(limit) > 0 ? Math.min(Number(limit), 20) : 8;
+          const res2 = await fetchWithTimeout(newsFeedUrl(topic || '', String(language || 'en')), 12000);
+          if (!res2.ok) throw new Error(`HTTP ${res2.status}`);
+          const items = parseNewsFeed(await res2.text(), count);
+          json({
+            success: true,
+            topic: topic || null,
+            fetchedAt: Date.now(),
+            items,
+            text: formatNews(items),
+          });
+        } catch (e) {
+          json({ success: false, error: e.name === 'AbortError' ? 'The news feed timed out' : e.message }, 500);
+        }
+      });
+    });
+
     server.middlewares.use('/mcp/search', (req, res) => {
       let body = '';
       req.on('data', chunk => { body += chunk.toString(); });
@@ -502,13 +554,14 @@ const localFsPlugin = (env = {}) => ({
         };
 
         try {
-          const { query, limit } = JSON.parse(body || '{}');
+          const { query, limit, language } = JSON.parse(body || '{}');
           if (!query || !String(query).trim()) return json({ success: false, error: 'A query is required' }, 400);
 
           const { results, provider, attempts } = await searchWeb(
             String(query).trim(),
             Number(limit) > 0 ? Number(limit) : 5,
-            env
+            env,
+            String(language || 'en'),
           );
           json({ success: true, query, results, provider, attempts });
         } catch (e) {
