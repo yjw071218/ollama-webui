@@ -265,6 +265,29 @@ const server = useTls
   ? https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, handler)
   : http.createServer(handler);
 
+// Double-clicking the launcher twice is the ordinary way to hit this, and an
+// unhandled 'error' event would answer it with a stack trace.
+server.on('error', (e) => {
+  if (e.code === 'EADDRINUSE') {
+    console.error('');
+    console.error(`  Port ${PORT} is already in use.`);
+    console.error('');
+    console.error('  The web UI is most likely already running — try opening');
+    console.error(`  http://localhost:${PORT} before starting another copy.`);
+    console.error('');
+    console.error('  If something else owns the port, set PORT in .env.');
+    console.error('');
+  } else if (e.code === 'EACCES') {
+    console.error('');
+    console.error(`  Not allowed to listen on port ${PORT}.`);
+    console.error('  Ports below 1024 need administrator rights on Windows.');
+    console.error('');
+  } else {
+    console.error(`  Could not listen on ${HOST}:${PORT} — ${e.message}`);
+  }
+  process.exit(1);
+});
+
 server.listen(PORT, HOST, () => {
   const scheme = useTls ? 'https' : 'http';
   console.log('');

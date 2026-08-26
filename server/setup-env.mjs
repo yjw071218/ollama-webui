@@ -17,8 +17,16 @@ import { prepareEnv, readEnvValue } from './envFile.js';
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ENV_FILE = path.join(ROOT, '.env');
 const forNetwork = process.argv.includes('--network');
+// The launcher needs the port to open a browser tab. Printing it alone keeps
+// the batch file free of quoting gymnastics.
+const printPortOnly = process.argv.includes('--print-port');
 
 const original = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf-8') : '';
+
+if (printPortOnly) {
+  process.stdout.write(readEnvValue(original, 'PORT') || '8080');
+  process.exit(0);
+}
 
 const { text, notes } = prepareEnv(original, {
   forNetwork,
