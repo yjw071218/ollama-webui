@@ -80,6 +80,13 @@ if (usable.length === 0) {
   for (const entry of usable) ok(`http://${entry.address}:${PORT}   (${entry.name})`);
 }
 
+const lan = usable[0]?.address;
+if (lan) {
+  note('');
+  note(`For Google/Kakao sign-in use http://${lan}.nip.io:${PORT} — Google refuses`);
+  note('a bare IP as an origin, and nip.io resolves straight back to this address.');
+}
+
 const rulePort = await firewallPort();
 if (!rulePort) {
   bad('no firewall rule named "Ollama WebUI".',

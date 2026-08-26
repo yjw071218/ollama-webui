@@ -171,7 +171,7 @@ const serveStatic = (req, res, url) => {
   fs.createReadStream(file).pipe(res);
 };
 
-const LOGIN_PAGE = (message = '') => `<!doctype html>
+const LOGIN_PAGE = (message = '', why = '') => `<!doctype html>
 <html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <title>Sign in</title><style>
@@ -187,7 +187,7 @@ button{width:100%;padding:.6rem;border:0;border-radius:8px;background:#4f8cff;co
 </style></head><body>
 <form method="POST" action="/__auth">
 <h1>Ollama WebUI</h1>
-<p>This server is reachable from outside the machine, so it needs the access token.</p>
+<p>${why || 'This request did not come from your own network, so it needs the access token.'}</p>
 ${message ? `<div class="err">${message}</div>` : ''}
 <input type="password" name="token" placeholder="Access token" autofocus autocomplete="current-password">
 <button type="submit">Sign in</button>
@@ -228,10 +228,31 @@ const handler = (req, res) => {
     }
 
     if (!tokenMatches(presentedToken(req, url))) {
+      const seen = req.socket?.remoteAddress || 'an unknown address';
       res.writeHead(401, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(LOGIN_PAGE());
+      res.end(LOGIN_PAGE('', TRUST_LAN
+        ? `You reached this server from ${seen}, which is not on its local network, `
+          + 'so it needs the access token. On the same wifi you would not be asked.'
+        : 'This server asks every client for the access token (TRUST_LAN=false).'));
       return;
     }
+  }
+
+  // Says what the server saw. Opening this on a phone answers "why is it
+  // asking me for a token" without anyone having to guess which address the
+  // request actually came in on.
+  if (url.pathname === '/api/whoami') {
+    const seen = req.socket?.remoteAddress || '';
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({
+      youAppearAs: seen,
+      onThisNetwork: isPrivateAddress(seen),
+      tokenRequired: REQUIRE_TOKEN && !(TRUST_LAN && isPrivateAddress(seen)),
+      trustLan: TRUST_LAN,
+      youAsked: req.headers.host || '',
+      servingPort: PORT,
+    }, null, 2));
+    return;
   }
 
   // Longest match first, so /api/tts-status is not swallowed by /api.
@@ -330,6 +351,24 @@ server.listen(PORT, HOST, async () => {
       for (const entry of virtual) {
         console.log(`    ${entry.address}   (${entry.name})`);
       }
+    }
+
+    // Google will not accept a bare IP as an OAuth origin — it insists on a
+    // public top-level domain. nip.io is public DNS that resolves right back to
+    // this address, so it is a real .io hostname that still points at the LAN.
+    const lan = usable[0]?.address;
+    if (lan) {
+      console.log('');
+      console.log('  For Google / Kakao sign-in, use this hostname instead of the');
+      console.log('  bare IP, and register it in their consoles:');
+      console.log(`    ${scheme}://${lan}.nip.io:${PORT}`);
+    }
+
+    if (REQUIRE_TOKEN) {
+      console.log('');
+      console.log('  From outside this network the token is required. This link carries it:');
+      console.log(`    ${scheme}://<your-public-address>:${PORT}/?token=${encodeURIComponent(TOKEN)}`);
+      console.log('  Opening it once stores a cookie, so it is only needed the first time.');
     }
   }
   if (!useTls && !LOOPBACK_ONLY) {

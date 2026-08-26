@@ -124,10 +124,39 @@ settings box. The box writes to one browser at one address; `.env` is served by
 the backend to every origin it answers, so a phone gets a working button too.
 The Kakao **client secret** stays server-side and is never in that response.
 
-One thing this cannot fix: Google and Kakao only issue tokens to origins
-registered in their consoles. Every address you actually use has to be listed —
-`http://localhost:5173` **and** `http://192.168.x.x:5173`, and your domain once
-you have one.
+#### Google will not accept an IP address
+
+Registering `http://192.168.45.95:5173` in the Google console fails with
+*"Invalid Origin: must end with a public top-level domain"*. Google only accepts
+`localhost` and real domain names — a bare IP is never allowed, on any port.
+
+The way round it is a hostname that resolves to the LAN address anyway.
+[nip.io](https://nip.io) is public DNS that maps any address embedded in the
+name straight back to itself:
+
+```
+192.168.45.95.nip.io  ->  192.168.45.95
+```
+
+That is a real `.io` hostname, so Google accepts it, and it points at your PC,
+so it works on the phone. Register and browse to:
+
+```
+http://192.168.45.95.nip.io:5173
+```
+
+The server prints the exact hostname for your machine at startup. Substitute
+your own address — and register every origin you actually use, `localhost`
+included, in both consoles:
+
+  * Google — Credentials → **Authorised JavaScript origins**
+  * Kakao — 앱 설정 → 플랫폼 → **Web 사이트 도메인**, and the Redirect URI
+
+Once you have a real domain (step 4), register that instead and drop nip.io.
+
+If your Kakao app has **Client Secret** switched on, put it in `.env` as
+`KAKAO_CLIENT_SECRET` — without it the exchange fails with `KOE010`.
+`/api/config` reports `kakaoSecretConfigured` so you can check.
 
 ## 2. Open the firewall
 
@@ -256,3 +285,5 @@ Ollama must be running too (`ollama serve`, or its own service).
 | Model list empty | Ollama is not running, or `OLLAMA_URL` is wrong |
 | **All my chats and settings are gone** | Almost certainly the port changed. Browser storage is per origin — serve on `:5173` again and everything reappears. Nothing is deleted by changing ports |
 | `Local file access is disabled` | Working as intended; see the warning above before changing it |
+| Asked for the access token on a phone | The request did not arrive from the local network. Open `/api/whoami` on that phone — it reports the address the server saw and whether it counted as local. Reaching the server by its public address always asks |
+| Google: "Invalid Origin: must end with a public top-level domain" | Google refuses bare IPs. Use the `nip.io` hostname the server prints |
