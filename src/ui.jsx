@@ -1,4 +1,5 @@
-import React, { useState, useEffect, useRef, useCallback } from 'react';
+import React, { useState, useEffect, useRef, useCallback, useLayoutEffect } from 'react';
+import { createPortal } from 'react-dom';
 
 /**
  * A number persisted in localStorage. Used for panel sizes so the layout
@@ -219,3 +220,93 @@ export const SettingToggle = ({ checked, onChange, label, description, disabled 
     <Switch checked={checked} onChange={onChange} label={label} disabled={disabled} />
   </div>
 );
+
+/**
+ * A menu anchored to a button but rendered at the document root.
+ *
+ * The sidebar list scrolls (`overflow-y: auto`), and each row is a positioned
+ * element, so a menu positioned inside a row is both clipped by the list and
+ * painted underneath every row that follows it in the DOM. Neither is fixable
+ * with z-index alone — an ancestor's overflow always wins. Portalling to the
+ * body and positioning fixed sidesteps both.
+ */
+export const AnchoredMenu = ({ open, onClose, anchorRef, children, className = '', width = 210 }) => {
+  const ref = useRef(null);
+  const { mounted, state } = useTransitionState(open, 150);
+  const [pos, setPos] = useState(null);
+
+  // Layout effect, not a plain one: measuring after paint makes the menu
+  // visibly jump from the corner to its place.
+  useLayoutEffect(() => {
+    if (!open) { setPos(null); return undefined; }
+
+    const place = () => {
+      const anchor = anchorRef?.current;
+      if (!anchor) return;
+      const rect = anchor.getBoundingClientRect();
+      const height = ref.current?.offsetHeight || 260;
+      const margin = 8;
+
+      // Flip above the button when there is not enough room below it.
+      const below = window.innerHeight - rect.bottom;
+      const top = below >= height + margin
+        ? rect.bottom + 4
+        : Math.max(margin, rect.top - height - 4);
+
+      // Right-align to the button, then keep the whole menu on screen.
+      const left = Math.min(
+        Math.max(margin, rect.right - width),
+        window.innerWidth - width - margin,
+      );
+
+      setPos({ top, left });
+    };
+
+    place();
+    // The anchor moves when the list scrolls; `true` catches scrolls on any
+    // ancestor, which is where the movement actually happens.
+    window.addEventListener('scroll', place, true);
+    window.addEventListener('resize', place);
+    return () => {
+      window.removeEventListener('scroll', place, true);
+      window.removeEventListener('resize', place);
+    };
+  }, [open, anchorRef, width]);
+
+  useEffect(() => {
+    if (!open) return undefined;
+    const onDocClick = (e) => {
+      if (ref.current?.contains(e.target)) return;
+      if (anchorRef?.current?.contains(e.target)) return;   // the toggle handles itself
+      onClose?.();
+    };
+    const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
+    document.addEventListener('mousedown', onDocClick);
+    document.addEventListener('keydown', onKey);
+    return () => {
+      document.removeEventListener('mousedown', onDocClick);
+      document.removeEventListener('keydown', onKey);
+    };
+  }, [open, onClose, anchorRef]);
+
+  if (!mounted) return null;
+
+  return createPortal(
+    <div
+      ref={ref}
+      data-state={state}
+      className={`popover anchored-menu ${className}`}
+      style={{
+        position: 'fixed',
+        width: `${width}px`,
+        top: pos ? `${pos.top}px` : 0,
+        left: pos ? `${pos.left}px` : 0,
+        // Measured on the first pass; showing it at 0,0 first would flash.
+        visibility: pos ? 'visible' : 'hidden',
+      }}
+    >
+      {children}
+    </div>,
+    document.body,
+  );
+};

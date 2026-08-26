@@ -2873,8 +2873,17 @@ img.user-avatar { object-fit: cover; padding: 0; }
 
 /* Overflow menu on a sidebar row: rename, duplicate, exports and filing all
    live here so only three icons ever sit over the title. */
-.row-menu-wrap { position: relative; display: inline-flex; }
-.row-menu { min-width: 200px; max-height: 320px; overflow-y: auto; }
+.row-menu-wrap { display: inline-flex; }
+
+/* The menu is portalled to <body>, so it needs its own stacking and a ceiling
+   on its height — a long folder list would otherwise run off the screen. */
+.anchored-menu {
+  z-index: 1200;
+  max-height: min(60vh, 420px);
+  overflow-y: auto;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
+}
+.row-menu .cmd-item { width: 100%; }
 .row-menu-sep {
   margin-top: 0.3rem;
   padding: 0.35rem 0.6rem 0.15rem;

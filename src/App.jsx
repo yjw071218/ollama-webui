@@ -20,7 +20,7 @@ import {
   EXTENSION_FOR,
   PreviewStage,
 } from './artifacts.jsx';
-import { usePersistedNumber, ResizeHandle, Popover, Collapsible, Transition, SettingToggle, Switch, clamp } from './ui.jsx';
+import { usePersistedNumber, ResizeHandle, Popover, AnchoredMenu, Collapsible, Transition, SettingToggle, Switch, clamp } from './ui.jsx';
 import { I18nProvider, useI18n, LANGUAGES } from './i18n.jsx';
 import { AuthScreen } from './AuthScreen.jsx';
 import { ProfileDialog, ProfileAvatar } from './ProfileDialog.jsx';
@@ -754,6 +754,8 @@ function App() {
   const [collapsedFolders, setCollapsedFolders] = useState({});
   const [folderDialog, setFolderDialog] = useState(null);   // { id?, name, systemPrompt }
   const [rowMenuFor, setRowMenuFor] = useState(null);
+  // The menu renders at the document root, so it needs the button it belongs to.
+  const rowMenuAnchors = useRef({});
 
   // --- Sampling presets ---
   const [presets, setPresets] = useState([]);
@@ -1557,10 +1559,11 @@ function App() {
     setRenameValue(session.title);
   };
 
+  // Renaming by hand locks the title: an automatic one must never replace it.
   const commitRename = () => {
     const title = renameValue.trim();
     if (renamingId !== null && title) {
-      setSessions(prev => prev.map(s => s.id === renamingId ? { ...s, title } : s));
+      setSessions(prev => prev.map(s => s.id === renamingId ? { ...s, title, titleLocked: true } : s));
     }
     setRenamingId(null);
     setRenameValue('');
@@ -2200,9 +2203,11 @@ function App() {
         'Reply with ONLY the title itself: no quotes, no trailing punctuation,',
         'no explanation, and nothing in any other language.',
         '',
-        `User: ${userText}`,
+        // Grounding blocks and reasoning traces are far longer than the turn
+        // itself and push the actual topic out of a small context window.
+        `User: ${cleanForExport(userText).slice(0, 1200)}`,
         '',
-        `Assistant: ${assistantText}`,
+        `Assistant: ${cleanForExport(assistantText).slice(0, 1200)}`,
       ].join('\n');
       
       const res = await fetch('/api/chat', {
@@ -2229,9 +2234,10 @@ function App() {
         if (!newTitle) return;
 
         setSessions(prev => prev.map(s => {
-          if (s.id === sessionId) return { ...s, title: newTitle };
+          if (s.id === sessionId) return { ...s, title: newTitle, titleGenerated: true };
           return s;
         }));
+        addLog(`Named this chat "${newTitle}".`, 'info');
       }
     } catch (e) {
       console.warn("Failed to generate title", e);
@@ -2815,11 +2821,6 @@ Rules
         setTruncatedIndex(null);
       }
 
-      // Auto Title Generation for new chats
-      if (!continuation && autoTitle && initialMessages.length === 1 && currentSession.title === 'New Chat') {
-        generateSessionTitle(currentSessionId, finalInputText, assistantContent, targetModel);
-      }
-
       // ---- Agent tools ----
       // A registry rather than a chain of ifs: each entry owns its pattern and
       // its execution, so adding a tool is one object.
@@ -3013,6 +3014,17 @@ Rules
 
           setTimeout(() => handleSend(null, nextMessages, activeModel), 100);
           return; // Keep isGenerating true
+        }
+      }
+
+      // Naming the chat waits until here for two reasons: a turn that called a
+      // tool reaches the code above with nothing but the tool tag as its
+      // "answer", and the title should describe the reply, not the request.
+      if (!continuation) {
+        const session = sessionsRef.current.find(x => x.id === currentSessionId);
+        if (autoTitle && session && !session.titleLocked && !session.titleGenerated) {
+          const firstUser = session.messages.find(m => m.role === 'user' && !m.continuation);
+          if (firstUser) generateSessionTitle(currentSessionId, firstUser.content, answerText, targetModel);
         }
       }
 
@@ -3315,12 +3327,19 @@ Rules
 
         <span className="row-menu-wrap">
           <button
+            ref={el => { rowMenuAnchors.current[s.id] = el; }}
             title={t('sidebar.more')}
             onClick={(e) => { e.stopPropagation(); setRowMenuFor(rowMenuFor === s.id ? null : s.id); }}
           >
             <MoreHorizontal size={13} />
           </button>
-          <Popover open={rowMenuFor === s.id} onClose={() => setRowMenuFor(null)} className="row-menu">
+          <AnchoredMenu
+            open={rowMenuFor === s.id}
+            onClose={() => setRowMenuFor(null)}
+            anchorRef={{ current: rowMenuAnchors.current[s.id] }}
+            className="row-menu"
+            width={215}
+          >
             <button className="cmd-item" onClick={() => { setRowMenuFor(null); startRename(s); }}>
               <Edit size={13} /><span className="cmd-label">{t('sidebar.rename')}</span>
             </button>
@@ -3346,7 +3365,7 @@ Rules
                 {s.folderId === f.id && <Check size={13} />}
               </button>
             ))}
-          </Popover>
+          </AnchoredMenu>
         </span>
 
         <button className="danger" title={t('sidebar.delete')} onClick={(e) => deleteSession(s.id, e)}>

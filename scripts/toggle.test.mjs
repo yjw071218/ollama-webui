@@ -12,7 +12,7 @@ const OUT = path.resolve(HERE, '../node_modules/.ui-test-bundle.mjs');
 
 const bundle = await rolldown({
   input: path.resolve(HERE, '../src/ui.jsx'),
-  external: ['react', 'react/jsx-runtime'],
+  external: ['react', 'react/jsx-runtime', 'react-dom'],
   platform: 'neutral',
 });
 await bundle.write({ file: OUT, format: 'esm' });
