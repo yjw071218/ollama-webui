@@ -59,7 +59,7 @@ In `.env` at the repository root:
 
 ```ini
 HOST=0.0.0.0            # 127.0.0.1 keeps it on this machine
-PORT=8080
+PORT=5173               # see the warning below before changing this
 ACCESS_TOKEN=           # required unless HOST is loopback — generate a long random one
 ALLOW_LOCAL_FS=false
 TRUST_LAN=true          # false to ask even clients on your own network
@@ -76,6 +76,24 @@ Starting without one prints a generated suggestion and exits.
 
 Signing in once exchanges the token for a `HttpOnly` cookie, so it is not in
 every later URL. A client can also send `X-Access-Token`.
+
+### Do not change the port casually
+
+Browsers scope `localStorage` and IndexedDB **per origin**, and the port is part
+of the origin. Serving the same app on `:8080` instead of `:5173` does not move
+your chats, settings, profiles, memories and documents — it hides them. They are
+still there under the old address, and come back the moment you serve on it
+again.
+
+The default is 5173 because that is what `npm run dev` has always used, so
+everything saved before carries over untouched. The registered OAuth redirect
+URIs name that port too.
+
+If you do need a different port, take a backup first: **Settings > Data >
+Backup and transfer > Save a backup file**, then restore it on the new address.
+That is also how you carry your history to a phone, since
+`http://localhost:5173` and `http://192.168.1.9:5173` are likewise different
+origins.
 
 ## 2. Open the firewall
 
@@ -182,4 +200,5 @@ Ollama must be running too (`ollama serve`, or its own service).
 | Works on wifi, not from mobile data | Port forward, or CGNAT — step 3 |
 | Sign-in loops | The cookie is dropped. Reach the server by exactly the host you signed in on |
 | Model list empty | Ollama is not running, or `OLLAMA_URL` is wrong |
+| **All my chats and settings are gone** | Almost certainly the port changed. Browser storage is per origin — serve on `:5173` again and everything reappears. Nothing is deleted by changing ports |
 | `Local file access is disabled` | Working as intended; see the warning above before changing it |

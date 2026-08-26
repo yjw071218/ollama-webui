@@ -78,7 +78,7 @@ echo.
 
 rem Open the desktop browser on the local address. The server prints the ones a
 rem phone should use.
-set "PORT=8080"
+set "PORT=5173"
 for /f "usebackq delims=" %%p in (`node "server\setup-env.mjs" --print-port`) do set "PORT=%%p"
 start "" "http://localhost:%PORT%"
 

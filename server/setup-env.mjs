@@ -24,7 +24,7 @@ const printPortOnly = process.argv.includes('--print-port');
 const original = fs.existsSync(ENV_FILE) ? fs.readFileSync(ENV_FILE, 'utf-8') : '';
 
 if (printPortOnly) {
-  process.stdout.write(readEnvValue(original, 'PORT') || '8080');
+  process.stdout.write(readEnvValue(original, 'PORT') || '5173');
   process.exit(0);
 }
 
@@ -46,7 +46,7 @@ if (notes.length > 0) {
 }
 
 const host = readEnvValue(text, 'HOST') || '0.0.0.0';
-const port = readEnvValue(text, 'PORT') || '8080';
+const port = readEnvValue(text, 'PORT') || '5173';
 
 if (host !== '127.0.0.1' && host !== 'localhost') {
   const addresses = localAddresses(os.networkInterfaces());

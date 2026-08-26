@@ -53,8 +53,10 @@ export const prepareEnv = (text, { forNetwork = false, makeToken } = {}) => {
   }
 
   if (!readEnvValue(next, 'PORT')) {
-    next = writeEnvValue(next, 'PORT', '8080');
-    notes.push({ key: 'PORT', value: '8080', why: '' });
+    // Matching the dev server's port keeps the browser origin the same, which
+    // is what keeps existing chats and settings visible.
+    next = writeEnvValue(next, 'PORT', '5173');
+    notes.push({ key: 'PORT', value: '5173', why: 'same origin as the dev server' });
   }
 
   if (!readEnvValue(next, 'ACCESS_TOKEN')) {

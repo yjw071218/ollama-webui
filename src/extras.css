@@ -2894,3 +2894,17 @@ img.user-avatar { object-fit: cover; padding: 0; }
   color: var(--text-muted);
 }
 .history-actions button.is-on { color: var(--primary); }
+
+/* The address the browser is actually storing under — the thing that decides
+   whether your chats are visible, and the first thing to check when they are
+   not. */
+.backup-origin {
+  margin-top: 0.6rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  overflow-wrap: anywhere;
+}

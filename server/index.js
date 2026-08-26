@@ -51,7 +51,11 @@ const loadDotEnv = () => {
 
 const env = loadDotEnv();
 
-const PORT = Number(env.PORT || 8080);
+// 5173, not an arbitrary 8080: localStorage and IndexedDB are scoped per
+// origin, so serving the same app on another port hides every chat and setting
+// the dev server ever saved. The registered OAuth redirect URIs name this port
+// too.
+const PORT = Number(env.PORT || 5173);
 const HOST = env.HOST || '0.0.0.0';
 const OLLAMA = env.OLLAMA_URL || 'http://127.0.0.1:11434';
 const TTS = `http://${env.TTS_HOST || '127.0.0.1'}:${env.TTS_PORT || 9880}`;

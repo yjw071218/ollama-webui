@@ -35,6 +35,7 @@ import {
 import { sessionToHtml } from './htmlExport.js';
 import { decodeByteFallback } from './byteFallback.js';
 import { relativeTime, absoluteTime } from './relativeTime.js';
+import { collectBackup, restoreBackup, describeBackup, isBackup } from './backup.js';
 import { appendVariant, selectVariant, removeVariant, variantsOf, variantCount, variantIndexOf } from './variants.js';
 import { wasTruncated, joinContinuation, looksRestarted, CONTINUE_PROMPT } from './continuation.js';
 import { newFolder, loadFolders, saveFolders, renameFolder, updateFolder, removeFolder, assignToFolder, groupByFolder, folderOf } from './folders.js';
@@ -1875,6 +1876,55 @@ function App() {
     if (!target) return;
     downloadBlob(`${slugify(target.title)}.html`, sessionToHtml(target), 'text/html;charset=utf-8');
     addLog(`Exported "${target.title}" as HTML.`, 'success');
+  };
+
+  // ---- Whole-state backup ----
+  // Browser storage is per origin, so opening this app on a phone, or on a
+  // different port, starts from nothing. This is how state moves.
+
+  const [restoring, setRestoring] = useState(false);
+  const backupInputRef = useRef(null);
+  const backupRestoreMode = useRef('merge');
+
+  const exportBackup = async () => {
+    try {
+      const backup = await collectBackup({ includeAccounts: true });
+      const summary = describeBackup(backup);
+      const stamp = new Date().toISOString().slice(0, 10);
+      downloadBlob(`ollama-webui-backup-${stamp}.json`,
+        JSON.stringify(backup), 'application/json');
+      addLog(`Backed up ${summary.chats} chats and ${summary.settings} settings.`, 'success');
+      toast(t('backup.exported', { chats: summary.chats }), 'success');
+    } catch (e) {
+      addLog(`[backup] export failed: ${e.message}`, 'error');
+      toast(t('backup.failed', { error: e.message }), 'error', 6000);
+    }
+  };
+
+  const importBackup = async (file, mode) => {
+    if (!file || restoring) return;
+    setRestoring(true);
+    try {
+      const data = JSON.parse(await file.text());
+      if (!isBackup(data)) throw new Error(t('backup.notABackup'));
+
+      const summary = describeBackup(data);
+      const question = mode === 'replace' ? t('backup.confirmReplace', summary) : t('backup.confirmMerge', summary);
+      if (!window.confirm(question)) return;
+
+      const restored = await restoreBackup(data, { mode });
+      addLog(`[backup] restored ${restored.chats} chats, ${restored.settings} settings.`, 'success');
+      toast(t('backup.restored', restored), 'success', 8000, {
+        label: t('backup.reload'),
+        onClick: () => window.location.reload(),
+      });
+    } catch (e) {
+      addLog(`[backup] import failed: ${e.message}`, 'error');
+      toast(t('backup.failed', { error: e.message }), 'error', 7000);
+    } finally {
+      setRestoring(false);
+      if (backupInputRef.current) backupInputRef.current.value = '';
+    }
   };
 
   const openSettings = (tab = 'general') => {
@@ -5707,6 +5757,43 @@ Rules
                     <button className="btn" style={{ backgroundColor: '#EF4444', color: 'white', width: '100%', padding: '0.5rem', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }} onClick={clearAllChats}>
                       {t('data.clearAll')}
                     </button>
+                  </div>
+
+                  <div className="settings-group">
+                    <label>{t('backup.title')}</label>
+                    <div className="setting-help" style={{ marginBottom: '0.6rem' }}>{t('backup.help')}</div>
+
+                    <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                      <button className="icon-btn bordered" onClick={exportBackup}>
+                        <Save size={14} /> {t('backup.export')}
+                      </button>
+                      <button
+                        className="icon-btn bordered"
+                        disabled={restoring}
+                        onClick={() => { backupRestoreMode.current = 'merge'; backupInputRef.current?.click(); }}
+                      >
+                        {restoring ? <RefreshCcw size={14} className="spin" /> : <Download size={14} />}
+                        {t('backup.import')}
+                      </button>
+                      <button
+                        className="icon-btn bordered"
+                        style={{ color: 'var(--danger)' }}
+                        disabled={restoring}
+                        onClick={() => { backupRestoreMode.current = 'replace'; backupInputRef.current?.click(); }}
+                      >
+                        <TriangleAlert size={14} /> {t('backup.importReplace')}
+                      </button>
+                    </div>
+
+                    <input
+                      ref={backupInputRef}
+                      type="file"
+                      accept="application/json,.json"
+                      style={{ display: 'none' }}
+                      onChange={e => importBackup(e.target.files?.[0], backupRestoreMode.current)}
+                    />
+
+                    <div className="backup-origin">{t('backup.origin', { origin: window.location.origin })}</div>
                   </div>
 
                   <div className="settings-group">

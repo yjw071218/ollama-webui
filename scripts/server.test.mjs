@@ -103,7 +103,7 @@ const token = () => 'GENERATED-TOKEN';
 const first = E.prepareEnv(EXAMPLE, { forNetwork: true, makeToken: token });
 eq('a loopback HOST is opened up for the network', E.readEnvValue(first.text, 'HOST'), '0.0.0.0');
 eq('a token is generated', E.readEnvValue(first.text, 'ACCESS_TOKEN'), 'GENERATED-TOKEN');
-eq('the port is left alone', E.readEnvValue(first.text, 'PORT'), '8080');
+eq('an existing port is left alone', E.readEnvValue(first.text, 'PORT'), '8080');
 eq('two things were decided', first.notes.length, 2);
 
 const again = E.prepareEnv(first.text, { forNetwork: true, makeToken: token });
@@ -122,7 +122,9 @@ eq('nothing was changed', custom.notes.length, 0);
 
 const empty = E.prepareEnv('', { forNetwork: true, makeToken: token });
 eq('an empty file gets a host', E.readEnvValue(empty.text, 'HOST'), '0.0.0.0');
-eq('an empty file gets a port', E.readEnvValue(empty.text, 'PORT'), '8080');
+// 5173 rather than an arbitrary port: browser storage is scoped per origin, so
+// serving on a different port hides every chat and setting the dev server saved.
+eq('an empty file gets the dev server port', E.readEnvValue(empty.text, 'PORT'), '5173');
 eq('an empty file gets a token', E.readEnvValue(empty.text, 'ACCESS_TOKEN'), 'GENERATED-TOKEN');
 
 console.log(`\n${pass} passed, ${fail} failed`);
