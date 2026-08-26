@@ -47,20 +47,53 @@ eq('an ipv4-mapped address is unwrapped', N.normaliseAddress('::FFFF:10.0.0.1'),
 eq('a zone suffix is dropped', N.normaliseAddress('fe80::1%eth0'), 'fe80::1');
 eq('a missing address normalises to empty', N.normaliseAddress(undefined), '');
 
+// The shape a Windows PC with WSL installed actually reports. Handing out the
+// Hyper-V address as "open this on your phone" is what sent someone to an
+// address nothing outside the PC can route to.
 const interfaces = {
-  'Wi-Fi': [
+  '이더넷': [
     { address: '192.168.45.95', family: 'IPv4', internal: false },
     { address: 'fe80::1', family: 'IPv6', internal: false },
   ],
-  'Loopback': [{ address: '127.0.0.1', family: 'IPv4', internal: true }],
-  'Idle': [{ address: '169.254.10.2', family: 'IPv4', internal: false }],
+  'vEthernet (WSL (Hyper-V firewall))': [{ address: '172.28.32.1', family: 'IPv4', internal: false }],
+  'Loopback Pseudo-Interface 1': [{ address: '127.0.0.1', family: 'IPv4', internal: true }],
+  'Wi-Fi 5': [{ address: '169.254.10.2', family: 'IPv4', internal: false }],
 };
-const found = N.localAddresses(interfaces);
-check('the wifi address is listed', found.includes('192.168.45.95'));
+
+const found = N.localAddressList(interfaces);
+check('the real adapter is listed', found.includes('192.168.45.95'));
 check('loopback is not', !found.includes('127.0.0.1'));
 check('ipv6 is not', !found.some(a => a.includes(':')));
 check('an unconfigured link-local is not', !found.some(a => a.startsWith('169.254')));
-eq('no interfaces is not a crash', N.localAddresses(null).length, 0);
+eq('no interfaces is not a crash', N.localAddressList(null).length, 0);
+
+const ranked = N.localAddresses(interfaces);
+eq('the physical adapter comes first', ranked[0].address, '192.168.45.95');
+check('the WSL adapter is flagged virtual', ranked.find(e => e.address === '172.28.32.1').virtual);
+check('the physical one is not', !ranked.find(e => e.address === '192.168.45.95').virtual);
+
+// The routing table's answer wins outright, whatever the ranking guessed.
+const preferred = N.localAddresses(interfaces, '172.28.32.1');
+eq('a routed address is put first', preferred[0].address, '172.28.32.1');
+
+for (const [name, want] of [
+  ['vEthernet (WSL (Hyper-V firewall))', true],
+  ['vEthernet (Default Switch)', true],
+  ['VirtualBox Host-Only Network', true],
+  ['VMware Network Adapter VMnet1', true],
+  ['Docker Desktop', true],
+  ['TAP-Windows Adapter V9', true],
+  ['Tailscale', true],
+  ['Bluetooth Network Connection', true],
+  ['Wi-Fi', false],
+  ['이더넷', false],
+  ['Ethernet', false],
+  ['eth0', false],
+  ['en0', false],
+  ['', false],
+]) {
+  eq(`${JSON.stringify(name)} virtual`, N.isVirtualInterface(name), want);
+}
 
 // ---------------------------------------------------------------- .env
 // The bug this replaced: /^\s*KEY\s*=\s*(.*)$/m walks over a blank line and

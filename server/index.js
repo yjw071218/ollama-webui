@@ -22,7 +22,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createApiRoutes } from './api.js';
-import { isPrivateAddress, localAddresses } from './net.js';
+import { isPrivateAddress, localAddresses, routedAddress } from './net.js';
 import os from 'node:os';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -292,7 +292,7 @@ server.on('error', (e) => {
   process.exit(1);
 });
 
-server.listen(PORT, HOST, () => {
+server.listen(PORT, HOST, async () => {
   const scheme = useTls ? 'https' : 'http';
   console.log('');
   console.log(`  Ollama WebUI  ${scheme}://${HOST}:${PORT}`);
@@ -303,14 +303,32 @@ server.listen(PORT, HOST, () => {
     : 'off (loopback only)'}`);
   console.log(`  local files   ${ALLOW_LOCAL_FS ? 'ENABLED — read/write on this machine' : 'disabled'}`);
   if (!LOOPBACK_ONLY) {
-    const addresses = localAddresses(os.networkInterfaces());
-    if (addresses.length > 0) {
+    // The routing table knows which adapter actually leaves the machine. On a
+    // PC with WSL, Docker or Hyper-V installed, guessing gets it wrong and
+    // hands out an address no phone can ever reach.
+    const preferred = await routedAddress();
+    const addresses = localAddresses(os.networkInterfaces(), preferred);
+    const usable = addresses.filter(entry => !entry.virtual);
+    const virtual = addresses.filter(entry => entry.virtual);
+
+    if (usable.length > 0) {
       console.log('');
-      console.log('  On this network — open on a phone:');
-      for (const address of addresses) console.log(`    ${scheme}://${address}:${PORT}`);
+      console.log('  Open this on your phone (same wifi or router):');
+      for (const entry of usable) {
+        const mark = entry.address === preferred && usable.length > 1 ? '   <- this one' : '';
+        console.log(`    ${scheme}://${entry.address}:${PORT}${mark}`);
+      }
       if (REQUIRE_TOKEN && !TRUST_LAN) {
         console.log('');
         console.log('  TRUST_LAN=false, so these still ask for the token.');
+      }
+    }
+
+    if (virtual.length > 0) {
+      console.log('');
+      console.log('  Ignore these — virtual adapters, reachable only from this PC:');
+      for (const entry of virtual) {
+        console.log(`    ${entry.address}   (${entry.name})`);
       }
     }
   }

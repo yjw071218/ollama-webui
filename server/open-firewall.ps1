@@ -49,8 +49,12 @@ New-NetFirewallRule -DisplayName $ruleName `
 "Allowed inbound TCP $Port."
 ""
 "Reachable now from this network at:"
-Get-NetIPAddress -AddressFamily IPv4 |
-  Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' } |
+# Only adapters that carry a default route. A Hyper-V or WSL adapter has a
+# perfectly valid private address that nothing outside this PC can reach.
+$routed = (Get-NetRoute -DestinationPrefix '0.0.0.0/0' -ErrorAction SilentlyContinue |
+  Sort-Object RouteMetric | Select-Object -First 1).InterfaceIndex
+Get-NetIPAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue |
+  Where-Object { $_.IPAddress -notmatch '^(127\.|169\.254\.)' -and $_.InterfaceIndex -eq $routed } |
   ForEach-Object { "  http://$($_.IPAddress):$Port" }
 ""
 "For access from outside the house you still need a port forward on the router"

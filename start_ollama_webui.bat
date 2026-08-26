@@ -59,11 +59,15 @@ if errorlevel 1 (
   echo Ollama is already running.
 )
 
+rem The port decides which firewall rule is needed, so read it first.
+set "PORT=5173"
+for /f "usebackq delims=" %%p in (`node "server\setup-env.mjs" --print-port`) do set "PORT=%%p"
+
 rem ---- firewall ------------------------------------------------------------
 rem Windows blocks inbound connections to node.exe by default, which is exactly
 rem why a server that works locally is invisible to a phone. Ask for the rule
 rem once rather than letting it fail quietly later.
-powershell -NoProfile -Command "if (Get-NetFirewallRule -DisplayName 'Ollama WebUI' -ErrorAction SilentlyContinue) { exit 0 } else { exit 1 }" >nul 2>&1
+powershell -NoProfile -File "%~dp0server\check-firewall.ps1" >nul 2>&1
 if errorlevel 1 (
   echo Opening the Windows firewall, a permission prompt will appear...
   powershell -NoProfile -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','%~dp0server\open-firewall.ps1'" >nul 2>&1
@@ -78,8 +82,6 @@ echo.
 
 rem Open the desktop browser on the local address. The server prints the ones a
 rem phone should use.
-set "PORT=5173"
-for /f "usebackq delims=" %%p in (`node "server\setup-env.mjs" --print-port`) do set "PORT=%%p"
 start "" "http://localhost:%PORT%"
 
 node "server\index.js"

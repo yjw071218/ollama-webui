@@ -42,16 +42,76 @@ export const isPrivateAddress = (address) => {
   return false;
 };
 
-// Every address this machine can be reached at, for printing at startup.
-export const localAddresses = (interfaces) => {
-  const out = [];
-  for (const entries of Object.values(interfaces || {})) {
+// Adapters whose networks exist only inside this machine. WSL, Docker, Hyper-V
+// and the desktop hypervisors each add one, and every one of them has a real
+// private address that a phone can never route to. Offering those as "open this
+// on your phone" is worse than useless — it looks like the server is broken.
+const VIRTUAL_INTERFACE = /vethernet|hyper-?v|wsl|virtualbox|vmware|docker|vboxnet|tap-windows|openvpn|tailscale|zerotier|loopback|bluetooth/i;
+
+export const isVirtualInterface = (name) => VIRTUAL_INTERFACE.test(String(name || ''));
+
+/**
+ * Addresses this machine can be reached at, best first.
+ *
+ * `preferred` is the address the routing table actually uses to leave the
+ * machine — the only fully reliable answer — and wins outright when given.
+ * Everything else is ranked on how likely it is to be a real LAN: a physical
+ * adapter beats a virtual one, and a home subnet beats the 172.16/12 range
+ * where container networks tend to live.
+ */
+export const localAddresses = (interfaces, preferred = '') => {
+  const found = [];
+  for (const [name, entries] of Object.entries(interfaces || {})) {
     for (const entry of entries || []) {
-      const family = entry.family === 4 || entry.family === 'IPv4';
-      if (!family || entry.internal) continue;
-      if (normaliseAddress(entry.address).startsWith('169.254')) continue;
-      out.push(entry.address);
+      const isV4 = entry.family === 4 || entry.family === 'IPv4';
+      if (!isV4 || entry.internal) continue;
+      const address = normaliseAddress(entry.address);
+      // 169.254 means DHCP never answered; the adapter is up but unusable.
+      if (!address || address.startsWith('169.254')) continue;
+      found.push({ address: entry.address, name, virtual: isVirtualInterface(name) });
     }
   }
-  return out;
+
+  const score = (entry) => {
+    if (preferred && entry.address === preferred) return 0;
+    if (entry.virtual) return 3;
+    if (entry.address.startsWith('192.168.')) return 1;
+    if (entry.address.startsWith('10.')) return 1;
+    return 2;   // 172.16/12 and anything else
+  };
+
+  return found.sort((a, b) => score(a) - score(b));
+};
+
+/** Just the addresses, best first — the shape the old callers expected. */
+export const localAddressList = (interfaces, preferred = '') =>
+  localAddresses(interfaces, preferred).map(entry => entry.address);
+
+/**
+ * The address the operating system would use to leave this machine.
+ *
+ * Connecting a UDP socket sends nothing — it only asks the routing table which
+ * local interface a packet to that destination would go out of. That is the
+ * same decision the router made, so it identifies the real LAN adapter even on
+ * a machine covered in virtual ones, and it needs no network access to work.
+ */
+export const routedAddress = async () => {
+  try {
+    const dgram = await import('node:dgram');
+    return await new Promise((resolve) => {
+      const socket = dgram.createSocket('udp4');
+      const done = (value) => {
+        try { socket.close(); } catch (e) { /* already closed */ }
+        resolve(value);
+      };
+      socket.on('error', () => done(''));
+      // Any routable address works; nothing is actually sent to it.
+      socket.connect(53, '8.8.8.8', () => {
+        try { done(socket.address().address || ''); } catch (e) { done(''); }
+      });
+      setTimeout(() => done(''), 500);
+    });
+  } catch (e) {
+    return '';
+  }
 };

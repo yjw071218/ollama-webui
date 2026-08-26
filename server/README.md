@@ -105,9 +105,17 @@ that works on localhost is invisible to a phone on the same wifi.
 pwsh -File server/open-firewall.ps1
 ```
 
-It prints every address the machine is reachable at. Test from your phone on
-the same wifi before going any further; if that does not work, nothing beyond
-it will.
+It prints the address to use and, separately, any it knows a phone cannot
+reach. That distinction matters: WSL, Docker, Hyper-V, VirtualBox and VPN
+clients each add an adapter with a perfectly valid private address that exists
+only inside this PC. `172.28.x.x` from a WSL install looks exactly as plausible
+as `192.168.x.x` and is unreachable from anything else.
+
+The server asks the routing table which adapter actually leaves the machine
+rather than guessing, so the address it recommends is the one the router sees.
+
+Test from your phone on the same wifi before going any further; if that does not
+work, nothing beyond it will.
 
 ## 3. Forward the port on the router
 
@@ -196,7 +204,8 @@ Ollama must be running too (`ollama serve`, or its own service).
 | --- | --- |
 | `Refusing to start` | `HOST` is not loopback and `ACCESS_TOKEN` is empty. This is the guard working |
 | `Build not found` | `npm run build` has not been run |
-| Works locally, not from a phone | Firewall — step 2 |
+| Works locally, not from a phone | Firewall (step 2), or the wrong address — use the one printed under "Open this on your phone", not a `172.x` WSL/Docker adapter |
+| The firewall rule exists but the phone is still blocked | The rule may be for an old port. `server/check-firewall.ps1` compares it against `PORT`; re-run `open-firewall.ps1` to fix |
 | Works on wifi, not from mobile data | Port forward, or CGNAT — step 3 |
 | Sign-in loops | The cookie is dropped. Reach the server by exactly the host you signed in on |
 | Model list empty | Ollama is not running, or `OLLAMA_URL` is wrong |

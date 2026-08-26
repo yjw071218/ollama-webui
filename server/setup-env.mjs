@@ -11,7 +11,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import os from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { localAddresses } from './net.js';
+import { localAddresses, routedAddress } from './net.js';
 import { prepareEnv, readEnvValue } from './envFile.js';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
@@ -49,10 +49,11 @@ const host = readEnvValue(text, 'HOST') || '0.0.0.0';
 const port = readEnvValue(text, 'PORT') || '5173';
 
 if (host !== '127.0.0.1' && host !== 'localhost') {
-  const addresses = localAddresses(os.networkInterfaces());
-  if (addresses.length > 0) {
+  const preferred = await routedAddress();
+  const usable = localAddresses(os.networkInterfaces(), preferred).filter(e => !e.virtual);
+  if (usable.length > 0) {
     console.log('');
     console.log('  On a phone on the same wifi, open:');
-    for (const address of addresses) console.log(`    http://${address}:${port}`);
+    for (const entry of usable) console.log(`    http://${entry.address}:${port}`);
   }
 }
