@@ -1,0 +1,46 @@
+{
+  "name": "ollama-webui",
+  "private": true,
+  "version": "0.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "dev:all": "concurrently \"ollama serve\" \"vite\"",
+    "build": "vite build",
+    "lint": "oxlint",
+    "preview": "vite preview",
+    "test": "node scripts/artifacts.test.mjs && node scripts/i18n-auth.test.mjs && node scripts/toggle.test.mjs && node scripts/grounding.test.mjs && node scripts/rag.test.mjs && node scripts/memory.test.mjs && node scripts/bytefallback.test.mjs && node scripts/features.test.mjs",
+    "test:live": "node scripts/artifacts.integration.mjs",
+    "test:artifacts": "node scripts/artifacts.test.mjs",
+    "test:i18n": "node scripts/i18n-auth.test.mjs",
+    "test:ui": "node scripts/toggle.test.mjs",
+    "test:grounding": "node scripts/grounding.test.mjs",
+    "test:rag": "node scripts/rag.test.mjs",
+    "test:rag:live": "node scripts/rag.integration.mjs",
+    "test:memory": "node scripts/memory.test.mjs",
+    "test:bytefallback": "node scripts/bytefallback.test.mjs",
+    "test:features": "node scripts/features.test.mjs"
+  },
+  "dependencies": {
+    "fflate": "^0.8.3",
+    "katex": "^0.17.0",
+    "localforage": "^1.10.0",
+    "lucide-react": "^1.21.0",
+    "pdfjs-dist": "^6.2.108",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-markdown": "^10.1.0",
+    "rehype-highlight": "^7.0.2",
+    "rehype-katex": "^7.0.1",
+    "remark-gfm": "^4.0.1",
+    "remark-math": "^6.0.0"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "@vitejs/plugin-react": "^6.0.2",
+    "concurrently": "^10.0.3",
+    "oxlint": "^1.69.0",
+    "vite": "^8.1.0"
+  }
+}
