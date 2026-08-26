@@ -22,6 +22,8 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createApiRoutes } from './api.js';
+import { isPrivateAddress, localAddresses } from './net.js';
+import os from 'node:os';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -60,6 +62,13 @@ const TOKEN = (env.ACCESS_TOKEN || '').trim();
 // for nothing. Bound anywhere else, it is the entire access control.
 const LOOPBACK_ONLY = HOST === '127.0.0.1' || HOST === 'localhost' || HOST === '::1';
 const REQUIRE_TOKEN = !LOOPBACK_ONLY && TOKEN.length > 0;
+
+// Your own wifi is a boundary you already control, and a phone should not have
+// to be handed a 32-character token to open a page on it. Requests arriving
+// from a private address skip the token; anything routed in from outside still
+// presents it. Turn this off on a network you do not trust — a café, a shared
+// office — where "same network" means nothing.
+const TRUST_LAN = String(env.TRUST_LAN ?? 'true').toLowerCase() !== 'false';
 
 if (!LOOPBACK_ONLY && !TOKEN) {
   console.error([
@@ -187,7 +196,11 @@ const apiRoutes = createApiRoutes(env, { allowLocalFs: ALLOW_LOCAL_FS });
 const handler = (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
-  if (REQUIRE_TOKEN) {
+  // Judged on the socket's peer address only: X-Forwarded-For is a header the
+  // caller writes, so believing it would let anyone claim to be on the LAN.
+  const fromLan = TRUST_LAN && isPrivateAddress(req.socket?.remoteAddress);
+
+  if (REQUIRE_TOKEN && !fromLan) {
     // Exchanging the token for a cookie keeps it out of every later URL.
     if (url.pathname === '/__auth' && req.method === 'POST') {
       let body = '';
@@ -258,11 +271,25 @@ server.listen(PORT, HOST, () => {
   console.log(`  Ollama WebUI  ${scheme}://${HOST}:${PORT}`);
   console.log(`  serving       ${DIST}`);
   console.log(`  ollama        ${OLLAMA}`);
-  console.log(`  auth          ${REQUIRE_TOKEN ? 'token required' : 'off (loopback only)'}`);
+  console.log(`  auth          ${REQUIRE_TOKEN
+    ? (TRUST_LAN ? 'token required from outside this network' : 'token required')
+    : 'off (loopback only)'}`);
   console.log(`  local files   ${ALLOW_LOCAL_FS ? 'ENABLED — read/write on this machine' : 'disabled'}`);
+  if (!LOOPBACK_ONLY) {
+    const addresses = localAddresses(os.networkInterfaces());
+    if (addresses.length > 0) {
+      console.log('');
+      console.log('  On this network — open on a phone:');
+      for (const address of addresses) console.log(`    ${scheme}://${address}:${PORT}`);
+      if (REQUIRE_TOKEN && !TRUST_LAN) {
+        console.log('');
+        console.log('  TRUST_LAN=false, so these still ask for the token.');
+      }
+    }
+  }
   if (!useTls && !LOOPBACK_ONLY) {
     console.log('');
-    console.log('  Note: plain HTTP. The token and everything typed travels unencrypted.');
+    console.log('  Plain HTTP: everything typed crosses the network unencrypted.');
     console.log('  See server/README.md for putting TLS in front of it.');
   }
   console.log('');

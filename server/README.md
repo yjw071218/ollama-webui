@@ -5,6 +5,13 @@ hot-reload socket and refuses most non-localhost origins on purpose. To reach
 the app from another device — a phone, a laptop elsewhere — use the production
 server in this folder instead.
 
+**The short way:** double-click `start_ollama_webui.bat`. It installs
+dependencies if needed, writes the settings below into `.env`, starts Ollama,
+asks once for the firewall rule, builds, and prints the address to open on a
+phone. Everything it does is idempotent, so running it again is safe.
+
+Or by hand:
+
 ```bash
 npm run serve      # build, then start
 # or
@@ -29,6 +36,19 @@ your PC**. Three defaults exist because of that:
 | **`/localfs` is off** unless `ALLOW_LOCAL_FS=true` | Those routes read and write anywhere this process can reach. From localhost that is the point; from the internet it is remote file access on your machine |
 | **Plain HTTP warns loudly** | The token and everything typed crosses the network unencrypted until TLS is in front |
 
+### Who has to present the token
+
+A phone on your own wifi should not have to be handed a 32-character string, so
+requests arriving from a **private address** (10/8, 172.16/12, 192.168/16,
+link-local, loopback) skip the token. Anything routed in from outside presents
+it.
+
+This is judged on the socket's own peer address. `X-Forwarded-For` is a header
+the caller writes, so believing it would let anyone claim to be on the LAN.
+
+On a network you do not control — a café, a shared office — "same network" means
+nothing. Set `TRUST_LAN=false` there and every client is asked.
+
 Turn `ALLOW_LOCAL_FS` on only when every client is you.
 
 ---
@@ -42,6 +62,7 @@ HOST=0.0.0.0            # 127.0.0.1 keeps it on this machine
 PORT=8080
 ACCESS_TOKEN=           # required unless HOST is loopback — generate a long random one
 ALLOW_LOCAL_FS=false
+TRUST_LAN=true          # false to ask even clients on your own network
 OLLAMA_URL=http://127.0.0.1:11434
 ```
 

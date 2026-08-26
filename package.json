@@ -9,7 +9,7 @@
     "build": "vite build",
     "lint": "oxlint",
     "preview": "vite preview",
-    "test": "node scripts/artifacts.test.mjs && node scripts/i18n-auth.test.mjs && node scripts/toggle.test.mjs && node scripts/grounding.test.mjs && node scripts/rag.test.mjs && node scripts/memory.test.mjs && node scripts/bytefallback.test.mjs && node scripts/features.test.mjs && node scripts/news.test.mjs",
+    "test": "node scripts/artifacts.test.mjs && node scripts/i18n-auth.test.mjs && node scripts/toggle.test.mjs && node scripts/grounding.test.mjs && node scripts/rag.test.mjs && node scripts/memory.test.mjs && node scripts/bytefallback.test.mjs && node scripts/features.test.mjs && node scripts/news.test.mjs && node scripts/server.test.mjs",
     "test:live": "node scripts/artifacts.integration.mjs",
     "test:artifacts": "node scripts/artifacts.test.mjs",
     "test:i18n": "node scripts/i18n-auth.test.mjs",
@@ -22,7 +22,8 @@
     "test:features": "node scripts/features.test.mjs",
     "test:news": "node scripts/news.test.mjs",
     "start": "node server/index.js",
-    "serve": "npm run build && node server/index.js"
+    "serve": "npm run build && node server/index.js",
+    "test:server": "node scripts/server.test.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.3",
