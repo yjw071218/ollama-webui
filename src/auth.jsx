@@ -285,17 +285,35 @@ export const readSession = () => {
 
 // A build-time value from .env behaves like a real site: whoever opens the app
 // just sees a working button. The stored value lets you override it at runtime.
+// Filled in from /api/config once the backend answers. Serving the identifiers
+// at runtime is what lets a phone — a different origin, with its own empty
+// localStorage — get a working sign-in button without anyone pasting keys in.
+let serverProvided = { googleClientId: '', kakaoRestKey: '' };
+
+export const setServerSocialConfig = (config) => {
+  serverProvided = {
+    googleClientId: config?.googleClientId || '',
+    kakaoRestKey: config?.kakaoRestKey || '',
+  };
+};
+
 export const socialConfig = () => ({
-  googleClientId: localStorage.getItem('googleClientId') || import.meta.env?.VITE_GOOGLE_CLIENT_ID || '',
+  googleClientId: localStorage.getItem('googleClientId')
+    || serverProvided.googleClientId
+    || import.meta.env?.VITE_GOOGLE_CLIENT_ID || '',
   // Kakao's code exchange needs the REST API key; the JavaScript key cannot
   // be used for it. An older stored JS key is ignored rather than silently
   // producing an invalid_client error.
-  kakaoRestKey: localStorage.getItem('kakaoRestKey') || import.meta.env?.VITE_KAKAO_REST_KEY || '',
+  kakaoRestKey: localStorage.getItem('kakaoRestKey')
+    || serverProvided.kakaoRestKey
+    || import.meta.env?.VITE_KAKAO_REST_KEY || '',
 });
 
+// What is in effect without anything stored in this browser — which is what a
+// settings box should show as the placeholder rather than as a value.
 export const socialDefaults = () => ({
-  googleClientId: import.meta.env?.VITE_GOOGLE_CLIENT_ID || '',
-  kakaoRestKey: import.meta.env?.VITE_KAKAO_REST_KEY || '',
+  googleClientId: serverProvided.googleClientId || import.meta.env?.VITE_GOOGLE_CLIENT_ID || '',
+  kakaoRestKey: serverProvided.kakaoRestKey || import.meta.env?.VITE_KAKAO_REST_KEY || '',
 });
 
 const loadScriptOnce = (id, src) => new Promise((resolve, reject) => {

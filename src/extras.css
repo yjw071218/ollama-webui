@@ -2908,3 +2908,18 @@ img.user-avatar { object-fit: cover; padding: 0; }
   color: var(--text-muted);
   overflow-wrap: anywhere;
 }
+
+/* Signed-in state for the server account sync panel. */
+.sync-status {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.6rem;
+  margin-bottom: 0.4rem;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--primary-rgb), 0.1);
+  color: var(--primary);
+  font-size: 0.82rem;
+  overflow-wrap: anywhere;
+}

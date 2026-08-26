@@ -95,6 +95,40 @@ That is also how you carry your history to a phone, since
 `http://localhost:5173` and `http://192.168.1.9:5173` are likewise different
 origins.
 
+### Accounts, and settings that follow them
+
+Settings, chats, memories and documents normally live in `localStorage` and
+IndexedDB, which the browser scopes to the origin. A phone reaching the app as
+`http://192.168.1.9:5173` therefore starts empty, and always will — that is a
+browser rule, not something a server can override.
+
+What a server *can* do is hold the state itself. **Settings > Account > Sync
+with this server** registers or signs in to an account the backend owns, then:
+
+  - signing in pulls the account's state down and merges it in
+  - changes are uploaded a few seconds after they settle, coalesced, so a
+    keystroke does not trigger an upload of the whole history
+  - signing out flushes anything pending first
+
+Accounts live in `server/data/` as JSON (gitignored): PBKDF2-SHA512 at 210,000
+iterations, a per-account salt, session tokens in an HttpOnly cookie. The
+device-local accounts are unchanged and still separate profiles on one machine;
+these are what let two devices be the same person.
+
+State is capped at 32 MB per account, since chats carry base64 images.
+
+### Social sign-in on every device
+
+The Google client ID and Kakao REST key belong in `.env`, not in the app's
+settings box. The box writes to one browser at one address; `.env` is served by
+the backend to every origin it answers, so a phone gets a working button too.
+The Kakao **client secret** stays server-side and is never in that response.
+
+One thing this cannot fix: Google and Kakao only issue tokens to origins
+registered in their consoles. Every address you actually use has to be listed —
+`http://localhost:5173` **and** `http://192.168.x.x:5173`, and your domain once
+you have one.
+
 ## 2. Open the firewall
 
 Windows blocks inbound connections to Node by default — this is why a server
@@ -118,6 +152,17 @@ Test from your phone on the same wifi before going any further; if that does not
 work, nothing beyond it will.
 
 ## 3. Forward the port on the router
+
+Before changing anything, ask what is actually wrong:
+
+```bash
+npm run check:remote
+```
+
+It walks the chain — bound address, listening port, LAN address, firewall rule,
+public IP, CGNAT, port forward, and the DuckDNS record — and stops at the first
+real problem with the command that fixes it.
+
 
 Everything so far only covers your own network. For access from outside, the
 router has to send traffic in.

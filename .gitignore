@@ -48,3 +48,5 @@ dist-ssr
 
 # Test bundles written by the offline suites.
 node_modules/.*-test*.mjs
+data/
+server/data/

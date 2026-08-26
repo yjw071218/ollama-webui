@@ -14,6 +14,11 @@ import {
   parseNewsFeed, newsFeedUrl, looksLikeNewsQuery, newsTopic,
   sortByRecency, withinHours, formatNews,
 } from '../src/newsFeed.js';
+import {
+  registerUser, verifyPassword, updateUser, createSession,
+  userForSession, destroySession, listUsers,
+} from './accounts.js';
+import { readState, writeState, stateInfo, MAX_STATE_BYTES } from './state.js';
 
 
 // Previous CPU tick snapshot; usage is only meaningful as a delta.
@@ -544,6 +549,134 @@ export const createApiRoutes = (env = {}, options = {}) => {
     });
 
     // ---- MCP: web search ----
+    // ---- Accounts that live on the server ----
+    //
+    // Browser storage is per origin, so a device-local account cannot carry
+    // settings to a phone. These can: the server knows who signed in, and
+    // hands back the same state to whatever device asks.
+
+    const SESSION_COOKIE = 'webui_session';
+    const readCookie = (req, name) =>
+      (req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`))?.[1] || '';
+
+    const readBody = (req, limit = MAX_STATE_BYTES) => new Promise((resolve, reject) => {
+      let body = '';
+      req.on('data', chunk => {
+        body += chunk;
+        if (body.length > limit) {
+          reject(new Error('That payload is too large.'));
+          req.destroy();
+        }
+      });
+      req.on('end', () => resolve(body));
+      req.on('error', reject);
+    });
+
+    const sendJson = (res, payload, status = 200) => {
+      res.statusCode = status;
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Cache-Control', 'no-store');
+      res.end(JSON.stringify(payload));
+    };
+
+    const currentUser = (req) => userForSession(readCookie(req, SESSION_COOKIE));
+
+    // No Secure flag: over plain HTTP on a LAN the browser would drop it and
+    // sign-in would loop. Put TLS in front to make it safe to add.
+    const setSessionCookie = (res, token) => {
+      res.setHeader('Set-Cookie',
+        `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 86400}`);
+    };
+
+    route('/api/account/register', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, { error: 'POST required' }, 405);
+      try {
+        const { name, email, password } = JSON.parse(await readBody(req, 64 * 1024) || '{}');
+        const user = await registerUser({ name, email, password });
+        setSessionCookie(res, createSession(user.id));
+        sendJson(res, { success: true, user });
+      } catch (e) {
+        sendJson(res, { success: false, error: e.message }, 400);
+      }
+    });
+
+    route('/api/account/login', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, { error: 'POST required' }, 405);
+      try {
+        const { email, password } = JSON.parse(await readBody(req, 64 * 1024) || '{}');
+        const user = await verifyPassword(email, password);
+        // One message for both causes: saying which was wrong tells an attacker
+        // whether the address is registered.
+        if (!user) return sendJson(res, { success: false, error: 'Wrong email or password.' }, 401);
+        setSessionCookie(res, createSession(user.id));
+        sendJson(res, { success: true, user });
+      } catch (e) {
+        sendJson(res, { success: false, error: e.message }, 400);
+      }
+    });
+
+    route('/api/account/logout', (req, res) => {
+      destroySession(readCookie(req, SESSION_COOKIE));
+      res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
+      sendJson(res, { success: true });
+    });
+
+    route('/api/account/me', (req, res) => {
+      const user = currentUser(req);
+      sendJson(res, {
+        success: true,
+        user: user || null,
+        anyAccounts: listUsers().length > 0,
+        state: user ? stateInfo(user.id) : null,
+      });
+    });
+
+    route('/api/account/profile', async (req, res) => {
+      const user = currentUser(req);
+      if (!user) return sendJson(res, { success: false, error: 'Not signed in.' }, 401);
+      try {
+        const patch = JSON.parse(await readBody(req, 2 * 1024 * 1024) || '{}');
+        sendJson(res, { success: true, user: await updateUser(user.id, patch) });
+      } catch (e) {
+        sendJson(res, { success: false, error: e.message }, 400);
+      }
+    });
+
+    // The settings and history that follow the account.
+    route('/api/account/state', async (req, res) => {
+      const user = currentUser(req);
+      if (!user) return sendJson(res, { success: false, error: 'Not signed in.' }, 401);
+
+      if (req.method === 'GET') {
+        return sendJson(res, { success: true, state: readState(user.id), info: stateInfo(user.id) });
+      }
+      if (req.method !== 'PUT' && req.method !== 'POST') {
+        return sendJson(res, { error: 'GET or PUT' }, 405);
+      }
+      try {
+        const state = JSON.parse(await readBody(req) || '{}');
+        sendJson(res, { success: true, ...writeState(user.id, state) });
+      } catch (e) {
+        sendJson(res, { success: false, error: e.message }, 400);
+      }
+    });
+
+    // Public identity of the app, served at runtime rather than baked in at
+    // build time. A client ID is meant to be public — it names the app, not the
+    // user — and serving it means any origin this backend answers on gets a
+    // working sign-in button without anyone pasting keys into a settings box.
+    // The Kakao *client secret* is not here; it never leaves the server.
+    route('/api/config', (req, res) => {
+      res.setHeader('Content-Type', 'application/json');
+      res.setHeader('Cache-Control', 'no-store');
+      res.end(JSON.stringify({
+        googleClientId: env.VITE_GOOGLE_CLIENT_ID || env.GOOGLE_CLIENT_ID || '',
+        kakaoRestKey: env.VITE_KAKAO_REST_KEY || env.KAKAO_REST_KEY || '',
+        kakaoSecretConfigured: !!env.KAKAO_CLIENT_SECRET,
+        accounts: true,
+      }));
+    });
+
     // Headlines, deliberately separate from search: the answer shape is a dated
     // list from named publishers, not a page of links.
     route('/mcp/news',(req, res) => {

@@ -36,6 +36,10 @@ import { sessionToHtml } from './htmlExport.js';
 import { decodeByteFallback } from './byteFallback.js';
 import { relativeTime, absoluteTime } from './relativeTime.js';
 import { collectBackup, restoreBackup, describeBackup, isBackup } from './backup.js';
+import {
+  fetchServerConfig, serverMe, serverRegister, serverLogin, serverLogout,
+  pushState, pullState, createSyncScheduler,
+} from './serverAccount.js';
 import { appendVariant, selectVariant, removeVariant, variantsOf, variantCount, variantIndexOf } from './variants.js';
 import { wasTruncated, joinContinuation, looksRestarted, CONTINUE_PROMPT } from './continuation.js';
 import { newFolder, loadFolders, saveFolders, renameFolder, updateFolder, removeFolder, assignToFolder, groupByFolder, folderOf } from './folders.js';
@@ -47,6 +51,7 @@ import {
   saveSession,
   deleteUser,
   sessionStorageKeyFor,
+  setServerSocialConfig,
   signOutSocial,
   socialDefaults,
   kakaoRedirectUri,
@@ -1878,9 +1883,37 @@ function App() {
     addLog(`Exported "${target.title}" as HTML.`, 'success');
   };
 
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const config = await fetchServerConfig();
+      if (cancelled || !config) return;
+      // Do this before anything renders a sign-in button, or it reads the
+      // config as absent and hides itself.
+      setServerSocialConfig(config);
+      setServerConfig(config);
+
+      const me = await serverMe();
+      if (cancelled || !me?.success) return;
+      setSyncUser(me.user || null);
+      setSyncInfo(me.state || null);
+    })();
+    return () => { cancelled = true; };
+  }, []);
+
   // ---- Whole-state backup ----
   // Browser storage is per origin, so opening this app on a phone, or on a
   // different port, starts from nothing. This is how state moves.
+
+  // --- The server's own account, and the state that follows it ---
+  // Browser storage is per origin, so a device-local account cannot carry
+  // settings to a phone. This one can: the server knows who signed in.
+  const [syncUser, setSyncUser] = useState(null);
+  const [syncInfo, setSyncInfo] = useState(null);
+  const [syncBusy, setSyncBusy] = useState('');
+  const [syncForm, setSyncForm] = useState({ mode: 'login', name: '', email: '', password: '' });
+  const [serverConfig, setServerConfig] = useState(null);
+  const syncRef = useRef(null);
 
   const [restoring, setRestoring] = useState(false);
   const backupInputRef = useRef(null);
@@ -1924,6 +1957,118 @@ function App() {
     } finally {
       setRestoring(false);
       if (backupInputRef.current) backupInputRef.current.value = '';
+    }
+  };
+
+  // Changes go up on their own, coalesced: settings change on every keystroke
+  // and the payload is the whole history, so one upload per character would be
+  // absurd. Signed out, nothing is scheduled and nothing leaves the browser.
+  useEffect(() => {
+    if (!syncUser) { syncRef.current?.cancel(); syncRef.current = null; return undefined; }
+
+    syncRef.current = createSyncScheduler({
+      delay: 5000,
+      onResult: (result) => setSyncInfo({ exists: true, bytes: result.bytes, savedAt: result.savedAt }),
+      onError: (e) => addLog(`[sync] upload failed: ${e.message}`, 'error'),
+    });
+
+    const flush = () => { syncRef.current?.flush?.(); };
+    window.addEventListener('beforeunload', flush);
+    return () => {
+      window.removeEventListener('beforeunload', flush);
+      syncRef.current?.cancel();
+      syncRef.current = null;
+    };
+  }, [syncUser]);
+
+  // Anything that lands in browser storage is worth sending up. Watching the
+  // session list plus the settings that are saved separately covers it.
+  useEffect(() => {
+    if (!syncUser || !isStorageLoaded) return;
+    syncRef.current?.schedule();
+  }, [syncUser, isStorageLoaded, sessions, folders, presets, memories, systemPrompt,
+      temperature, maxTokens, topP, topK, repeatPenalty, numCtx, lang, theme]);
+
+  // ---- Syncing with the server account ----
+
+  const refreshSyncInfo = async () => {
+    const me = await serverMe();
+    if (me?.success) { setSyncUser(me.user || null); setSyncInfo(me.state || null); }
+  };
+
+  const syncSignIn = async () => {
+    const { mode, name, email, password } = syncForm;
+    setSyncBusy('auth');
+    try {
+      const result = mode === 'register'
+        ? await serverRegister(name, email, password)
+        : await serverLogin(email, password);
+      if (!result.success) throw new Error(result.error || 'Sign-in failed.');
+
+      setSyncUser(result.user);
+      setSyncForm({ mode: 'login', name: '', email: '', password: '' });
+
+      // A fresh sign-in should bring the account's setup down, and a first
+      // sign-in should send this device's up so the account is not empty.
+      const pulled = await pullState({ mode: 'merge' });
+      if (!pulled.summary) await pushState();
+      await refreshSyncInfo();
+
+      toast(pulled.summary
+        ? t('sync.pulled', { chats: pulled.restored?.chats ?? 0 })
+        : t('sync.seeded'), 'success', 8000, {
+        label: t('backup.reload'),
+        onClick: () => window.location.reload(),
+      });
+    } catch (e) {
+      toast(t('sync.failed', { error: e.message }), 'error', 7000);
+    } finally {
+      setSyncBusy('');
+    }
+  };
+
+  const syncSignOut = async () => {
+    setSyncBusy('auth');
+    try {
+      // Push first: signing out should not lose what has not gone up yet.
+      if (syncRef.current) await syncRef.current.flush();
+      await serverLogout();
+      setSyncUser(null);
+      setSyncInfo(null);
+      toast(t('sync.signedOut'), 'info');
+    } catch (e) {
+      toast(t('sync.failed', { error: e.message }), 'error', 6000);
+    } finally {
+      setSyncBusy('');
+    }
+  };
+
+  const syncNow = async () => {
+    setSyncBusy('push');
+    try {
+      const result = await pushState();
+      setSyncInfo({ exists: true, bytes: result.bytes, savedAt: result.savedAt });
+      toast(t('sync.pushed', { chats: result.summary.chats }), 'success');
+    } catch (e) {
+      toast(t('sync.failed', { error: e.message }), 'error', 6000);
+    } finally {
+      setSyncBusy('');
+    }
+  };
+
+  const syncPull = async (mode) => {
+    setSyncBusy('pull');
+    try {
+      const pulled = await pullState({ mode });
+      if (!pulled.summary) { toast(t('sync.nothingStored'), 'info'); return; }
+      toast(t('sync.pulled', { chats: pulled.restored?.chats ?? 0 }), 'success', 8000, {
+        label: t('backup.reload'),
+        onClick: () => window.location.reload(),
+      });
+    } catch (e) {
+      toast(t('sync.failed', { error: e.message }), 'error', 6000);
+    } finally {
+      setSyncBusy('');
     }
   };
 
@@ -5757,6 +5902,100 @@ Rules
                     <button className="btn" style={{ backgroundColor: '#EF4444', color: 'white', width: '100%', padding: '0.5rem', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }} onClick={clearAllChats}>
                       {t('data.clearAll')}
                     </button>
+                  </div>
+
+                  <div className="settings-group">
+                    <label>{t('sync.title')}</label>
+                    <div className="setting-help" style={{ marginBottom: '0.6rem' }}>{t('sync.help')}</div>
+
+                    {!serverConfig && (
+                      <div className="auth-note" style={{ margin: 0 }}>{t('sync.noServer')}</div>
+                    )}
+
+                    {serverConfig && !syncUser && (
+                      <>
+                        <div className="theme-switch" style={{ marginBottom: '0.6rem' }}>
+                          <button
+                            className={syncForm.mode === 'login' ? 'active' : ''}
+                            onClick={() => setSyncForm(f => ({ ...f, mode: 'login' }))}
+                          >{t('sync.signIn')}</button>
+                          <button
+                            className={syncForm.mode === 'register' ? 'active' : ''}
+                            onClick={() => setSyncForm(f => ({ ...f, mode: 'register' }))}
+                          >{t('sync.createAccount')}</button>
+                        </div>
+
+                        {syncForm.mode === 'register' && (
+                          <input
+                            type="text"
+                            className="settings-input"
+                            style={{ marginBottom: '0.4rem' }}
+                            placeholder={t('sync.name')}
+                            value={syncForm.name}
+                            onChange={e => setSyncForm(f => ({ ...f, name: e.target.value }))}
+                          />
+                        )}
+                        <input
+                          type="email"
+                          className="settings-input"
+                          style={{ marginBottom: '0.4rem' }}
+                          placeholder={t('sync.email')}
+                          autoComplete="username"
+                          value={syncForm.email}
+                          onChange={e => setSyncForm(f => ({ ...f, email: e.target.value }))}
+                        />
+                        <input
+                          type="password"
+                          className="settings-input"
+                          style={{ marginBottom: '0.5rem' }}
+                          placeholder={t('sync.password')}
+                          autoComplete={syncForm.mode === 'register' ? 'new-password' : 'current-password'}
+                          value={syncForm.password}
+                          onChange={e => setSyncForm(f => ({ ...f, password: e.target.value }))}
+                          onKeyDown={e => { if (e.key === 'Enter') syncSignIn(); }}
+                        />
+                        <button
+                          className="auth-submit profile-save"
+                          disabled={syncBusy === 'auth' || !syncForm.email || !syncForm.password}
+                          onClick={syncSignIn}
+                        >
+                          {syncBusy === 'auth'
+                            ? <RefreshCcw size={14} className="spin" />
+                            : (syncForm.mode === 'register' ? t('sync.createAccount') : t('sync.signIn'))}
+                        </button>
+                      </>
+                    )}
+
+                    {serverConfig && syncUser && (
+                      <>
+                        <div className="sync-status">
+                          <Check size={14} />
+                          <span>{t('sync.signedInAs', { name: syncUser.name, email: syncUser.email })}</span>
+                        </div>
+                        <div className="setting-help" style={{ marginBottom: '0.6rem' }}>
+                          {syncInfo?.exists
+                            ? t('sync.lastSaved', {
+                                when: relativeTime(syncInfo.savedAt, lang),
+                                size: formatBytes(syncInfo.bytes),
+                              })
+                            : t('sync.nothingStored')}
+                        </div>
+
+                        <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+                          <button className="icon-btn bordered" disabled={!!syncBusy} onClick={syncNow}>
+                            {syncBusy === 'push' ? <RefreshCcw size={14} className="spin" /> : <ArrowUp size={14} />}
+                            {t('sync.pushNow')}
+                          </button>
+                          <button className="icon-btn bordered" disabled={!!syncBusy} onClick={() => syncPull('merge')}>
+                            {syncBusy === 'pull' ? <RefreshCcw size={14} className="spin" /> : <ArrowDown size={14} />}
+                            {t('sync.pull')}
+                          </button>
+                          <button className="icon-btn bordered" disabled={!!syncBusy} onClick={syncSignOut}>
+                            <LogOut size={14} /> {t('sync.signOut')}
+                          </button>
+                        </div>
+                      </>
+                    )}
                   </div>
 
                   <div className="settings-group">
