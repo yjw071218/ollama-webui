@@ -98,6 +98,46 @@ for (const q of ['ollama keep_alive 설정법', 'how do I center a div', 'react 
   check(`not a news query: ${JSON.stringify(q)}`, !N.looksLikeNewsQuery(q));
 }
 
+// Topic extraction. Searching the sentence itself is what returned May's
+// stories for a question about today.
+for (const [q, want] of [
+  ['오늘 주요 뉴스내용들을 알려줘', ''],
+  ['오늘 뉴스', ''],
+  ['속보 알려줘', ''],
+  ['top stories', ''],
+  ["what's in the news today", ''],
+  ['今日のニュース', ''],
+  ['今天的新闻', ''],
+  ['noticias de hoy', ''],
+  ['actualites du jour', ''],
+  ['오늘 삼성전자 뉴스 알려줘', '삼성전자'],
+  ['반도체 뉴스', '반도체'],
+  ['부동산 뉴스 알려줘', '부동산'],
+  ['tell me the latest AI news', 'AI'],
+  ['特斯拉 新闻', '特斯拉'],
+]) {
+  eq(`topic of ${JSON.stringify(q)}`, N.newsTopic(q), want);
+}
+check('a word containing a particle character survives', N.newsTopic('반도체 뉴스').includes('도'));
+eq('a null query has no topic', N.newsTopic(null), '');
+
+// Recency. Google returns top stories in its own order and searches by
+// relevance; "today" means neither.
+const mixed = [
+  { title: 'old', publishedAt: Date.UTC(2026, 4, 5) },
+  { title: 'newest', publishedAt: Date.UTC(2026, 7, 26, 12) },
+  { title: 'yesterday', publishedAt: Date.UTC(2026, 7, 25, 12) },
+  { title: 'undated', publishedAt: null },
+];
+eq('newest first', N.sortByRecency(mixed)[0].title, 'newest');
+eq('sorting does not mutate', mixed[0].title, 'old');
+const now = Date.UTC(2026, 7, 26, 14);
+const fresh = N.withinHours(mixed, 48, now);
+check('stale items are dropped', !fresh.some(i => i.title === 'old'));
+check('recent items are kept', fresh.some(i => i.title === 'newest'));
+check('an undated item is kept rather than guessed at', fresh.some(i => i.title === 'undated'));
+eq('no window means no filtering', N.withinHours(mixed, 0, now).length, 4);
+
 // What the model is shown.
 const text = N.formatNews(items, { fetchedAt: Date.UTC(2026, 7, 26, 14, 0) });
 check('it says where the headlines came from', /Google News/.test(text));

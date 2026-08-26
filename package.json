@@ -20,7 +20,9 @@
     "test:memory": "node scripts/memory.test.mjs",
     "test:bytefallback": "node scripts/bytefallback.test.mjs",
     "test:features": "node scripts/features.test.mjs",
-    "test:news": "node scripts/news.test.mjs"
+    "test:news": "node scripts/news.test.mjs",
+    "start": "node server/index.js",
+    "serve": "npm run build && node server/index.js"
   },
   "dependencies": {
     "fflate": "^0.8.3",

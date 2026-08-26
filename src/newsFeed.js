@@ -100,6 +100,59 @@ const HEADLINE_CUES = [
   /новост/i, /tin\s*t[uứ]c/i, /أخبار/,
 ];
 
+// "오늘 주요 뉴스내용들을 알려줘" searched literally matches articles *titled*
+// "오늘의 주요 뉴스" from any date — which is how a question about today came
+// back with stories from May. Strip the words that only say "this is a news
+// question" and see whether an actual subject is left.
+// CJK alternatives are ordered longest-first: a bare 今 would otherwise consume
+// the 今 of 今天 and leave 天 behind looking like the subject.
+const FILLER = [
+  // Korean: time words, "main/important", the ask, and the particles left over
+  /오늘|지금|요즘|최근|현재|주요|중요한?|무슨|무엇|뭐가?|어떤|내용들?|소식들?/g,
+  /알려\s*줘요?|말해\s*줘요?|보여\s*줘요?|정리해?\s*줘요?|해\s*줘요?|줘요?/g,
+  /(?<=[가-힣])[을를이가은는의도들]+(?=\s|$)/g,
+  // English
+  /\b(today'?s?|now|latest|current|main|top|important|recent|big|major)\b/gi,
+  /\b(tell|show|give|summar\w*|what'?s?|whats|is|are|the|an?|me|about|please|any|in|of|on)\b/gi,
+  // Japanese and Chinese together, so the ordering holds across both
+  /今日|本日|今天|今朝|今|最新|主要|重要|教えて|ください|何が|何|現在|现在|告诉我|什么|有哪些|請問|请问|的/g,
+  // Spanish / French / German / Portuguese / Russian / Vietnamese / Arabic
+  /\b(hoy|ahora|principales?|dime|cu[aá]les?|de|del|la|las|el|los|sobre)\b/gi,
+  /\b(aujourd'?hui|maintenant|principales?|dis-?moi|quelles?|de|du|des|les?|la|sur|jour|journ[eé]e)\b/gi,
+  /\b(heute|jetzt|wichtigsten?|sag|welche)\b/gi,
+  /\b(hoje|agora|principais?|diga|quais)\b/gi,
+  /\b(сегодня|сейчас|главные|расскажи|какие)\b/gi,
+  /\b(h[oô]m nay|b[aâ]y gi[oờ]|ch[ií]nh|cho t[oô]i bi[eế]t)\b/gi,
+  /(اليوم|الآن|أهم|أخبرني)/g,
+];
+
+// What the question is actually about, or '' when it is just "what is the news".
+export const newsTopic = (query) => {
+  let text = ` ${String(query || '')} `;
+  for (const cue of HEADLINE_CUES) {
+    text = text.replace(new RegExp(cue.source, cue.flags.includes('i') ? 'gi' : 'g'), ' ');
+  }
+  for (const filler of FILLER) text = text.replace(filler, ' ');
+  const words = text
+    .replace(/[\p{P}\p{S}]+/gu, ' ')
+    .split(/\s+/)
+    .filter(w => w && !/^[을를이가은는의에서도들좀및와과로]+$/.test(w));
+  const residue = words.join(' ').trim();
+  // A single leftover character is a fragment of a stripped word, not a topic.
+  return residue.length >= 2 ? residue : '';
+};
+
+// Newest first. Google returns the top-stories feed in its own order and a
+// search feed by relevance, neither of which is what "today" means.
+export const sortByRecency = (items) =>
+  [...(items || [])].sort((a, b) => (b.publishedAt || 0) - (a.publishedAt || 0));
+
+export const withinHours = (items, hours, now = Date.now()) => {
+  if (!hours) return items || [];
+  const cutoff = now - hours * 3600_000;
+  return (items || []).filter(i => !i.publishedAt || i.publishedAt >= cutoff);
+};
+
 export const looksLikeNewsQuery = (query) => {
   const text = String(query || '');
   if (!text.trim()) return false;
