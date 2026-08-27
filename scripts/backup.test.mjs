@@ -155,6 +155,51 @@ eq('replace drops the local-only chat', replaced.filter(s => s.id === 9).length,
 eq('and installs the backup ones', replaced.length, 2);
 eq('replace does overwrite settings', localStorage.getItem('systemPrompt'), 'Be terse.');
 
+// ------------------------------------------- the owner's bucket follows them
+// Profile ids come from randomId() and are therefore different in every
+// browser. Signing in as the same person on a second device produced a new id,
+// so the app read an empty bucket while the chats sat in one nothing looked at.
+reset();
+const madeOn = 'ollama-sessions:AAAAAAAAAAAA';
+const readOn = 'ollama-sessions:BBBBBBBBBBBB';
+
+storeFor('default').set(madeOn, [{ id: 11, title: 'Written on the PC', updatedAt: 100, messages: [] }]);
+storeFor('default').set('ollama-sessions', [{ id: 99, title: 'Guest chat', updatedAt: 50, messages: [] }]);
+
+const owned = await B.collectBackup({ primaryKey: madeOn });
+eq('the owning bucket is recorded', owned.primaryKey, madeOn);
+
+reset();
+const out = await B.restoreBackup(owned, { primaryKey: readOn });
+eq('the owner chats land on this device key', storeFor('default').get(readOn).length, 1);
+eq('and are the right ones', storeFor('default').get(readOn)[0].title, 'Written on the PC');
+eq('the original key is not populated here', storeFor('default').get(madeOn), undefined);
+eq('other buckets are left where they were', storeFor('default').get('ollama-sessions').length, 1);
+check('the remap is reported', out.remapped?.from === madeOn && out.remapped?.to === readOn);
+
+// Same device: nothing should move.
+reset();
+const same = await B.restoreBackup(owned, { primaryKey: madeOn });
+eq('restoring onto the same key does not move anything', storeFor('default').get(madeOn).length, 1);
+eq('and reports no remap', same.remapped, null);
+
+// Without a primaryKey the old behaviour holds, so existing backup files still
+// restore exactly as they did.
+reset();
+const legacy = await B.restoreBackup({ ...owned, primaryKey: null }, { primaryKey: readOn });
+eq('a backup with no owner recorded keeps its keys', storeFor('default').get(madeOn).length, 1);
+eq('and nothing is invented under this key', storeFor('default').get(readOn), undefined);
+eq('and no remap is claimed', legacy.remapped, null);
+
+// Merging: the device already has its own chats under its own key.
+reset();
+storeFor('default').set(readOn, [{ id: 22, title: 'Already here', updatedAt: 200, messages: [] }]);
+await B.restoreBackup(owned, { primaryKey: readOn });
+const mergedInto = storeFor('default').get(readOn);
+eq('both survive the remap', mergedInto.length, 2);
+check('the local one is kept', mergedInto.some(c => c.id === 22));
+check('the remote one arrives', mergedInto.some(c => c.id === 11));
+
 // ------------------------------------------------------------- refusals
 let threw = '';
 try { await B.restoreBackup({ hello: 'world' }); } catch (e) { threw = e.message; }

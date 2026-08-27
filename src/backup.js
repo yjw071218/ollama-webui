@@ -35,7 +35,9 @@ const dumpStore = async (store) => {
 };
 
 /** Everything, ready to be written to a file. */
-export const collectBackup = async ({ includeAccounts = true, includeMachineSettings = false } = {}) => {
+export const collectBackup = async ({
+  includeAccounts = true, includeMachineSettings = false, primaryKey = '',
+} = {}) => {
   const settings = {};
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
@@ -55,6 +57,11 @@ export const collectBackup = async ({ includeAccounts = true, includeMachineSett
     version: BACKUP_VERSION,
     createdAt: Date.now(),
     origin: typeof location !== 'undefined' ? location.origin : '',
+    // Which of the session buckets belongs to whoever made this. Profile ids
+    // are random per browser, so the same person signing in on a second device
+    // gets a different key and would otherwise read an empty bucket while their
+    // chats sat in one nothing ever looked at.
+    primaryKey: primaryKey || null,
     settings,
     sessions,
     knowledge: await dumpStore(named('knowledge')),
@@ -100,14 +107,16 @@ const mergeSessions = (existing, incoming) => {
  * `mode: 'replace'` makes this origin match the backup exactly. Merge is the
  * default because the destructive one should be asked for.
  */
-export const restoreBackup = async (backup, { mode = 'merge', includeAccounts = true } = {}) => {
+export const restoreBackup = async (backup, {
+  mode = 'merge', includeAccounts = true, primaryKey = '',
+} = {}) => {
   if (!isBackup(backup)) throw new Error('That file is not an Ollama WebUI backup.');
   if (backup.version > BACKUP_VERSION) {
     throw new Error(`That backup was written by a newer version (${backup.version}).`);
   }
 
   const replace = mode === 'replace';
-  const restored = { settings: 0, chats: 0, documents: 0, memories: 0, accounts: 0 };
+  const restored = { settings: 0, chats: 0, documents: 0, memories: 0, accounts: 0, remapped: null };
 
   for (const [key, value] of Object.entries(backup.settings || {})) {
     if (MACHINE_LOCAL.has(key) && !replace) continue;
@@ -115,11 +124,19 @@ export const restoreBackup = async (backup, { mode = 'merge', includeAccounts = 
     try { localStorage.setItem(key, value); restored.settings++; } catch (e) { /* quota */ }
   }
 
+  // The backup's owner has a profile id from the browser that made it, and this
+  // browser gave the same person a different random one. Without redirecting
+  // that one bucket the chats land under a key nothing here ever reads.
+  const rename = (key) =>
+    (primaryKey && backup.primaryKey && key === backup.primaryKey) ? primaryKey : key;
+
   for (const [key, incoming] of Object.entries(backup.sessions || {})) {
-    const existing = replace ? [] : await localforage.getItem(key);
+    const target = rename(key);
+    const existing = replace ? [] : await localforage.getItem(target);
     const merged = mergeSessions(existing, incoming);
-    await localforage.setItem(key, merged);
+    await localforage.setItem(target, merged);
     restored.chats += (incoming || []).length;
+    if (target !== key) restored.remapped = { from: key, to: target };
   }
 
   const knowledge = named('knowledge');

@@ -77,9 +77,15 @@ export const serverUpdateProfile = (patch) =>
 
 // ---- sync ----
 
-/** Send this browser's state up. Accounts stay local — they are per device. */
-export const pushState = async () => {
-  const state = await collectBackup({ includeAccounts: false });
+/**
+ * Send this browser's state up. Accounts stay local — they are per device.
+ *
+ * `primaryKey` names the session bucket belonging to the profile that is signed
+ * in here. Profile ids are random per browser, so without it the other device
+ * cannot tell which of several buckets is the same person's.
+ */
+export const pushState = async ({ primaryKey = '' } = {}) => {
+  const state = await collectBackup({ includeAccounts: false, primaryKey });
   const result = await json('/api/account/state', { method: 'PUT', body: JSON.stringify(state) });
   if (!result.success) throw new Error(result.error || 'The server refused the upload.');
   return { ...result, summary: describeBackup(state) };
@@ -91,11 +97,11 @@ export const pushState = async () => {
  * Merge by default: a device that already has chats keeps them, and the account
  * adds what is missing. Replace is for making a new device match exactly.
  */
-export const pullState = async ({ mode = 'merge' } = {}) => {
+export const pullState = async ({ mode = 'merge', primaryKey = '' } = {}) => {
   const result = await json('/api/account/state');
   if (!result.success) throw new Error(result.error || 'Could not read the account state.');
   if (!result.state) return { restored: null, summary: null };
-  const restored = await restoreBackup(result.state, { mode, includeAccounts: false });
+  const restored = await restoreBackup(result.state, { mode, includeAccounts: false, primaryKey });
   return { restored, summary: describeBackup(result.state) };
 };
 
@@ -105,7 +111,7 @@ export const pullState = async ({ mode = 'merge' } = {}) => {
  * Settings change on every keystroke in a textarea, and the state blob is the
  * whole history. Coalescing avoids uploading it once per character.
  */
-export const createSyncScheduler = ({ delay = 4000, onResult, onError } = {}) => {
+export const createSyncScheduler = ({ delay = 4000, onResult, onError, primaryKey } = {}) => {
   let timer = null;
   let running = false;
   let queued = false;
@@ -114,7 +120,7 @@ export const createSyncScheduler = ({ delay = 4000, onResult, onError } = {}) =>
     if (running) { queued = true; return; }
     running = true;
     try {
-      onResult?.(await pushState());
+      onResult?.(await pushState({ primaryKey: primaryKey?.() || '' }));
     } catch (e) {
       onError?.(e);
     } finally {

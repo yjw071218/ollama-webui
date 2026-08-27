@@ -1754,8 +1754,8 @@ function App() {
 
       // Merge, so a device that already has chats keeps them. An account with
       // nothing on it is seeded from whatever this device has.
-      const pulled = await pullState({ mode: 'merge' });
-      if (!pulled.summary) { await pushState(); return; }
+      const pulled = await pullState({ mode: 'merge', primaryKey: storageKey });
+      if (!pulled.summary) { await pushState({ primaryKey: storageKey }); return; }
       if ((pulled.restored?.chats ?? 0) > 0) {
         toast(t('sync.pulled', { chats: pulled.restored.chats }), 'success', 8000, {
           label: t('backup.reload'),
@@ -2009,6 +2009,9 @@ function App() {
 
     syncRef.current = createSyncScheduler({
       delay: 5000,
+      // Read at push time: the active profile can change without the scheduler
+      // being rebuilt.
+      primaryKey: () => storageKeyRef.current,
       onResult: (result) => setSyncInfo({ exists: true, bytes: result.bytes, savedAt: result.savedAt }),
       onError: (e) => addLog(`[sync] upload failed: ${e.message}`, 'error'),
     });
@@ -2080,9 +2083,9 @@ function App() {
       setSyncInfo(linked.state || null);
       addLog(`[sync] linked to the server account ${linked.user.email}.`, 'success');
 
-      const pulled = await pullState({ mode: 'merge' });
+      const pulled = await pullState({ mode: 'merge', primaryKey: storageKey });
       if (!pulled.summary) {
-        await pushState();
+        await pushState({ primaryKey: storageKey });
         toast(t('sync.seeded'), 'success');
       } else {
         toast(t('sync.pulled', { chats: pulled.restored?.chats ?? 0 }), 'success', 8000, {
@@ -2113,8 +2116,8 @@ function App() {
 
       // A fresh sign-in should bring the account's setup down, and a first
       // sign-in should send this device's up so the account is not empty.
-      const pulled = await pullState({ mode: 'merge' });
-      if (!pulled.summary) await pushState();
+      const pulled = await pullState({ mode: 'merge', primaryKey: storageKey });
+      if (!pulled.summary) await pushState({ primaryKey: storageKey });
       await refreshSyncInfo();
 
       toast(pulled.summary
@@ -2149,7 +2152,7 @@ function App() {
   const syncNow = async () => {
     setSyncBusy('push');
     try {
-      const result = await pushState();
+      const result = await pushState({ primaryKey: storageKey });
       setSyncInfo({ exists: true, bytes: result.bytes, savedAt: result.savedAt });
       toast(t('sync.pushed', { chats: result.summary.chats }), 'success');
     } catch (e) {
@@ -2162,7 +2165,7 @@ function App() {
   const syncPull = async (mode) => {
     setSyncBusy('pull');
     try {
-      const pulled = await pullState({ mode });
+      const pulled = await pullState({ mode, primaryKey: storageKey });
       if (!pulled.summary) { toast(t('sync.nothingStored'), 'info'); return; }
       toast(t('sync.pulled', { chats: pulled.restored?.chats ?? 0 }), 'success', 8000, {
         label: t('backup.reload'),
