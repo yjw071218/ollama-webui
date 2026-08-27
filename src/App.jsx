@@ -52,6 +52,7 @@ import {
   deleteUser,
   sessionStorageKeyFor,
   setServerSocialConfig,
+  renderGoogleButton,
   signOutSocial,
   socialDefaults,
   kakaoRedirectUri,
@@ -2029,11 +2030,73 @@ function App() {
   }, [syncUser, isStorageLoaded, sessions, folders, presets, memories, systemPrompt,
       temperature, maxTokens, topP, topK, repeatPenalty, numCtx, lang, theme]);
 
+  const syncGoogleRef = useRef(null);
+
+  // Rendered lazily: the container only exists while the Account tab is open
+  // and this device is unlinked, so this reruns whenever that becomes true.
+  useEffect(() => {
+    if (!showSettings || settingsTab !== 'account') return undefined;
+    if (syncUser || !serverConfig?.googleClientId || !syncGoogleRef.current) return undefined;
+
+    let cancelled = false;
+    syncGoogleRef.current.innerHTML = '';
+    renderGoogleButton(syncGoogleRef.current, {
+      locale: lang,
+      onResult: (result) => {
+        if (cancelled) return;
+        if (result?.error) {
+          toast(t('sync.failed', { error: t(result.error) }), 'error', 7000);
+          return;
+        }
+        linkWithGoogle(result?.user?.credential);
+      },
+    });
+    return () => { cancelled = true; };
+  }, [showSettings, settingsTab, syncUser, serverConfig?.googleClientId, lang]);
+
   // ---- Syncing with the server account ----
 
   const refreshSyncInfo = async () => {
     const me = await serverMe();
     if (me?.success) { setSyncUser(me.user || null); setSyncInfo(me.state || null); }
+  };
+
+  /**
+   * Link this device to the server account using Google, from the panel.
+   *
+   * Independent of how the local profile was signed in, which is the point:
+   * the credential is requested fresh here rather than hoping one was captured
+   * during a sign-in that may have happened days ago.
+   */
+  const linkWithGoogle = async (credential) => {
+    setSyncBusy('auth');
+    try {
+      if (!credential) throw new Error(t('sync.noCredential'));
+
+      const linked = await linkGoogleSession(credential);
+      if (!linked?.user) throw new Error(t('sync.linkRefused'));
+
+      setSyncUser(linked.user);
+      setSyncInfo(linked.state || null);
+      addLog(`[sync] linked to the server account ${linked.user.email}.`, 'success');
+
+      const pulled = await pullState({ mode: 'merge' });
+      if (!pulled.summary) {
+        await pushState();
+        toast(t('sync.seeded'), 'success');
+      } else {
+        toast(t('sync.pulled', { chats: pulled.restored?.chats ?? 0 }), 'success', 8000, {
+          label: t('backup.reload'),
+          onClick: () => window.location.reload(),
+        });
+      }
+      await refreshSyncInfo();
+    } catch (e) {
+      addLog(`[sync] Google link failed: ${e.message}`, 'error');
+      toast(t('sync.failed', { error: e.message }), 'error', 8000);
+    } finally {
+      setSyncBusy('');
+    }
   };
 
   const syncSignIn = async () => {
@@ -5937,6 +6000,18 @@ Rules
                       </div>
                     )}
 
+                    {serverConfig?.googleClientId && !syncUser && (
+                      <div style={{ marginBottom: '0.6rem' }}>
+                        <div className="setting-help" style={{ marginBottom: '0.35rem' }}>
+                          {t('sync.linkGoogle')}
+                        </div>
+                        {/* Google's own button rather than One Tap, which is
+                            suppressed often enough to be useless here. */}
+                        <div ref={syncGoogleRef} className="sync-google-button" />
+                        {syncBusy === 'auth' && <RefreshCcw size={14} className="spin" />}
+                      </div>
+                    )}
+
                     {serverConfig && !syncUser && (
                       <>
                         <div className="theme-switch" style={{ marginBottom: '0.6rem' }}>
@@ -5989,6 +6064,16 @@ Rules
                             : (syncForm.mode === 'register' ? t('sync.createAccount') : t('sync.signIn'))}
                         </button>
                       </>
+                    )}
+
+                    {serverConfig && !syncUser && (
+                      <div className="backup-origin" style={{ marginTop: '0.6rem' }}>
+                        {t('sync.diagnostics', {
+                          origin: window.location.origin,
+                          google: serverConfig.googleClientId ? 'ok' : '-',
+                          kakao: serverConfig.kakaoRestKey ? 'ok' : '-',
+                        })}
+                      </div>
                     )}
 
                     {serverConfig && syncUser && (

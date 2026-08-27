@@ -2923,3 +2923,8 @@ img.user-avatar { object-fit: cover; padding: 0; }
   font-size: 0.82rem;
   overflow-wrap: anywhere;
 }
+
+/* Google renders its own button into this container; it needs somewhere with a
+   width to lay out in. */
+.sync-google-button { min-height: 40px; display: flex; justify-content: center; }
+.sync-google-button > div { max-width: 100%; }

@@ -21,6 +21,10 @@ export const LANGUAGES = [
 ];
 
 const en = {
+  'sync.linkGoogle': 'Link this device with Google',
+  'sync.noCredential': 'Google did not return a credential. The sign-in was probably closed or blocked.',
+  'sync.linkRefused': 'The server refused that Google credential. Check that this exact address is registered in the Google console.',
+  'sync.diagnostics': 'Not linked. This page is {origin} · server Google key: {google} · Kakao key: {kakao}',
   'sync.reSignIn': 'This device is signed in as a local profile ({provider}) but not to this server yet. Sign out and sign in again with the same provider to link it — or use an email and password below.',
   'sync.title': 'Sync with this server',
   'sync.help': 'Settings and chats normally belong to one browser address, so a phone starts empty. Sign in here and they belong to the account instead — the same setup on every device that can reach this server.',
@@ -410,6 +414,10 @@ const en = {
 };
 
 const ko = {
+  'sync.linkGoogle': 'Google로 이 기기 연결하기',
+  'sync.noCredential': 'Google가 자격증명을 반환하지 않았습니다. 로그인 창이 닫혔거나 차단된 것 같습니다.',
+  'sync.linkRefused': '서버가 해당 Google 자격증명을 거부했습니다. 이 주소가 Google 콘솔에 정확히 등록되어 있는지 확인하세요.',
+  'sync.diagnostics': '연결되지 않음. 이 페이지는 {origin} · 서버의 Google 키: {google} · Kakao 키: {kakao}',
   'sync.reSignIn': '이 기기는 로컬 프로필({provider})로 로그인되어 있지만 아직 이 서버에는 연결되지 않았습니다. 로그아웃 후 같은 방식으로 다시 로그인하면 연결됩니다 — 또는 아래에서 이메일/비밀번호를 쓰세요.',
   'sync.title': '이 서버와 동기화',
   'sync.help': '설정과 대화는 원래 브라우저 주소 하나에 묶여 있어서 폰에서는 빈 상태로 시작합니다. 여기서 로그인하면 계정에 묶이므로, 이 서버에 접속 가능한 모든 기기에서 같은 환경이 됩니다.',
@@ -799,6 +807,10 @@ const ko = {
 };
 
 const ja = {
+  'sync.linkGoogle': 'Google でこの端末を接続',
+  'sync.noCredential': 'Google が認証情報を返しませんでした。サインインが閉じられたかブロックされたようです。',
+  'sync.linkRefused': 'サーバーがその Google 認証情報を拒否しました。このアドレスが Google コンソールに正確に登録されているか確認してください。',
+  'sync.diagnostics': '未接続。このページは {origin} · サーバーの Google キー: {google} · Kakao キー: {kakao}',
   'sync.reSignIn': 'この端末はローカルプロフィール（{provider}）でサインイン済みですが、まだこのサーバーには接続されていません。サインアウトして同じ方法で入り直すと接続されます — または下のメール/パスワードを使ってください。',
   'sync.title': 'このサーバーと同期',
   'sync.help': '設定とチャットは通常ブラウザのアドレスごとに保存されるため、スマホでは空から始まります。ここでサインインすればアカウントに紐づき、このサーバーに接続できるすべての端末で同じ環境になります。',
@@ -1188,6 +1200,10 @@ const ja = {
 };
 
 const zhHans = {
+  'sync.linkGoogle': '用 Google 连接此设备',
+  'sync.noCredential': 'Google 未返回凭据。登录窗口可能被关闭或拦截了。',
+  'sync.linkRefused': '服务器拒绝了该 Google 凭据。请确认此地址已准确注册在 Google 控制台中。',
+  'sync.diagnostics': '未连接。此页面为 {origin} · 服务器 Google 密钥：{google} · Kakao 密钥：{kakao}',
   'sync.reSignIn': '此设备已用本地个人资料（{provider}）登录，但尚未连接到此服务器。退出后用同样方式重新登录即可连接 — 或使用下方的邮箱和密码。',
   'sync.title': '与此服务器同步',
   'sync.help': '设置和对话通常绑定在一个浏览器地址上，所以手机会从空白开始。在此登录后它们改为绑定到账户，凡能访问此服务器的设备都是同一套环境。',
@@ -1578,6 +1594,10 @@ const zhHans = {
 
 const zhHant = {
   ...zhHans,
+  'sync.linkGoogle': '用 Google 連接此裝置',
+  'sync.noCredential': 'Google 未回傳憑證。登入視窗可能被關閉或攔截了。',
+  'sync.linkRefused': '伺服器拒絕了該 Google 憑證。請確認此位址已準確註冊在 Google 主控台中。',
+  'sync.diagnostics': '未連接。此頁面為 {origin} · 伺服器 Google 金鑰：{google} · Kakao 金鑰：{kakao}',
   'sync.reSignIn': '此裝置已用本機個人檔案（{provider}）登入，但尚未連線到此伺服器。登出後用同樣方式重新登入即可連線 — 或使用下方的電子郵件和密碼。',
   'sync.title': '與此伺服器同步',
   'sync.help': '設定和對話通常綁定在一個瀏覽器位址上，所以手機會從空白開始。在此登入後改為綁定到帳戶，凡能存取此伺服器的裝置都是同一套環境。',
@@ -1966,6 +1986,10 @@ const zhHant = {
 };
 
 const es = {
+  'sync.linkGoogle': 'Vincular este dispositivo con Google',
+  'sync.noCredential': 'Google no devolvió una credencial. Probablemente se cerró o bloqueó el inicio de sesión.',
+  'sync.linkRefused': 'El servidor rechazó esa credencial de Google. Comprueba que esta dirección exacta está registrada en la consola de Google.',
+  'sync.diagnostics': 'Sin vincular. Esta página es {origin} · clave de Google del servidor: {google} · clave de Kakao: {kakao}',
   'sync.reSignIn': 'Este dispositivo tiene sesión con un perfil local ({provider}) pero aún no con este servidor. Cierra sesión y vuelve a entrar con el mismo proveedor para enlazarlo, o usa un correo y contraseña abajo.',
   'sync.title': 'Sincronizar con este servidor',
   'sync.help': 'Los ajustes y chats pertenecen normalmente a una dirección de navegador, así que un móvil empieza vacío. Inicia sesión aquí y pasan a pertenecer a la cuenta, en todos los dispositivos que alcancen este servidor.',
@@ -2355,6 +2379,10 @@ const es = {
 };
 
 const fr = {
+  'sync.linkGoogle': 'Lier cet appareil avec Google',
+  'sync.noCredential': 'Google n’a pas renvoyé d’identifiant. La connexion a sans doute été fermée ou bloquée.',
+  'sync.linkRefused': 'Le serveur a refusé cet identifiant Google. Vérifiez que cette adresse exacte est enregistrée dans la console Google.',
+  'sync.diagnostics': 'Non lié. Cette page est {origin} · clé Google du serveur : {google} · clé Kakao : {kakao}',
   'sync.reSignIn': 'Cet appareil est connecté à un profil local ({provider}) mais pas encore à ce serveur. Déconnectez-vous et reconnectez-vous avec le même fournisseur pour le lier, ou utilisez un e-mail et un mot de passe ci-dessous.',
   'sync.title': 'Synchroniser avec ce serveur',
   'sync.help': 'Les réglages et discussions appartiennent normalement à une adresse de navigateur, donc un téléphone démarre vide. Connectez-vous ici et ils appartiennent au compte, sur tout appareil pouvant joindre ce serveur.',
@@ -2744,6 +2772,10 @@ const fr = {
 };
 
 const de = {
+  'sync.linkGoogle': 'Dieses Gerät mit Google verknüpfen',
+  'sync.noCredential': 'Google hat keine Anmeldedaten zurückgegeben. Die Anmeldung wurde vermutlich geschlossen oder blockiert.',
+  'sync.linkRefused': 'Der Server hat diese Google-Anmeldedaten abgelehnt. Prüfen Sie, ob genau diese Adresse in der Google-Konsole registriert ist.',
+  'sync.diagnostics': 'Nicht verknüpft. Diese Seite ist {origin} · Google-Schlüssel des Servers: {google} · Kakao-Schlüssel: {kakao}',
   'sync.reSignIn': 'Dieses Gerät ist mit einem lokalen Profil ({provider}) angemeldet, aber noch nicht bei diesem Server. Melden Sie sich ab und mit demselben Anbieter wieder an, um es zu verknüpfen — oder nutzen Sie unten E-Mail und Passwort.',
   'sync.title': 'Mit diesem Server synchronisieren',
   'sync.help': 'Einstellungen und Chats gehören sonst zu einer Browser-Adresse, ein Handy startet also leer. Melden Sie sich hier an, dann gehören sie zum Konto — auf jedem Gerät, das diesen Server erreicht.',
@@ -3133,6 +3165,10 @@ const de = {
 };
 
 const pt = {
+  'sync.linkGoogle': 'Vincular este dispositivo com o Google',
+  'sync.noCredential': 'O Google não retornou uma credencial. O login provavelmente foi fechado ou bloqueado.',
+  'sync.linkRefused': 'O servidor recusou essa credencial do Google. Verifique se este endereço exato está registrado no console do Google.',
+  'sync.diagnostics': 'Não vinculado. Esta página é {origin} · chave Google do servidor: {google} · chave Kakao: {kakao}',
   'sync.reSignIn': 'Este dispositivo está conectado com um perfil local ({provider}), mas ainda não a este servidor. Saia e entre novamente com o mesmo provedor para vincular — ou use e-mail e senha abaixo.',
   'sync.title': 'Sincronizar com este servidor',
   'sync.help': 'Configurações e conversas normalmente pertencem a um endereço de navegador, então o celular começa vazio. Entre aqui e elas passam a pertencer à conta, em todo dispositivo que alcance este servidor.',
@@ -3522,6 +3558,10 @@ const pt = {
 };
 
 const ru = {
+  'sync.linkGoogle': 'Связать это устройство через Google',
+  'sync.noCredential': 'Google не вернул учётные данные. Вероятно, вход был закрыт или заблокирован.',
+  'sync.linkRefused': 'Сервер отклонил эти учётные данные Google. Проверьте, что именно этот адрес зарегистрирован в консоли Google.',
+  'sync.diagnostics': 'Не связано. Эта страница — {origin} · ключ Google на сервере: {google} · ключ Kakao: {kakao}',
   'sync.reSignIn': 'На этом устройстве выполнен вход в локальный профиль ({provider}), но не на этот сервер. Выйдите и войдите снова тем же способом, чтобы связать, — или используйте почту и пароль ниже.',
   'sync.title': 'Синхронизация с этим сервером',
   'sync.help': 'Настройки и чаты обычно принадлежат одному адресу браузера, поэтому телефон начинает с нуля. Войдите здесь — и они будут принадлежать учётной записи на любом устройстве, достающем до этого сервера.',
@@ -3911,6 +3951,10 @@ const ru = {
 };
 
 const vi = {
+  'sync.linkGoogle': 'Liên kết thiết bị này bằng Google',
+  'sync.noCredential': 'Google không trả về thông tin xác thực. Có thể cửa sổ đăng nhập đã bị đóng hoặc chặn.',
+  'sync.linkRefused': 'Máy chủ đã từ chối thông tin xác thực Google đó. Hãy kiểm tra địa chỉ này đã được đăng ký chính xác trong Google console.',
+  'sync.diagnostics': 'Chưa liên kết. Trang này là {origin} · khóa Google của máy chủ: {google} · khóa Kakao: {kakao}',
   'sync.reSignIn': 'Thiết bị này đã đăng nhập bằng hồ sơ cục bộ ({provider}) nhưng chưa vào máy chủ này. Hãy đăng xuất rồi đăng nhập lại bằng cùng nhà cung cấp để liên kết — hoặc dùng email và mật khẩu bên dưới.',
   'sync.title': 'Đồng bộ với máy chủ này',
   'sync.help': 'Cài đặt và cuộc trò chuyện thường thuộc về một địa chỉ trình duyệt, nên điện thoại bắt đầu trống. Đăng nhập tại đây và chúng sẽ thuộc về tài khoản, trên mọi thiết bị truy cập được máy chủ này.',
@@ -4300,6 +4344,10 @@ const vi = {
 };
 
 const ar = {
+  'sync.linkGoogle': 'اربط هذا الجهاز عبر Google',
+  'sync.noCredential': 'لم يُعِد Google بيانات اعتماد. على الأرجح أُغلقت نافذة الدخول أو حُجبت.',
+  'sync.linkRefused': 'رفض الخادم بيانات اعتماد Google تلك. تأكد من تسجيل هذا العنوان بالضبط في وحدة تحكم Google.',
+  'sync.diagnostics': 'غير مرتبط. هذه الصفحة {origin} · مفتاح Google للخادم: {google} · مفتاح Kakao: {kakao}',
   'sync.reSignIn': 'سجّل هذا الجهاز الدخول بملف محلي ({provider}) لكن ليس إلى هذا الخادم بعد. سجّل الخروج ثم ادخل مجدداً بالمزوّد نفسه للربط — أو استخدم بريداً وكلمة مرور أدناه.',
   'sync.title': 'المزامنة مع هذا الخادم',
   'sync.help': 'ترتبط الإعدادات والمحادثات عادةً بعنوان متصفح واحد، لذا يبدأ الهاتف فارغاً. سجّل الدخول هنا لتصبح مرتبطة بالحساب على كل جهاز يصل إلى هذا الخادم.',
