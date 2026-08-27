@@ -5952,6 +5952,12 @@ Rules
                       <div className="auth-note" style={{ margin: 0 }}>{t('sync.noServer')}</div>
                     )}
 
+                    {serverConfig && !syncUser && currentUser && (
+                      <div className="auth-note" style={{ margin: '0 0 0.6rem' }}>
+                        {t('sync.reSignIn', { provider: currentUser.provider })}
+                      </div>
+                    )}
+
                     {serverConfig && !syncUser && (
                       <>
                         <div className="theme-switch" style={{ marginBottom: '0.6rem' }}>

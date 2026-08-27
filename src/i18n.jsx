@@ -21,6 +21,7 @@ export const LANGUAGES = [
 ];
 
 const en = {
+  'sync.reSignIn': 'This device is signed in as a local profile ({provider}) but not to this server yet. Sign out and sign in again with the same provider to link it — or use an email and password below.',
   'sync.title': 'Sync with this server',
   'sync.help': 'Settings and chats normally belong to one browser address, so a phone starts empty. Sign in here and they belong to the account instead — the same setup on every device that can reach this server.',
   'sync.noServer': 'This build is not being served by the backend, so there is nothing to sync with. Start it with start_ollama_webui.bat or npm start.',
@@ -409,6 +410,7 @@ const en = {
 };
 
 const ko = {
+  'sync.reSignIn': '이 기기는 로컬 프로필({provider})로 로그인되어 있지만 아직 이 서버에는 연결되지 않았습니다. 로그아웃 후 같은 방식으로 다시 로그인하면 연결됩니다 — 또는 아래에서 이메일/비밀번호를 쓰세요.',
   'sync.title': '이 서버와 동기화',
   'sync.help': '설정과 대화는 원래 브라우저 주소 하나에 묶여 있어서 폰에서는 빈 상태로 시작합니다. 여기서 로그인하면 계정에 묶이므로, 이 서버에 접속 가능한 모든 기기에서 같은 환경이 됩니다.',
   'sync.noServer': '현재 백엔드가 이 앱을 서빙하고 있지 않아 동기화할 대상이 없습니다. start_ollama_webui.bat 또는 npm start로 실행하세요.',
@@ -797,6 +799,7 @@ const ko = {
 };
 
 const ja = {
+  'sync.reSignIn': 'この端末はローカルプロフィール（{provider}）でサインイン済みですが、まだこのサーバーには接続されていません。サインアウトして同じ方法で入り直すと接続されます — または下のメール/パスワードを使ってください。',
   'sync.title': 'このサーバーと同期',
   'sync.help': '設定とチャットは通常ブラウザのアドレスごとに保存されるため、スマホでは空から始まります。ここでサインインすればアカウントに紐づき、このサーバーに接続できるすべての端末で同じ環境になります。',
   'sync.noServer': '現在バックエンドがこのアプリを配信していないため、同期先がありません。start_ollama_webui.bat または npm start で起動してください。',
@@ -1185,6 +1188,7 @@ const ja = {
 };
 
 const zhHans = {
+  'sync.reSignIn': '此设备已用本地个人资料（{provider}）登录，但尚未连接到此服务器。退出后用同样方式重新登录即可连接 — 或使用下方的邮箱和密码。',
   'sync.title': '与此服务器同步',
   'sync.help': '设置和对话通常绑定在一个浏览器地址上，所以手机会从空白开始。在此登录后它们改为绑定到账户，凡能访问此服务器的设备都是同一套环境。',
   'sync.noServer': '当前不是由后端提供此应用，因此没有可同步的对象。请用 start_ollama_webui.bat 或 npm start 启动。',
@@ -1574,6 +1578,7 @@ const zhHans = {
 
 const zhHant = {
   ...zhHans,
+  'sync.reSignIn': '此裝置已用本機個人檔案（{provider}）登入，但尚未連線到此伺服器。登出後用同樣方式重新登入即可連線 — 或使用下方的電子郵件和密碼。',
   'sync.title': '與此伺服器同步',
   'sync.help': '設定和對話通常綁定在一個瀏覽器位址上，所以手機會從空白開始。在此登入後改為綁定到帳戶，凡能存取此伺服器的裝置都是同一套環境。',
   'sync.noServer': '目前不是由後端提供此應用，因此沒有可同步的對象。請用 start_ollama_webui.bat 或 npm start 啟動。',
@@ -1961,6 +1966,7 @@ const zhHant = {
 };
 
 const es = {
+  'sync.reSignIn': 'Este dispositivo tiene sesión con un perfil local ({provider}) pero aún no con este servidor. Cierra sesión y vuelve a entrar con el mismo proveedor para enlazarlo, o usa un correo y contraseña abajo.',
   'sync.title': 'Sincronizar con este servidor',
   'sync.help': 'Los ajustes y chats pertenecen normalmente a una dirección de navegador, así que un móvil empieza vacío. Inicia sesión aquí y pasan a pertenecer a la cuenta, en todos los dispositivos que alcancen este servidor.',
   'sync.noServer': 'Esta versión no la sirve el backend, así que no hay con qué sincronizar. Arráncalo con start_ollama_webui.bat o npm start.',
@@ -2349,6 +2355,7 @@ const es = {
 };
 
 const fr = {
+  'sync.reSignIn': 'Cet appareil est connecté à un profil local ({provider}) mais pas encore à ce serveur. Déconnectez-vous et reconnectez-vous avec le même fournisseur pour le lier, ou utilisez un e-mail et un mot de passe ci-dessous.',
   'sync.title': 'Synchroniser avec ce serveur',
   'sync.help': 'Les réglages et discussions appartiennent normalement à une adresse de navigateur, donc un téléphone démarre vide. Connectez-vous ici et ils appartiennent au compte, sur tout appareil pouvant joindre ce serveur.',
   'sync.noServer': 'Cette instance n’est pas servie par le backend, il n’y a donc rien à synchroniser. Lancez-le avec start_ollama_webui.bat ou npm start.',
@@ -2737,6 +2744,7 @@ const fr = {
 };
 
 const de = {
+  'sync.reSignIn': 'Dieses Gerät ist mit einem lokalen Profil ({provider}) angemeldet, aber noch nicht bei diesem Server. Melden Sie sich ab und mit demselben Anbieter wieder an, um es zu verknüpfen — oder nutzen Sie unten E-Mail und Passwort.',
   'sync.title': 'Mit diesem Server synchronisieren',
   'sync.help': 'Einstellungen und Chats gehören sonst zu einer Browser-Adresse, ein Handy startet also leer. Melden Sie sich hier an, dann gehören sie zum Konto — auf jedem Gerät, das diesen Server erreicht.',
   'sync.noServer': 'Diese Instanz wird nicht vom Backend ausgeliefert, es gibt also nichts zum Synchronisieren. Mit start_ollama_webui.bat oder npm start starten.',
@@ -3125,6 +3133,7 @@ const de = {
 };
 
 const pt = {
+  'sync.reSignIn': 'Este dispositivo está conectado com um perfil local ({provider}), mas ainda não a este servidor. Saia e entre novamente com o mesmo provedor para vincular — ou use e-mail e senha abaixo.',
   'sync.title': 'Sincronizar com este servidor',
   'sync.help': 'Configurações e conversas normalmente pertencem a um endereço de navegador, então o celular começa vazio. Entre aqui e elas passam a pertencer à conta, em todo dispositivo que alcance este servidor.',
   'sync.noServer': 'Esta instância não é servida pelo backend, então não há com o que sincronizar. Inicie com start_ollama_webui.bat ou npm start.',
@@ -3513,6 +3522,7 @@ const pt = {
 };
 
 const ru = {
+  'sync.reSignIn': 'На этом устройстве выполнен вход в локальный профиль ({provider}), но не на этот сервер. Выйдите и войдите снова тем же способом, чтобы связать, — или используйте почту и пароль ниже.',
   'sync.title': 'Синхронизация с этим сервером',
   'sync.help': 'Настройки и чаты обычно принадлежат одному адресу браузера, поэтому телефон начинает с нуля. Войдите здесь — и они будут принадлежать учётной записи на любом устройстве, достающем до этого сервера.',
   'sync.noServer': 'Эта сборка отдаётся не бэкендом, синхронизировать не с чем. Запустите через start_ollama_webui.bat или npm start.',
@@ -3901,6 +3911,7 @@ const ru = {
 };
 
 const vi = {
+  'sync.reSignIn': 'Thiết bị này đã đăng nhập bằng hồ sơ cục bộ ({provider}) nhưng chưa vào máy chủ này. Hãy đăng xuất rồi đăng nhập lại bằng cùng nhà cung cấp để liên kết — hoặc dùng email và mật khẩu bên dưới.',
   'sync.title': 'Đồng bộ với máy chủ này',
   'sync.help': 'Cài đặt và cuộc trò chuyện thường thuộc về một địa chỉ trình duyệt, nên điện thoại bắt đầu trống. Đăng nhập tại đây và chúng sẽ thuộc về tài khoản, trên mọi thiết bị truy cập được máy chủ này.',
   'sync.noServer': 'Bản này không do backend phục vụ nên không có gì để đồng bộ. Khởi động bằng start_ollama_webui.bat hoặc npm start.',
@@ -4289,6 +4300,7 @@ const vi = {
 };
 
 const ar = {
+  'sync.reSignIn': 'سجّل هذا الجهاز الدخول بملف محلي ({provider}) لكن ليس إلى هذا الخادم بعد. سجّل الخروج ثم ادخل مجدداً بالمزوّد نفسه للربط — أو استخدم بريداً وكلمة مرور أدناه.',
   'sync.title': 'المزامنة مع هذا الخادم',
   'sync.help': 'ترتبط الإعدادات والمحادثات عادةً بعنوان متصفح واحد، لذا يبدأ الهاتف فارغاً. سجّل الدخول هنا لتصبح مرتبطة بالحساب على كل جهاز يصل إلى هذا الخادم.',
   'sync.noServer': 'هذه النسخة لا يقدّمها الخادم الخلفي، فلا يوجد ما تتم مزامنته. شغّلها عبر start_ollama_webui.bat أو npm start.',
