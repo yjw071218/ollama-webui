@@ -830,35 +830,73 @@ export const createApiRoutes = (env = {}, options = {}) => {
     // from a browser (no CORS) nor accepts the JavaScript key. So the popup
     // relays the code back here and the exchange happens server-side.
 
-    route('/kakao/callback',(req, res) => {
+    /**
+     * Where Kakao sends the browser back, and where the login finishes.
+     *
+     * This used to be an HTML page that posted the authorization code to the
+     * opener so a popup could exchange it. That put the code through the
+     * browser for no reason, needed a popup — which is blocked often and is
+     * miserable on a phone — and made the redirect URI a page rather than an
+     * endpoint. The documented flow is a plain redirect: the code arrives here,
+     * is exchanged here, and the browser leaves with a session cookie having
+     * never seen it.
+     */
+    route('/kakao/callback', async (req, res) => {
       const url = new URL(req.url, 'http://localhost');
+      const back = (params) => {
+        res.writeHead(302, { Location: `/?${new URLSearchParams(params)}` });
+        res.end();
+      };
+
+      const error = url.searchParams.get('error');
+      if (error) {
+        // Cancelling at the consent screen is not a failure worth shouting about.
+        const description = url.searchParams.get('error_description') || error;
+        return back(error === 'access_denied'
+          ? { kakao: 'cancelled' }
+          : { kakao: 'error', detail: description });
+      }
+
       const code = url.searchParams.get('code') || '';
       const state = url.searchParams.get('state') || '';
-      const error = url.searchParams.get('error') || '';
-      const errorDescription = url.searchParams.get('error_description') || '';
+      if (!code) return back({ kakao: 'cancelled' });
 
-      const payload = JSON.stringify({ source: 'kakao-login', code, state, error, errorDescription });
-
-      res.setHeader('Content-Type', 'text/html; charset=utf-8');
-      res.end(`<!doctype html>
-<html lang="en"><head><meta charset="utf-8"><title>Kakao</title>
-<style>body{font-family:system-ui,sans-serif;display:flex;align-items:center;justify-content:center;height:100vh;margin:0;color:#444}</style>
-</head><body>
-<p>Returning to the app…</p>
-<script>
-  (function () {
-    var payload = ${payload};
-    try {
-      if (window.opener) {
-        window.opener.postMessage(payload, window.location.origin);
-        window.close();
-        return;
+      // Verified here, where it was issued. A state that was never issued, has
+      // expired, or has already been spent means this callback is not one we
+      // started.
+      if (!consumeState(state)) {
+        return back({ kakao: 'error', detail: 'That sign-in could not be verified. Start it again.' });
       }
-    } catch (e) {}
-    document.body.textContent = 'You can close this window.';
-  })();
-</script>
-</body></html>`);
+
+      const { restKey, clientSecret } = kakaoCreds();
+      if (!restKey) return back({ kakao: 'error', detail: 'Kakao is not configured on this server.' });
+
+      // Must match the authorize request exactly, so it is rebuilt from the
+      // address this request actually arrived on.
+      const host = req.headers.host || `localhost:${env.PORT || 5173}`;
+      const scheme = req.socket?.encrypted ? 'https' : 'http';
+      const redirectUri = `${scheme}://${host}/kakao/callback`;
+
+      try {
+        const tokens = await exchangeCode({ code, restKey, redirectUri, clientSecret });
+        const identity = await fetchProfile(tokens.accessToken);
+        const user = findOrCreateSocialUser(identity);
+
+        writeTokens(user.id, tokens);
+        setSessionCookie(res, createSession(user.id));
+        res.writeHead(302, { Location: '/?kakao=ok' });
+        res.end();
+      } catch (e) {
+        const raw = e.message || 'Sign-in failed';
+        let hint = '';
+        if (!clientSecret && /client_secret|invalid_client|KOE010/i.test(raw)) {
+          hint = ' — Client Secret is enabled on this app. Turn it off in the Kakao console '
+            + 'or set KAKAO_CLIENT_SECRET in .env and restart.';
+        } else if (/redirect|KOE006|KOE320/i.test(raw)) {
+          hint = ` — ${redirectUri} must be registered verbatim under 카카오 로그인 → Redirect URI.`;
+        }
+        back({ kakao: 'error', detail: raw + hint });
+      }
     });
 
     // ---- Kakao Login ----
@@ -889,64 +927,6 @@ export const createApiRoutes = (env = {}, options = {}) => {
         state,
         authorizeUrl: authorizeUrl({ restKey, redirectUri, state, scope }),
       });
-    });
-
-    // Steps 2 and 3, plus the session this app runs on.
-    route('/kakao/exchange', async (req, res) => {
-      const fail = (status, error, detail) =>
-        sendJson(res, { success: false, error, detail }, status);
-
-      try {
-        const { code, state, redirectUri } = JSON.parse(await readBody(req, 64 * 1024) || '{}');
-        if (!code || !redirectUri) return fail(400, 'Missing code or redirectUri');
-
-        // Checked here, not in the page that received it.
-        if (!consumeState(state)) {
-          return fail(400, 'That sign-in could not be verified. Start it again.',
-            'state missing, expired, or already used');
-        }
-
-        const { restKey, clientSecret } = kakaoCreds();
-        if (!restKey) return fail(501, 'Kakao is not configured on this server.');
-
-        let tokens;
-        try {
-          tokens = await exchangeCode({ code, restKey, redirectUri, clientSecret });
-        } catch (e) {
-          const raw = e.message || '';
-          let hint = '';
-          if (!clientSecret && /client_secret|invalid_client|KOE010/i.test(raw)) {
-            hint = ' — Client Secret is enabled on this app. Turn it off in the Kakao console '
-              + '(카카오 로그인 → 클라이언트 시크릿) or set KAKAO_CLIENT_SECRET in .env and restart.';
-          } else if (clientSecret && /client_secret|invalid_client|KOE010/i.test(raw)) {
-            hint = ' — KAKAO_CLIENT_SECRET is set but Kakao rejected it. It changes when you press 코드 재발급.';
-          } else if (/redirect|KOE006|KOE320/i.test(raw)) {
-            hint = ` — the redirect_uri sent (${redirectUri}) must be registered verbatim under 카카오 로그인 → Redirect URI.`;
-          }
-          return fail(400, raw + hint);
-        }
-
-        const identity = await fetchProfile(tokens.accessToken);
-        const user = findOrCreateSocialUser(identity);
-
-        // Kept so the connection can be maintained, ended, or severed later.
-        // They stay on the server; the browser gets a session cookie.
-        writeTokens(user.id, tokens);
-        setSessionCookie(res, createSession(user.id));
-
-        sendJson(res, {
-          success: true,
-          profile: {
-            id: identity.providerId,
-            email: identity.email,
-            name: identity.name,
-            avatar: identity.avatar,
-          },
-          syncAccount: user,
-        });
-      } catch (e) {
-        fail(500, e.message);
-      }
     });
 
     // Step 4. Signing out of this app should not leave the Kakao session up.

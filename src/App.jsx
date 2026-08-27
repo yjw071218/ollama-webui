@@ -59,6 +59,8 @@ import {
   renderGoogleButton,
   kakaoLogout,
   kakaoUnlink,
+  readKakaoOutcome,
+  upsertSocialUser,
   signOutSocial,
   socialDefaults,
   kakaoRedirectUri,
@@ -2089,6 +2091,24 @@ function App() {
       if (me?.success) {
         setSyncUser(me.user || null);
         setSyncInfo(me.state || null);
+
+        // Kakao finishes on the server and returns here by redirect, so the
+        // session exists before this page has any idea who signed in. Give the
+        // profile menu something to show rather than leaving it on "guest"
+        // while the account is plainly signed in.
+        if (me.user && !readSession()) {
+          const local = await upsertSocialUser({
+            provider: me.user.provider || 'server',
+            providerId: me.user.id,
+            email: me.user.email,
+            name: me.user.name,
+            avatar: me.user.avatar || '',
+          });
+          if (!cancelled && local?.user) {
+            setCurrentUser(local.user);
+            saveSession(local.user);
+          }
+        }
       }
     })().finally(() => { if (!cancelled) setSyncChecked(true); });
     return () => { cancelled = true; };
@@ -2284,6 +2304,15 @@ function App() {
       document.removeEventListener('visibilitychange', check);
     };
   }, [syncUser, storageKey]);
+
+  // The login ends in a redirect, so its result arrives in the address bar.
+  useEffect(() => {
+    const result = readKakaoOutcome();
+    if (!result) return;
+    if (result.outcome === 'ok') toast(t('auth.kakaoSignedIn'), 'success');
+    else if (result.outcome === 'cancelled') toast(t('auth.kakaoCancelled'), 'info');
+    else toast(result.detail || t('auth.kakaoFailed'), 'error', 12000);
+  }, []);
 
   // ---- Syncing with the server account ----
 

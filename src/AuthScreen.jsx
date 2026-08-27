@@ -138,6 +138,10 @@ export const AuthScreen = ({ onAuthenticated, onGuest }) => {
         console.error(`[${provider}]`, result.error, result.detail);
         return;
       }
+      // Kakao leaves for its consent screen and the page that returns is
+      // already signed in, so there is no user to hand over here — and the
+      // spinner should stay up until the navigation happens.
+      if (result.redirecting) return;
       onAuthenticated(result.user);
     } catch (err) {
       setError(err.message || String(err));

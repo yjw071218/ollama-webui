@@ -478,13 +478,10 @@ export const kakaoRedirectUri = () => `${window.location.origin}/kakao/callback`
 export const signInWithKakao = async () => {
   const redirectUri = kakaoRedirectUri();
 
-  // The state comes from the server, which is the only party that can
-  // meaningfully verify it later: a value this page invents and this page
-  // checks proves nothing about a forged callback. The server also builds the
-  // authorize URL, so the REST key stays where it is configured.
-  //
-  // No `scope` is requested, so Kakao uses the consent items configured on the
-  // app rather than failing on one that was never enabled.
+  // Ask the server to start it. The state has to be issued by whoever will
+  // verify it — a value this page invents and this page checks says nothing
+  // about a forged callback — and the authorize URL carries the REST key,
+  // which belongs where it is configured.
   let start;
   try {
     const res = await fetch(`/kakao/start?redirect_uri=${encodeURIComponent(redirectUri)}`, {
@@ -496,71 +493,33 @@ export const signInWithKakao = async () => {
   }
   if (!start?.success) return { error: 'auth.notConfigured', detail: start?.error };
 
-  const { state, authorizeUrl } = start;
+  // A full navigation, not a popup. Popups are blocked by default in plenty of
+  // browsers and are miserable on a phone, and a redirect is what both Kakao's
+  // documentation and the redirect URI itself describe. The page that comes
+  // back is already signed in, so there is nothing to return.
+  window.location.assign(start.authorizeUrl);
+  return { redirecting: true };
+};
 
-  const popup = window.open(authorizeUrl, 'kakao-login', 'width=480,height=720,menubar=no,toolbar=no');
-  if (!popup) return { error: 'auth.popupBlocked' };
+/**
+ * What the callback left in the address bar, if anything.
+ *
+ * The login finishes on the server and ends in a redirect, so its outcome
+ * arrives as a query parameter rather than a return value. Reading it clears
+ * it, so a refresh does not report the same thing twice.
+ */
+export const readKakaoOutcome = () => {
+  const params = new URLSearchParams(window.location.search);
+  const outcome = params.get('kakao');
+  if (!outcome) return null;
 
-  const relay = await new Promise((resolve) => {
-    let done = false;
-    const finish = (value) => {
-      if (done) return;
-      done = true;
-      window.removeEventListener('message', onMessage);
-      clearInterval(closedTimer);
-      resolve(value);
-    };
+  const detail = params.get('detail') || '';
+  params.delete('kakao');
+  params.delete('detail');
+  const query = params.toString();
+  window.history.replaceState({}, '', window.location.pathname + (query ? `?${query}` : ''));
 
-    const onMessage = (event) => {
-      if (event.origin !== window.location.origin) return;
-      const data = event.data;
-      if (!data || data.source !== 'kakao-login') return;
-      if (data.state !== state) return finish({ error: 'auth.kakaoFailed', detail: 'state mismatch' });
-      if (data.error) return finish({ error: 'auth.kakaoFailed', detail: data.errorDescription || data.error });
-      if (!data.code) return finish({ error: 'auth.kakaoCancelled' });
-      finish({ code: data.code });
-    };
-
-    window.addEventListener('message', onMessage);
-
-    // The popup being closed by hand is a cancellation, not a hang.
-    const closedTimer = setInterval(() => {
-      // Kakao renders KOE006 on its own domain and never redirects back, so a
-      // closed popup with no code usually means the redirect URI is not
-      // registered — say that rather than a bare "cancelled".
-      if (popup.closed) finish({ error: 'auth.kakaoNoCode', detail: redirectUri });
-    }, 500);
-
-    setTimeout(() => finish({ error: 'auth.kakaoCancelled' }), 3 * 60 * 1000);
-  });
-
-  try { popup.close(); } catch (e) { /* already gone */ }
-
-  if (relay.error) return relay;
-
-  let data;
-  try {
-    const res = await fetch('/kakao/exchange', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      // The state goes back for the server to check and spend; the REST key
-      // does not, because the server is where it lives.
-      body: JSON.stringify({ code: relay.code, state, redirectUri }),
-    });
-    data = await res.json();
-  } catch (err) {
-    return { error: 'auth.kakaoFailed', detail: err.message };
-  }
-
-  if (!data?.success) return { error: 'auth.kakaoFailed', detail: data?.error || 'exchange failed' };
-
-  return upsertSocialUser({
-    provider: 'kakao',
-    providerId: data.profile.id,
-    email: data.profile.email,
-    name: data.profile.name,
-    avatar: data.profile.avatar,
-  });
+  return { outcome, detail };
 };
 
 export const signOutSocial = () => {

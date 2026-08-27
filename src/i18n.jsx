@@ -21,6 +21,7 @@ export const LANGUAGES = [
 ];
 
 const en = {
+  'auth.kakaoSignedIn': 'Signed in with Kakao.',
   'sync.pullReplace': 'Replace this device with the account',
   'sync.confirmReplace': 'Throw away this device\'s chats and settings for this profile, and take the account\'s instead?\n\nUse this when a device has picked up the wrong data. It cannot be undone.',
   'composer.placeholderShort': 'Message...',
@@ -420,6 +421,7 @@ const en = {
 };
 
 const ko = {
+  'auth.kakaoSignedIn': '카카오로 로그인했습니다.',
   'sync.pullReplace': '이 기기를 계정 것으로 덮어쓰기',
   'sync.confirmReplace': '이 프로필의 기기 쪽 대화와 설정을 버리고 계정 것으로 가져올까요?\n\n기기에 잘못된 데이터가 섞였을 때 쓰세요. 되돌릴 수 없습니다.',
   'composer.placeholderShort': '메시지 보내기...',
@@ -819,6 +821,7 @@ const ko = {
 };
 
 const ja = {
+  'auth.kakaoSignedIn': 'Kakao でサインインしました。',
   'sync.pullReplace': 'この端末をアカウントの内容で置き換え',
   'sync.confirmReplace': 'このプロフィールの端末側のチャットと設定を破棄し、アカウントのものに置き換えますか？\n\n端末に誤ったデータが混ざったときに使います。元に戻せません。',
   'composer.placeholderShort': 'メッセージ...',
@@ -1218,6 +1221,7 @@ const ja = {
 };
 
 const zhHans = {
+  'auth.kakaoSignedIn': '已使用 Kakao 登录。',
   'sync.pullReplace': '用账户内容覆盖此设备',
   'sync.confirmReplace': '丢弃此设备上该资料的对话与设置，改用账户的内容吗？\n\n用于设备混入了错误数据时。无法撤销。',
   'composer.placeholderShort': '发送消息…',
@@ -1618,6 +1622,7 @@ const zhHans = {
 
 const zhHant = {
   ...zhHans,
+  'auth.kakaoSignedIn': '已使用 Kakao 登入。',
   'sync.pullReplace': '用帳戶內容覆寫此裝置',
   'sync.confirmReplace': '捨棄此裝置上該檔案的對話與設定，改用帳戶的內容嗎？\n\n用於裝置混入了錯誤資料時。無法復原。',
   'composer.placeholderShort': '傳送訊息…',
@@ -2016,6 +2021,7 @@ const zhHant = {
 };
 
 const es = {
+  'auth.kakaoSignedIn': 'Sesion iniciada con Kakao.',
   'sync.pullReplace': 'Reemplazar este dispositivo con la cuenta',
   'sync.confirmReplace': '¿Descartar los chats y ajustes de este dispositivo para este perfil y tomar los de la cuenta?\n\nÚsalo cuando un dispositivo tenga datos equivocados. No se puede deshacer.',
   'composer.placeholderShort': 'Mensaje...',
@@ -2415,6 +2421,7 @@ const es = {
 };
 
 const fr = {
+  'auth.kakaoSignedIn': 'Connecte avec Kakao.',
   'sync.pullReplace': 'Remplacer cet appareil par le compte',
   'sync.confirmReplace': 'Jeter les discussions et réglages de cet appareil pour ce profil et prendre ceux du compte ?\n\nÀ utiliser quand un appareil a récupéré de mauvaises données. Irréversible.',
   'composer.placeholderShort': 'Message...',
@@ -2814,6 +2821,7 @@ const fr = {
 };
 
 const de = {
+  'auth.kakaoSignedIn': 'Mit Kakao angemeldet.',
   'sync.pullReplace': 'Dieses Gerät durch das Konto ersetzen',
   'sync.confirmReplace': 'Chats und Einstellungen dieses Geräts für dieses Profil verwerfen und die des Kontos übernehmen?\n\nFür ein Gerät, das falsche Daten übernommen hat. Nicht umkehrbar.',
   'composer.placeholderShort': 'Nachricht...',
@@ -3213,6 +3221,7 @@ const de = {
 };
 
 const pt = {
+  'auth.kakaoSignedIn': 'Conectado com o Kakao.',
   'sync.pullReplace': 'Substituir este dispositivo pela conta',
   'sync.confirmReplace': 'Descartar as conversas e configurações deste dispositivo para este perfil e usar as da conta?\n\nUse quando um dispositivo pegou dados errados. Não há como desfazer.',
   'composer.placeholderShort': 'Mensagem...',
@@ -3612,6 +3621,7 @@ const pt = {
 };
 
 const ru = {
+  'auth.kakaoSignedIn': 'Вход через Kakao выполнен.',
   'sync.pullReplace': 'Заменить это устройство данными аккаунта',
   'sync.confirmReplace': 'Отбросить чаты и настройки этого устройства для этого профиля и взять данные аккаунта?\n\nДля устройства, получившего чужие данные. Отменить нельзя.',
   'composer.placeholderShort': 'Сообщение...',
@@ -4011,6 +4021,7 @@ const ru = {
 };
 
 const vi = {
+  'auth.kakaoSignedIn': 'Da dang nhap bang Kakao.',
   'sync.pullReplace': 'Thay thế thiết bị này bằng tài khoản',
   'sync.confirmReplace': 'Bỏ các cuộc trò chuyện và cài đặt của thiết bị này cho hồ sơ này và lấy của tài khoản?\n\nDùng khi thiết bị đã nhận nhầm dữ liệu. Không thể hoàn tác.',
   'composer.placeholderShort': 'Tin nhắn...',
@@ -4410,6 +4421,7 @@ const vi = {
 };
 
 const ar = {
+  'auth.kakaoSignedIn': 'تم تسجيل الدخول عبر Kakao.',
   'sync.pullReplace': 'استبدال هذا الجهاز بمحتوى الحساب',
   'sync.confirmReplace': 'هل تريد التخلص من محادثات وإعدادات هذا الجهاز لهذا الملف وأخذ ما في الحساب؟\n\nاستخدمه عندما يلتقط جهاز بيانات خاطئة. لا يمكن التراجع.',
   'composer.placeholderShort': 'رسالة...',

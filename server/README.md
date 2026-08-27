@@ -175,11 +175,21 @@ Following [Kakao's documentation](https://developers.kakao.com/docs/ko/tutorial/
 
 | Step | Endpoint | Where |
 | --- | --- | --- |
-| 1. Consent | `kauth.kakao.com/oauth/authorize` | Browser, at a URL the server builds |
-| 2. Token | `kauth.kakao.com/oauth/token` | **Server** — needs the REST key and secret |
-| 3. Profile | `kapi.kakao.com/v2/user/me` | Server |
+| 1. Consent | `kauth.kakao.com/oauth/authorize` | Browser navigates there; the server builds the URL |
+| 2. Token | `kauth.kakao.com/oauth/token` | **Server**, inside `/kakao/callback` |
+| 3. Profile | `kapi.kakao.com/v2/user/me` | Server, same request |
 | 4. Logout | `kapi.kakao.com/v1/user/logout` | Server, on sign-out |
 | 5. Unlink | `kapi.kakao.com/v1/user/unlink` | Server, on deleting a profile |
+
+**It is a redirect, not a popup.** `/kakao/callback` is an endpoint that finishes
+the login and answers `302` — it exchanges the code, fetches the profile, sets
+the session cookie, and sends the browser back to `/`. The authorization code
+never enters a page, there is no `postMessage` relay, and nothing depends on
+popups, which browsers block by default and which are unusable on a phone.
+
+The outcome comes back as `?kakao=ok`, `?kakao=cancelled` or
+`?kakao=error&detail=…`, which the app reads once and clears from the address
+bar.
 
 Three things follow from that split:
 
