@@ -21,6 +21,8 @@ export const LANGUAGES = [
 ];
 
 const en = {
+  'composer.placeholderShort': 'Message...',
+  'sidebar.close': 'Close the chat list',
   'auth.switchedElsewhere': 'The signed-in profile changed in another tab. Every tab on this address shares one. Reload when you are ready.',
   'sync.remoteChanges': 'Changes arrived from another device. Reload to apply them.',
   'sync.linkGoogle': 'Link this device with Google',
@@ -416,6 +418,8 @@ const en = {
 };
 
 const ko = {
+  'composer.placeholderShort': '메시지 보내기...',
+  'sidebar.close': '대화 목록 닫기',
   'auth.switchedElsewhere': '다른 탭에서 로그인한 프로필이 바뀌었습니다. 이 주소의 모든 탭은 하나를 공유합니다. 준비되면 새로고침하세요.',
   'sync.remoteChanges': '다른 기기의 변경사항이 도착했습니다. 새로고침하면 적용됩니다.',
   'sync.linkGoogle': 'Google로 이 기기 연결하기',
@@ -811,6 +815,8 @@ const ko = {
 };
 
 const ja = {
+  'composer.placeholderShort': 'メッセージ...',
+  'sidebar.close': 'チャット一覧を閉じる',
   'auth.switchedElsewhere': '別のタブでサインイン中のプロフィールが変わりました。このアドレスのすべてのタブは 1 つを共有します。準備ができたら再読み込みしてください。',
   'sync.remoteChanges': '別の端末からの変更が届きました。再読み込みで反映されます。',
   'sync.linkGoogle': 'Google でこの端末を接続',
@@ -1206,6 +1212,8 @@ const ja = {
 };
 
 const zhHans = {
+  'composer.placeholderShort': '发送消息…',
+  'sidebar.close': '关闭对话列表',
   'auth.switchedElsewhere': '另一个标签页中登录的个人资料已更改。此地址的所有标签页共用一个。准备好后请刷新。',
   'sync.remoteChanges': '收到了来自其他设备的更改。刷新后生效。',
   'sync.linkGoogle': '用 Google 连接此设备',
@@ -1602,6 +1610,8 @@ const zhHans = {
 
 const zhHant = {
   ...zhHans,
+  'composer.placeholderShort': '傳送訊息…',
+  'sidebar.close': '關閉對話清單',
   'auth.switchedElsewhere': '另一個分頁中登入的個人檔案已變更。此位址的所有分頁共用一個。準備好後請重新整理。',
   'sync.remoteChanges': '收到了來自其他裝置的變更。重新整理後生效。',
   'sync.linkGoogle': '用 Google 連接此裝置',
@@ -1996,6 +2006,8 @@ const zhHant = {
 };
 
 const es = {
+  'composer.placeholderShort': 'Mensaje...',
+  'sidebar.close': 'Cerrar la lista de chats',
   'auth.switchedElsewhere': 'El perfil con sesión iniciada cambió en otra pestaña. Todas las pestañas de esta dirección comparten uno. Recarga cuando quieras.',
   'sync.remoteChanges': 'Llegaron cambios de otro dispositivo. Recarga para aplicarlos.',
   'sync.linkGoogle': 'Vincular este dispositivo con Google',
@@ -2391,6 +2403,8 @@ const es = {
 };
 
 const fr = {
+  'composer.placeholderShort': 'Message...',
+  'sidebar.close': 'Fermer la liste des discussions',
   'auth.switchedElsewhere': 'Le profil connecté a changé dans un autre onglet. Tous les onglets de cette adresse en partagent un seul. Rechargez quand vous voulez.',
   'sync.remoteChanges': 'Des modifications sont arrivées d’un autre appareil. Rechargez pour les appliquer.',
   'sync.linkGoogle': 'Lier cet appareil avec Google',
@@ -2786,6 +2800,8 @@ const fr = {
 };
 
 const de = {
+  'composer.placeholderShort': 'Nachricht...',
+  'sidebar.close': 'Chatliste schließen',
   'auth.switchedElsewhere': 'Das angemeldete Profil wurde in einem anderen Tab geändert. Alle Tabs dieser Adresse teilen sich eines. Laden Sie neu, wenn es passt.',
   'sync.remoteChanges': 'Änderungen von einem anderen Gerät sind eingetroffen. Zum Anwenden neu laden.',
   'sync.linkGoogle': 'Dieses Gerät mit Google verknüpfen',
@@ -3181,6 +3197,8 @@ const de = {
 };
 
 const pt = {
+  'composer.placeholderShort': 'Mensagem...',
+  'sidebar.close': 'Fechar a lista de conversas',
   'auth.switchedElsewhere': 'O perfil conectado mudou em outra aba. Todas as abas deste endereço compartilham um. Recarregue quando quiser.',
   'sync.remoteChanges': 'Chegaram alterações de outro dispositivo. Recarregue para aplicá-las.',
   'sync.linkGoogle': 'Vincular este dispositivo com o Google',
@@ -3576,6 +3594,8 @@ const pt = {
 };
 
 const ru = {
+  'composer.placeholderShort': 'Сообщение...',
+  'sidebar.close': 'Закрыть список чатов',
   'auth.switchedElsewhere': 'Профиль, под которым выполнен вход, изменился в другой вкладке. Все вкладки этого адреса используют один. Обновите, когда будет удобно.',
   'sync.remoteChanges': 'Пришли изменения с другого устройства. Обновите страницу, чтобы применить.',
   'sync.linkGoogle': 'Связать это устройство через Google',
@@ -3971,6 +3991,8 @@ const ru = {
 };
 
 const vi = {
+  'composer.placeholderShort': 'Tin nhắn...',
+  'sidebar.close': 'Đóng danh sách trò chuyện',
   'auth.switchedElsewhere': 'Hồ sơ đăng nhập đã thay đổi ở tab khác. Mọi tab của địa chỉ này dùng chung một hồ sơ. Hãy tải lại khi bạn sẵn sàng.',
   'sync.remoteChanges': 'Đã nhận thay đổi từ thiết bị khác. Tải lại để áp dụng.',
   'sync.linkGoogle': 'Liên kết thiết bị này bằng Google',
@@ -4366,6 +4388,8 @@ const vi = {
 };
 
 const ar = {
+  'composer.placeholderShort': 'رسالة...',
+  'sidebar.close': 'إغلاق قائمة المحادثات',
   'auth.switchedElsewhere': 'تغيّر الملف الشخصي المسجّل في تبويب آخر. كل تبويبات هذا العنوان تتشارك ملفاً واحداً. أعد التحميل عندما تكون جاهزاً.',
   'sync.remoteChanges': 'وصلت تغييرات من جهاز آخر. أعد التحميل لتطبيقها.',
   'sync.linkGoogle': 'اربط هذا الجهاز عبر Google',

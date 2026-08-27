@@ -589,7 +589,33 @@ function App() {
   const [models, setModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
   const [selectedVisionModel, setSelectedVisionModel] = useState('');
-  const [isSidebarOpen, setIsSidebarOpen] = useState(true);
+  // The breakpoint the stylesheet uses for the drawer layout, kept in one place
+  // so the two cannot disagree about what "narrow" means.
+  const NARROW_QUERY = '(max-width: 860px)';
+  const [isNarrow, setIsNarrow] = useState(
+    () => typeof window !== 'undefined' && window.matchMedia?.(NARROW_QUERY).matches,
+  );
+  useEffect(() => {
+    const query = window.matchMedia?.(NARROW_QUERY);
+    if (!query) return undefined;
+    const onChange = (event) => setIsNarrow(event.matches);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
+
+  // Open on a desktop, shut on a phone: there it covers the conversation.
+  const [isSidebarOpen, setIsSidebarOpen] = useState(
+    () => !(typeof window !== 'undefined' && window.matchMedia?.(NARROW_QUERY).matches),
+  );
+
+  // Rotating a phone into landscape, or resizing a window past the breakpoint,
+  // should not leave a drawer stranded over the conversation.
+  const wasNarrowRef = useRef(isNarrow);
+  useEffect(() => {
+    if (wasNarrowRef.current === isNarrow) return;
+    wasNarrowRef.current = isNarrow;
+    setIsSidebarOpen(!isNarrow);
+  }, [isNarrow]);
   const [activeArtifact, setActiveArtifact] = useState(null); // { type, version, fallbackContent, fallbackLang, fallbackIsWeb }
   
   // Custom Dropdown State
@@ -1329,7 +1355,7 @@ function App() {
   // never mutates the conversation itself.
   // --- Resizable / adjustable layout ---
   const DEFAULT_ARTIFACT_WIDTH = 620;
-  const DEFAULT_SIDEBAR_WIDTH = 300;
+  const DEFAULT_SIDEBAR_WIDTH = 340;
   const DEFAULT_CONSOLE_HEIGHT = 200;
   const [artifactWidth, setArtifactWidth] = usePersistedNumber('artifactWidth', DEFAULT_ARTIFACT_WIDTH);
   const [sidebarWidth, setSidebarWidth] = usePersistedNumber('sidebarWidth', DEFAULT_SIDEBAR_WIDTH);
@@ -1580,6 +1606,8 @@ function App() {
   };
 
   const createNewSession = () => {
+    // On a phone the drawer sits over the chat it just created.
+    if (isNarrow) setIsSidebarOpen(false);
     // A configured default wins; otherwise the chat inherits whatever is selected.
     const startingModel = defaultModel && models.some(m => m.name === defaultModel) ? defaultModel : '';
     if (startingModel) setSelectedModel(startingModel);
@@ -3805,7 +3833,12 @@ Rules
     <div
       key={s.id}
       className={`history-item ${currentSessionId === s.id ? 'active' : ''}`}
-      onClick={() => !isGenerating && setCurrentSessionId(s.id)}
+      onClick={() => {
+        if (isGenerating) return;
+        setCurrentSessionId(s.id);
+        // On a phone the drawer is over the conversation it was used to open.
+        if (isNarrow) setIsSidebarOpen(false);
+      }}
     >
       {s.pinned && <Pin size={12} className="pin-marker" />}
       {renamingId === s.id ? (
@@ -4311,6 +4344,18 @@ Rules
       className={`claude-app ${activeArtifact ? 'has-artifact' : ''} ${artifactMaximized ? 'artifact-maximized' : ''}`}
       style={{ '--artifact-width': `${artifactWidth}px`, '--sidebar-width': `${sidebarWidth}px` }}
     >
+      {/* Tapping the conversation behind an open drawer closes it, which is
+          what every drawer on a phone does. A button so it is reachable by
+          keyboard and announced, rather than a bare div. */}
+      {isNarrow && isSidebarOpen && (
+        <button
+          type="button"
+          className="sidebar-backdrop"
+          aria-label={t('sidebar.close')}
+          onClick={() => setIsSidebarOpen(false)}
+        />
+      )}
+
       {/* Sidebar */}
       <div className={`claude-sidebar ${isSidebarOpen ? 'open' : 'closed'}`}>
         <div className="sidebar-header">
@@ -4441,8 +4486,8 @@ Rules
             direction={1}
             getSize={() => sidebarWidth}
             setSize={setSidebarWidth}
-            min={200}
-            max={() => Math.min(480, window.innerWidth - 360)}
+            min={240}
+            max={() => Math.min(560, window.innerWidth - 320)}
             onReset={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
           />
         )}
@@ -4496,16 +4541,16 @@ Rules
             </div>
 
             <button
-              className={`icon-btn bordered ${starredOnly ? 'toggled' : ''}`}
+              className={`icon-btn bordered header-secondary ${starredOnly ? 'toggled' : ''}`}
               title={starredOnly ? t('header.showAll') : t('header.starredOnly')}
               onClick={() => setStarredOnly(v => !v)}
             >
               <Star size={16} fill={starredOnly ? 'currentColor' : 'none'} />
             </button>
 
-            <div className="outline-wrap">
+            <div className="outline-wrap header-secondary">
               <button
-                className={`icon-btn bordered ${showOutline ? 'toggled' : ''}`}
+                className={`icon-btn bordered header-secondary ${showOutline ? 'toggled' : ''}`}
                 title={t('header.outline')}
                 onClick={() => setShowOutline(v => !v)}
                 disabled={chatOutline.length === 0}
@@ -4529,7 +4574,7 @@ Rules
             </div>
 
             <button
-              className={`icon-btn bordered ${showSystemMonitor ? 'toggled' : ''}`}
+              className={`icon-btn bordered header-secondary ${showSystemMonitor ? 'toggled' : ''}`}
               title={t('sysmon.title')}
               onClick={() => setShowSystemMonitor(v => !v)}
             >
@@ -4537,7 +4582,7 @@ Rules
             </button>
 
             <button
-              className="icon-btn bordered"
+              className="icon-btn bordered header-secondary"
               title={t('header.chatInfo')}
               onClick={() => setShowChatInfo(true)}
             >
@@ -4568,7 +4613,7 @@ Rules
             </div>
 
             {!modelSupportsVision(selectedModel) && (
-            <div className="model-selector-container" ref={visionDropdownRef}>
+            <div className="model-selector-container header-secondary" ref={visionDropdownRef}>
               <button className="dropdown-trigger" onClick={() => setIsVisionDropdownOpen(!isVisionDropdownOpen)} style={{ backgroundColor: 'transparent', border: '1px solid var(--border-color)' }}>
                 <span className="model-name" style={{ color: 'var(--text-muted)' }}>👁️ Vision: {selectedVisionModel || 'Auto'}</span>
                 <ChevronDown size={14} color="var(--text-muted)" />
@@ -5132,7 +5177,9 @@ Rules
               <textarea
                 ref={textareaRef}
                 className="chat-input"
-                placeholder={t('composer.placeholder', { model: selectedModel || 'Ollama' })}
+                placeholder={isNarrow
+                  ? t('composer.placeholderShort')
+                  : t('composer.placeholder', { model: selectedModel || 'Ollama' })}
                 value={input}
                 onChange={handleInputResize}
                 onKeyDown={handleKeyDown}

@@ -28,7 +28,8 @@
     "test:accounts": "node scripts/accounts.test.mjs",
     "check:remote": "node server/check-remote.mjs",
     "test:authlink": "node scripts/authlink.test.mjs",
-    "test:isolation": "node scripts/isolation.test.mjs"
+    "test:isolation": "node scripts/isolation.test.mjs",
+    "check:layout": "node scripts/measure-layout.mjs"
   },
   "dependencies": {
     "fflate": "^0.8.3",
