@@ -3723,6 +3723,18 @@ Rules
 
   // ---- Derived UI state for the newer features ----
 
+  // Google refuses to register an origin whose host is a bare IP address —
+  // it insists on a public top-level domain. nip.io is public DNS that resolves
+  // any address in the name straight back to itself, so this is the same
+  // machine reached by a name the console will accept.
+  const registerableOrigin = (() => {
+    const { protocol, hostname, port } = window.location;
+    const isBareIp = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname);
+    const host = isBareIp ? `${hostname}.nip.io` : hostname;
+    return `${protocol}//${host}${port ? `:${port}` : ''}`;
+  })();
+
+
   // Highlights whichever preset the sliders currently sit on, so moving one
   // control visibly takes the chat off that preset.
   const activePreset = matchPreset([...BUILTIN_PRESETS, ...presets], currentSamplingValues());
@@ -5853,16 +5865,16 @@ Rules
                       </li>
                       <li className="setup-origin">
                         <span>{t('auth.copyOrigin')}:</span>
-                        <code>{window.location.origin}</code>
+                        <code>{registerableOrigin}</code>
                         <button
                           className="icon-btn bordered"
-                          onClick={() => { copyToClipboard(window.location.origin); toast(t('common.copied'), 'success', 1500); }}
+                          onClick={() => { copyToClipboard(registerableOrigin); toast(t('common.copied'), 'success', 1500); }}
                         >
                           <Copy size={13} />
                         </button>
                       </li>
                       <li>
-                        <code>.env</code>: <code>VITE_GOOGLE_CLIENT_ID</code> / <code>VITE_KAKAO_JS_KEY</code>
+                        <code>.env</code>: <code>VITE_GOOGLE_CLIENT_ID</code> / <code>VITE_KAKAO_REST_KEY</code>
                       </li>
                     </ol>
 
@@ -5911,39 +5923,6 @@ Rules
                   <div className="settings-group">
                     <div className="auth-note" style={{ margin: 0 }}>{t('auth.localNote')}</div>
                   </div>
-                </>
-              )}
-
-              {settingsTab === 'data' && (
-                <>
-                  <div className="settings-actions">
-                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                      <button onClick={exportSessions} style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', color: 'var(--text-primary)' }}>
-                        {t('data.exportJson')}
-                      </button>
-                      <label style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', textAlign: 'center', color: 'var(--text-primary)' }}>
-                        {t('data.importJson')}
-                        <input type="file" accept=".json" onChange={importSessions} style={{ display: 'none' }} />
-                      </label>
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-                      <button onClick={() => exportSessionMarkdown()} style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', color: 'var(--text-primary)' }}>
-                        {t('data.exportThisMd')}
-                      </button>
-                      <button onClick={exportAllMarkdown} style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', color: 'var(--text-primary)' }}>
-                        {t('data.exportAllMd')}
-                      </button>
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-                      <button onClick={() => exportSessionHtml()} style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', color: 'var(--text-primary)' }}>
-                        {t('data.exportThisHtml')}
-                      </button>
-                    </div>
-                    <button className="btn" style={{ backgroundColor: '#EF4444', color: 'white', width: '100%', padding: '0.5rem', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }} onClick={clearAllChats}>
-                      {t('data.clearAll')}
-                    </button>
-                  </div>
-
                   <div className="settings-group">
                     <label>{t('sync.title')}</label>
                     <div className="setting-help" style={{ marginBottom: '0.6rem' }}>{t('sync.help')}</div>
@@ -6042,6 +6021,39 @@ Rules
                         </div>
                       </>
                     )}
+                  </div>
+
+                </>
+              )}
+
+              {settingsTab === 'data' && (
+                <>
+                  <div className="settings-actions">
+                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+                      <button onClick={exportSessions} style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', color: 'var(--text-primary)' }}>
+                        {t('data.exportJson')}
+                      </button>
+                      <label style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', textAlign: 'center', color: 'var(--text-primary)' }}>
+                        {t('data.importJson')}
+                        <input type="file" accept=".json" onChange={importSessions} style={{ display: 'none' }} />
+                      </label>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+                      <button onClick={() => exportSessionMarkdown()} style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', color: 'var(--text-primary)' }}>
+                        {t('data.exportThisMd')}
+                      </button>
+                      <button onClick={exportAllMarkdown} style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', color: 'var(--text-primary)' }}>
+                        {t('data.exportAllMd')}
+                      </button>
+                    </div>
+                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
+                      <button onClick={() => exportSessionHtml()} style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', color: 'var(--text-primary)' }}>
+                        {t('data.exportThisHtml')}
+                      </button>
+                    </div>
+                    <button className="btn" style={{ backgroundColor: '#EF4444', color: 'white', width: '100%', padding: '0.5rem', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }} onClick={clearAllChats}>
+                      {t('data.clearAll')}
+                    </button>
                   </div>
 
                   <div className="settings-group">
