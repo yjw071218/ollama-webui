@@ -52,6 +52,7 @@ const load = async (entry, out) => {
 globalThis.__localforage = { ...instance('default'), createInstance: ({ storeName }) => instance(storeName) };
 const B = await load('../src/backup.js', '../node_modules/.iso-backup.mjs');
 const S = await load('../src/settingsScope.js', '../node_modules/.iso-settings.mjs');
+const P = await load('../src/profileScope.js', '../node_modules/.iso-scope.mjs');
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = '') => {
@@ -160,6 +161,45 @@ eq('a machine-local path does not travel with a profile',
   localStorage.getItem('ttsRefAudio'), 'C:/mine.wav');
 
 eq('switching to the same profile does nothing', S.switchScope('srv-alice', 'srv-alice'), false);
+
+
+// ------------------------------------------------ which profile is in view
+// The bug this pins down: signing out left the server session attached, so the
+// scope still named the account. The guest was then reading, writing and
+// DELETING the account's chats, and the sync uploaded those deletions -- so
+// signing back in showed nothing.
+const acct = { id: 'abc-123' };
+const localUser = { id: 'local-9' };
+
+eq('an account wins', P.deriveScope(acct, localUser), 'srv-abc-123');
+eq('the local profile is next', P.deriveScope(null, localUser), 'local-9');
+eq('neither is the guest', P.deriveScope(null, null), '');
+eq('an account with no id is not an account', P.deriveScope({}, localUser), 'local-9');
+
+const signedIn = P.deriveScope(acct, localUser);
+const afterSignOut = P.deriveScope(null, null);
+check('signing out leaves the account scope', P.scopeChanged(signedIn, afterSignOut));
+eq('and lands on the guest', afterSignOut, '');
+
+// The regression itself: keeping the session is what produced the data loss.
+eq('a kept session would still name the account', P.deriveScope(acct, null), 'srv-abc-123');
+check('which is exactly what must not survive a sign-out',
+  P.deriveScope(acct, null) !== afterSignOut);
+
+check('the guest may never keep a server session', !P.mayKeepServerSession(acct, null));
+check('nor may a sign-out with no account', !P.mayKeepServerSession(null, null));
+
+// The stores really are separate buckets, so the two can never overlap.
+reset();
+storeFor('default').set('ollama-sessions', [{ id: 1, title: 'Guest', updatedAt: 1, messages: [] }]);
+storeFor('default').set('ollama-sessions:srv-abc-123', [{ id: 2, title: 'Account', updatedAt: 2, messages: [] }]);
+
+const guestPayload = await B.collectBackup({ scope: afterSignOut, includeAccounts: false });
+const acctPayload = await B.collectBackup({ scope: signedIn, includeAccounts: false });
+eq('the guest payload holds only guest chats',
+  Object.keys(guestPayload.sessions).join(), 'ollama-sessions');
+eq('the account payload holds only account chats',
+  Object.keys(acctPayload.sessions).join(), 'ollama-sessions:srv-abc-123');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

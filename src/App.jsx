@@ -37,6 +37,7 @@ import { decodeByteFallback } from './byteFallback.js';
 import { relativeTime, absoluteTime } from './relativeTime.js';
 import { collectBackup, restoreBackup, describeBackup, isBackup, settingsFingerprint } from './backup.js';
 import { switchScope, saveSnapshot } from './settingsScope.js';
+import { deriveScope } from './profileScope.js';
 import {
   fetchServerConfig, serverMe, serverRegister, serverLogin, serverLogout,
   linkGoogleSession, pushState, pullState, createSyncScheduler, accountStamp,
@@ -662,7 +663,7 @@ function App() {
    * otherwise, which is what this has always been and still works fine when
    * there is no server.
    */
-  const profileScope = syncUser ? `srv-${syncUser.id}` : (currentUser?.id || '');
+  const profileScope = deriveScope(syncUser, currentUser);
   const localScope = currentUser?.id || '';
   const storageKey = sessionStorageKeyFor(profileScope);
 
@@ -1878,12 +1879,34 @@ function App() {
     }
   };
 
-  const handleGuest = () => {
+  /**
+   * Detach the server account.
+   *
+   * Everything downstream keys off profileScope, so a session that outlives the
+   * sign-in does not merely look wrong — the guest reads and writes the
+   * account's chats, and the sync uploads whatever they do to them. The pending
+   * upload is cancelled first so nothing in flight is attributed to the account
+   * after it has been left.
+   */
+  const releaseServerAccount = async () => {
+    syncRef.current?.cancel();
+    syncRef.current = null;
+    setSyncUser(null);
+    setSyncInfo(null);
+    syncStampRef.current = 0;
+    try { await serverLogout(); } catch (e) { /* the local state is what matters */ }
+  };
+
+  const handleGuest = async () => {
+    // Reached from the auth screen, where there may be no account attached, and
+    // from "continue as guest", where there may be. Releasing is safe either way.
+    if (syncUser) await releaseServerAccount();
     localStorage.setItem('authIntroSeen', 'true');
     setShowAuthScreen(false);
   };
 
-  const handleSignOut = () => {
+  const handleSignOut = async () => {
+    await releaseServerAccount();
     signOutSocial();
     saveSession(null);
     setCurrentUser(null);
@@ -1895,6 +1918,7 @@ function App() {
 
   const handleDeleteProfile = async () => {
     if (!currentUser) return;
+    await releaseServerAccount();
     if (!window.confirm(`${t('auth.deleteAccount')}\n\n${t('auth.deleteWarning')}`)) return;
     const victim = currentUser;
     await deleteUser(victim.id);
@@ -6725,7 +6749,13 @@ Rules
             onClose={() => setShowProfileDialog(false)}
             onUpdated={(updated) => { setCurrentUser(updated); toast(t('profile.saved'), 'success', 2000); }}
             onSignOut={() => { setShowProfileDialog(false); handleSignOut(); }}
-            onSwitch={() => { setShowProfileDialog(false); setShowAuthScreen(true); }}
+            onSwitch={() => {
+              // The next sign-in may be a different person; the account
+              // attached to this one must not carry over to them.
+              releaseServerAccount();
+              setShowProfileDialog(false);
+              setShowAuthScreen(true);
+            }}
             onDelete={() => { setShowProfileDialog(false); handleDeleteProfile(); }}
           />
         )}
