@@ -476,20 +476,27 @@ export const kakaoRedirectUri = () => `${window.location.origin}/kakao/callback`
  * server's /kakao/exchange middleware trades it for a profile.
  */
 export const signInWithKakao = async () => {
-  const { kakaoRestKey } = socialConfig();
-  if (!kakaoRestKey) return { error: 'auth.notConfigured' };
-
   const redirectUri = kakaoRedirectUri();
-  const state = randomId();
 
-  const authorizeUrl = 'https://kauth.kakao.com/oauth/authorize?' + new URLSearchParams({
-    client_id: kakaoRestKey,
-    redirect_uri: redirectUri,
-    response_type: 'code',
-    state,
-    // No `scope`: Kakao then uses the consent items configured on the app,
-    // instead of failing when a requested scope was never enabled.
-  }).toString();
+  // The state comes from the server, which is the only party that can
+  // meaningfully verify it later: a value this page invents and this page
+  // checks proves nothing about a forged callback. The server also builds the
+  // authorize URL, so the REST key stays where it is configured.
+  //
+  // No `scope` is requested, so Kakao uses the consent items configured on the
+  // app rather than failing on one that was never enabled.
+  let start;
+  try {
+    const res = await fetch(`/kakao/start?redirect_uri=${encodeURIComponent(redirectUri)}`, {
+      credentials: 'same-origin',
+    });
+    start = await res.json();
+  } catch (e) {
+    return { error: 'auth.kakaoFailed', detail: e.message };
+  }
+  if (!start?.success) return { error: 'auth.notConfigured', detail: start?.error };
+
+  const { state, authorizeUrl } = start;
 
   const popup = window.open(authorizeUrl, 'kakao-login', 'width=480,height=720,menubar=no,toolbar=no');
   if (!popup) return { error: 'auth.popupBlocked' };
@@ -536,7 +543,9 @@ export const signInWithKakao = async () => {
     const res = await fetch('/kakao/exchange', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ code: relay.code, restKey: kakaoRestKey, redirectUri }),
+      // The state goes back for the server to check and spend; the REST key
+      // does not, because the server is where it lives.
+      body: JSON.stringify({ code: relay.code, state, redirectUri }),
     });
     data = await res.json();
   } catch (err) {
@@ -765,4 +774,45 @@ export const signInWithPasskey = async () => {
   if (!valid) return { error: 'auth.passkeyFailed' };
 
   return { user: publicUser(user) };
+};
+
+/**
+ * End the Kakao session as well as this app's.
+ *
+ * Signing out of an app that left the provider's session standing is a
+ * half-measure: the next sign-in silently reuses it, and on a shared computer
+ * that is someone else's account still being logged in.
+ */
+export const kakaoLogout = async () => {
+  try {
+    const res = await fetch('/kakao/logout', { method: 'POST', credentials: 'same-origin' });
+    return await res.json();
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+};
+
+/**
+ * Sever the connection between this app and the Kakao account.
+ *
+ * Distinct from logging out, and what 연결 끊기 means: the app's permission is
+ * withdrawn and the next sign-in asks for consent again.
+ */
+export const kakaoUnlink = async () => {
+  try {
+    const res = await fetch('/kakao/unlink', { method: 'POST', credentials: 'same-origin' });
+    return await res.json();
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+};
+
+/** Whether this account still holds a live Kakao connection. */
+export const kakaoStatus = async () => {
+  try {
+    const res = await fetch('/kakao/status', { credentials: 'same-origin' });
+    return await res.json();
+  } catch (e) {
+    return { success: false, connected: false };
+  }
 };

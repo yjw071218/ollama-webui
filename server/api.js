@@ -19,6 +19,11 @@ import {
   userForSession, destroySession, listUsers, findOrCreateSocialUser,
 } from './accounts.js';
 import { verifyGoogleIdToken } from './social.js';
+import {
+  issueState, consumeState, authorizeUrl, exchangeCode, fetchProfile,
+  validAccessToken, readTokens, writeTokens, clearTokens,
+  logout as kakaoLogout, unlink as kakaoUnlink,
+} from './kakao.js';
 import { readState, writeState, stateInfo, MAX_STATE_BYTES } from './state.js';
 
 
@@ -856,109 +861,135 @@ export const createApiRoutes = (env = {}, options = {}) => {
 </body></html>`);
     });
 
-    route('/kakao/exchange',(req, res) => {
-      let body = '';
-      req.on('data', chunk => { body += chunk.toString(); });
-      req.on('end', async () => {
-        const fail = (status, error, detail) => {
-          res.statusCode = status;
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({ success: false, error, detail }));
-        };
+    // ---- Kakao Login ----
+    //
+    // The documented flow: authorize, exchange, profile, logout, unlink. The
+    // exchange and everything after it happen here because they need the REST
+    // key and the client secret, and because `state` is only worth checking
+    // somewhere the browser cannot reach.
 
-        try {
-          const { code, restKey, redirectUri } = JSON.parse(body || '{}');
-          if (!code || !restKey || !redirectUri) return fail(400, 'Missing code, restKey or redirectUri');
+    const kakaoCreds = () => ({
+      restKey: env.VITE_KAKAO_REST_KEY || env.KAKAO_REST_KEY || '',
+      clientSecret: env.KAKAO_CLIENT_SECRET || '',
+    });
 
-          // Kakao enables Client Secret by default on new REST keys. When it
-          // is on, the token request must carry it — otherwise the exchange
-          // fails even with a perfectly valid code. It stays server-side:
-          // KAKAO_CLIENT_SECRET has no VITE_ prefix, so it never reaches the
-          // browser bundle.
-          const params = {
-            grant_type: 'authorization_code',
-            client_id: restKey,
-            redirect_uri: redirectUri,
-            code,
-          };
-          if (env.KAKAO_CLIENT_SECRET) params.client_secret = env.KAKAO_CLIENT_SECRET;
+    // Step 1. The browser asks for a state rather than inventing one, so the
+    // value it later returns is one this server actually issued.
+    route('/kakao/start', (req, res) => {
+      const { restKey } = kakaoCreds();
+      if (!restKey) {
+        return sendJson(res, { success: false, error: 'Kakao is not configured on this server.' }, 501);
+      }
+      const url = new URL(req.url, 'http://localhost');
+      const redirectUri = url.searchParams.get('redirect_uri') || '';
+      const scope = url.searchParams.get('scope') || '';
+      const state = issueState();
+      sendJson(res, {
+        success: true,
+        state,
+        authorizeUrl: authorizeUrl({ restKey, redirectUri, state, scope }),
+      });
+    });
 
-          const tokenRes = await fetch('https://kauth.kakao.com/oauth/token', {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/x-www-form-urlencoded;charset=utf-8' },
-            body: new URLSearchParams(params).toString(),
-          });
-          const token = await tokenRes.json();
-          if (!tokenRes.ok || !token.access_token) {
-            const raw = JSON.stringify(token);
-            let hint = '';
-            if (!env.KAKAO_CLIENT_SECRET && /client_secret|invalid_client|KOE010/i.test(raw)) {
-              hint = ' — Client Secret is enabled on this app. Either turn it off in the Kakao console '
-                + '(카카오 로그인 → 클라이언트 시크릿 → 비활성화) or set KAKAO_CLIENT_SECRET in .env and restart the dev server.';
-            } else if (env.KAKAO_CLIENT_SECRET && /client_secret|invalid_client|KOE010/i.test(raw)) {
-              hint = ' — KAKAO_CLIENT_SECRET is set but Kakao rejected it. Check it matches the current code '
-                + '(it changes when you press 코드 재발급), and restart the dev server after editing .env.';
-            } else if (/redirect|KOE006|KOE320/i.test(raw)) {
-              hint = ` — the redirect_uri sent (${redirectUri}) must be registered verbatim under 카카오 로그인 → Redirect URI.`;
-            }
-            const code = token.error_code ? `${token.error_code}: ` : '';
-            return fail(400, code + (token.error_description || token.error || 'Token exchange failed') + hint, token);
-          }
+    // Steps 2 and 3, plus the session this app runs on.
+    route('/kakao/exchange', async (req, res) => {
+      const fail = (status, error, detail) =>
+        sendJson(res, { success: false, error, detail }, status);
 
-          const meRes = await fetch('https://kapi.kakao.com/v2/user/me', {
-            headers: { Authorization: `Bearer ${token.access_token}` },
-          });
-          const me = await meRes.json();
-          if (!meRes.ok || !me.id) {
-            const code = me.code !== undefined ? `code ${me.code}: ` : '';
-            const hint = /-402|insufficient scope/i.test(JSON.stringify(me))
-              ? ' — enable the consent item in 카카오 로그인 → 동의항목 (닉네임 at minimum).'
-              : '';
-            return fail(400, code + (me.msg || 'Profile request failed') + hint, me);
-          }
+      try {
+        const { code, state, redirectUri } = JSON.parse(await readBody(req, 64 * 1024) || '{}');
+        if (!code || !redirectUri) return fail(400, 'Missing code or redirectUri');
 
-          const account = me.kakao_account || {};
-          const profile = account.profile || {};
-          const identity = {
-            provider: 'kakao',
-            providerId: String(me.id),
-            email: account.email || '',
-            // Kakao states this separately, and only a verified address may be
-            // used to adopt an existing account.
-            emailVerified: account.is_email_verified === true,
-            name: profile.nickname || me.properties?.nickname || 'Kakao user',
-            avatar: profile.profile_image_url || me.properties?.profile_image || '',
-          };
-
-          // The exchange above already proved this identity against Kakao, so
-          // the same sign-in can carry the server session. Without this a Kakao
-          // user would still have to find a second account in the settings
-          // before anything followed them to another device.
-          let synced = null;
-          try {
-            const user = findOrCreateSocialUser(identity);
-            res.setHeader('Set-Cookie',
-              `webui_session=${createSession(user.id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 86400}`);
-            synced = user;
-          } catch (e) {
-            // Sign-in still succeeds without sync; it just stays device-local.
-            synced = null;
-          }
-
-          res.setHeader('Content-Type', 'application/json');
-          res.end(JSON.stringify({
-            success: true,
-            profile: {
-              id: identity.providerId,
-              email: identity.email,
-              name: identity.name,
-              avatar: identity.avatar,
-            },
-            syncAccount: synced,
-          }));
-        } catch (e) {
-          fail(500, e.message);
+        // Checked here, not in the page that received it.
+        if (!consumeState(state)) {
+          return fail(400, 'That sign-in could not be verified. Start it again.',
+            'state missing, expired, or already used');
         }
+
+        const { restKey, clientSecret } = kakaoCreds();
+        if (!restKey) return fail(501, 'Kakao is not configured on this server.');
+
+        let tokens;
+        try {
+          tokens = await exchangeCode({ code, restKey, redirectUri, clientSecret });
+        } catch (e) {
+          const raw = e.message || '';
+          let hint = '';
+          if (!clientSecret && /client_secret|invalid_client|KOE010/i.test(raw)) {
+            hint = ' — Client Secret is enabled on this app. Turn it off in the Kakao console '
+              + '(카카오 로그인 → 클라이언트 시크릿) or set KAKAO_CLIENT_SECRET in .env and restart.';
+          } else if (clientSecret && /client_secret|invalid_client|KOE010/i.test(raw)) {
+            hint = ' — KAKAO_CLIENT_SECRET is set but Kakao rejected it. It changes when you press 코드 재발급.';
+          } else if (/redirect|KOE006|KOE320/i.test(raw)) {
+            hint = ` — the redirect_uri sent (${redirectUri}) must be registered verbatim under 카카오 로그인 → Redirect URI.`;
+          }
+          return fail(400, raw + hint);
+        }
+
+        const identity = await fetchProfile(tokens.accessToken);
+        const user = findOrCreateSocialUser(identity);
+
+        // Kept so the connection can be maintained, ended, or severed later.
+        // They stay on the server; the browser gets a session cookie.
+        writeTokens(user.id, tokens);
+        setSessionCookie(res, createSession(user.id));
+
+        sendJson(res, {
+          success: true,
+          profile: {
+            id: identity.providerId,
+            email: identity.email,
+            name: identity.name,
+            avatar: identity.avatar,
+          },
+          syncAccount: user,
+        });
+      } catch (e) {
+        fail(500, e.message);
+      }
+    });
+
+    // Step 4. Signing out of this app should not leave the Kakao session up.
+    route('/kakao/logout', async (req, res) => {
+      const user = currentUser(req);
+      if (!user) return sendJson(res, { success: false, error: 'Not signed in.' }, 401);
+      try {
+        const token = await validAccessToken(user.id, kakaoCreds());
+        if (token) await kakaoLogout(token);
+        clearTokens(user.id);
+        sendJson(res, { success: true });
+      } catch (e) {
+        // The local session still ends; the Kakao one may already have.
+        clearTokens(user.id);
+        sendJson(res, { success: true, warning: e.message });
+      }
+    });
+
+    // Step 5. What "연결 끊기" means, and what deleting an account should do.
+    route('/kakao/unlink', async (req, res) => {
+      const user = currentUser(req);
+      if (!user) return sendJson(res, { success: false, error: 'Not signed in.' }, 401);
+      try {
+        const token = await validAccessToken(user.id, kakaoCreds());
+        if (!token) return sendJson(res, { success: false, error: 'This account has no Kakao connection.' }, 400);
+        await kakaoUnlink(token);
+        clearTokens(user.id);
+        sendJson(res, { success: true });
+      } catch (e) {
+        sendJson(res, { success: false, error: e.message }, 400);
+      }
+    });
+
+    // Whether this account still has a live Kakao connection.
+    route('/kakao/status', (req, res) => {
+      const user = currentUser(req);
+      const tokens = user ? readTokens(user.id) : null;
+      sendJson(res, {
+        success: true,
+        connected: !!tokens?.accessToken,
+        scope: tokens?.scope || '',
+        expiresAt: tokens?.accessTokenExpiresAt || null,
+        refreshable: !!tokens?.refreshToken,
       });
     });
 

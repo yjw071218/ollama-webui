@@ -57,6 +57,8 @@ import {
   sessionStorageKeyFor,
   setServerSocialConfig,
   renderGoogleButton,
+  kakaoLogout,
+  kakaoUnlink,
   signOutSocial,
   socialDefaults,
   kakaoRedirectUri,
@@ -1890,6 +1892,14 @@ function App() {
   const releaseServerAccount = async () => {
     syncRef.current?.cancel();
     syncRef.current = null;
+
+    // End the Kakao session too, while the server session that authorises the
+    // call still exists. Leaving it up means the next sign-in silently reuses
+    // it — on a shared computer, as whoever was here before.
+    if (syncUser?.provider === 'kakao') {
+      try { await kakaoLogout(); } catch (e) { /* the local sign-out still stands */ }
+    }
+
     setSyncUser(null);
     setSyncInfo(null);
     syncStampRef.current = 0;
@@ -1918,6 +1928,11 @@ function App() {
 
   const handleDeleteProfile = async () => {
     if (!currentUser) return;
+    // Before the session goes: deleting an account should withdraw the app's
+    // permission at the provider, not merely forget it here.
+    if (syncUser?.provider === 'kakao') {
+      try { await kakaoUnlink(); } catch (e) { /* deletion proceeds regardless */ }
+    }
     await releaseServerAccount();
     if (!window.confirm(`${t('auth.deleteAccount')}\n\n${t('auth.deleteWarning')}`)) return;
     const victim = currentUser;

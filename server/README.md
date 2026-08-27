@@ -169,6 +169,36 @@ If your Kakao app has **Client Secret** switched on, put it in `.env` as
 `KAKAO_CLIENT_SECRET` — without it the exchange fails with `KOE010`.
 `/api/config` reports `kakaoSecretConfigured` so you can check.
 
+#### The Kakao flow, and where each step runs
+
+Following [Kakao's documentation](https://developers.kakao.com/docs/ko/tutorial/login):
+
+| Step | Endpoint | Where |
+| --- | --- | --- |
+| 1. Consent | `kauth.kakao.com/oauth/authorize` | Browser, at a URL the server builds |
+| 2. Token | `kauth.kakao.com/oauth/token` | **Server** — needs the REST key and secret |
+| 3. Profile | `kapi.kakao.com/v2/user/me` | Server |
+| 4. Logout | `kapi.kakao.com/v1/user/logout` | Server, on sign-out |
+| 5. Unlink | `kapi.kakao.com/v1/user/unlink` | Server, on deleting a profile |
+
+Three things follow from that split:
+
+**`state` is issued and verified by the server.** It exists to stop a forged
+callback being accepted, so a value the browser mints and the browser checks
+proves nothing. `/kakao/start` issues one; `/kakao/exchange` spends it, once —
+a replayed callback is refused.
+
+**Tokens stay on the server**, under `server/data/kakao/` (gitignored), and are
+refreshed when they are close to expiring rather than after a call has already
+failed. Kakao's access token lasts about six hours; the refresh token is what
+keeps a connection alive, and a refresh response omits it unless it is being
+rotated, so the old one is kept.
+
+**Logging out ends the Kakao session too.** Leaving it standing means the next
+sign-in silently reuses it, which on a shared computer is someone else still
+being signed in. Deleting a profile calls unlink, which is what 연결 끊기 means:
+the app's permission is withdrawn and the next sign-in asks for consent again.
+
 ## 2. Open the firewall
 
 Windows blocks inbound connections to Node by default — this is why a server
