@@ -36,6 +36,7 @@ import { sessionToHtml } from './htmlExport.js';
 import { decodeByteFallback } from './byteFallback.js';
 import { relativeTime, absoluteTime } from './relativeTime.js';
 import { collectBackup, restoreBackup, describeBackup, isBackup, settingsFingerprint } from './backup.js';
+import { switchScope, saveSnapshot } from './settingsScope.js';
 import {
   fetchServerConfig, serverMe, serverRegister, serverLogin, serverLogout,
   linkGoogleSession, pushState, pullState, createSyncScheduler, accountStamp,
@@ -661,6 +662,39 @@ function App() {
   const profileScope = syncUser ? `srv-${syncUser.id}` : (currentUser?.id || '');
   const localScope = currentUser?.id || '';
   const storageKey = sessionStorageKeyFor(profileScope);
+
+  // Read from callbacks that outlive the render they were created in.
+  const profileScopeRef = useRef(profileScope);
+  profileScopeRef.current = profileScope;
+
+  // Settings live under bare localStorage keys shared by every profile, so they
+  // are swapped when the profile changes rather than left to leak between them.
+  // The reload is what makes it visible: the values were read into React state
+  // at mount.
+  const settingsScopeRef = useRef(null);
+  useEffect(() => {
+    if (!authReady) return;
+    const previous = settingsScopeRef.current;
+    settingsScopeRef.current = profileScope;
+
+    if (previous === null) { saveSnapshot(profileScope); return; }
+    if (previous === profileScope) return;
+    if (switchScope(previous, profileScope)) window.location.reload();
+  }, [profileScope, authReady]);
+
+  // Keep the active profile's snapshot current, so a switch takes the settings
+  // as they are now rather than as they were when it was last written.
+  useEffect(() => {
+    if (!authReady) return undefined;
+    const timer = setInterval(() => saveSnapshot(profileScopeRef.current), 5000);
+    const onLeave = () => saveSnapshot(profileScopeRef.current);
+    window.addEventListener('beforeunload', onLeave);
+    return () => {
+      clearInterval(timer);
+      window.removeEventListener('beforeunload', onLeave);
+      onLeave();
+    };
+  }, [authReady]);
   const [showAuthScreen, setShowAuthScreen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showProfileDialog, setShowProfileDialog] = useState(false);
@@ -1796,7 +1830,7 @@ function App() {
       // Merge, so a device that already has chats keeps them. An account with
       // nothing on it is seeded from whatever this device has.
       const pulled = await pullState({ mode: 'merge', primaryKey: storageKey });
-      if (!pulled.summary) { await pushState({ primaryKey: storageKey }); return; }
+      if (!pulled.summary) { await pushState({ primaryKey: storageKey, scope: profileScope }); return; }
       if ((pulled.restored?.chats ?? 0) > 0) {
         toast(t('sync.pulled', { chats: pulled.restored.chats }), 'success', 8000, {
           label: t('backup.reload'),
@@ -2043,6 +2077,7 @@ function App() {
       // Read at push time: the active profile can change without the scheduler
       // being rebuilt.
       primaryKey: () => storageKeyRef.current,
+      scope: () => profileScopeRef.current,
       onResult: (result) => {
         syncStampRef.current = result.savedAt || syncStampRef.current;
         setSyncInfo({ exists: true, bytes: result.bytes, savedAt: result.savedAt });
@@ -2200,7 +2235,7 @@ function App() {
 
       const pulled = await pullState({ mode: 'merge', primaryKey: storageKey });
       if (!pulled.summary) {
-        await pushState({ primaryKey: storageKey });
+        await pushState({ primaryKey: storageKey, scope: profileScope });
         toast(t('sync.seeded'), 'success');
       } else {
         toast(t('sync.pulled', { chats: pulled.restored?.chats ?? 0 }), 'success', 8000, {
@@ -2232,7 +2267,7 @@ function App() {
       // A fresh sign-in should bring the account's setup down, and a first
       // sign-in should send this device's up so the account is not empty.
       const pulled = await pullState({ mode: 'merge', primaryKey: storageKey });
-      if (!pulled.summary) await pushState({ primaryKey: storageKey });
+      if (!pulled.summary) await pushState({ primaryKey: storageKey, scope: profileScope });
       await refreshSyncInfo();
 
       toast(pulled.summary
@@ -2267,7 +2302,7 @@ function App() {
   const syncNow = async () => {
     setSyncBusy('push');
     try {
-      const result = await pushState({ primaryKey: storageKey });
+      const result = await pushState({ primaryKey: storageKey, scope: profileScope });
       syncStampRef.current = result.savedAt || syncStampRef.current;
       setSyncInfo({ exists: true, bytes: result.bytes, savedAt: result.savedAt });
       toast(t('sync.pushed', { chats: result.summary.chats }), 'success');

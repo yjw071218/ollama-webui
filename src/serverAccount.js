@@ -84,8 +84,10 @@ export const serverUpdateProfile = (patch) =>
  * in here. Profile ids are random per browser, so without it the other device
  * cannot tell which of several buckets is the same person's.
  */
-export const pushState = async ({ primaryKey = '' } = {}) => {
-  const state = await collectBackup({ includeAccounts: false, primaryKey });
+export const pushState = async ({ primaryKey = '', scope = '' } = {}) => {
+  // Scoped: the stores are shared between profiles on one machine, so an
+  // unscoped payload would publish the guest's chats and anyone else's.
+  const state = await collectBackup({ includeAccounts: false, primaryKey, scope });
   const result = await json('/api/account/state', { method: 'PUT', body: JSON.stringify(state) });
   if (!result.success) throw new Error(result.error || 'The server refused the upload.');
   return { ...result, summary: describeBackup(state) };
@@ -127,7 +129,7 @@ export const accountStamp = async () => {
  * Settings change on every keystroke in a textarea, and the state blob is the
  * whole history. Coalescing avoids uploading it once per character.
  */
-export const createSyncScheduler = ({ delay = 4000, onResult, onError, primaryKey } = {}) => {
+export const createSyncScheduler = ({ delay = 4000, onResult, onError, primaryKey, scope } = {}) => {
   let timer = null;
   let running = false;
   let queued = false;
@@ -136,7 +138,7 @@ export const createSyncScheduler = ({ delay = 4000, onResult, onError, primaryKe
     if (running) { queued = true; return; }
     running = true;
     try {
-      onResult?.(await pushState({ primaryKey: primaryKey?.() || '' }));
+      onResult?.(await pushState({ primaryKey: primaryKey?.() || '', scope: scope?.() || '' }));
     } catch (e) {
       onError?.(e);
     } finally {

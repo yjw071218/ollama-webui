@@ -28,27 +28,61 @@ const SESSION_PREFIX = 'ollama-sessions';
 // Carrying them to another device would point it at the wrong paths.
 const MACHINE_LOCAL = new Set(['ttsRefAudio']);
 
-const dumpStore = async (store) => {
+// `onlyKey` keeps one profile's entry and drops every other profile's, which is
+// what makes a sync payload contain one person's data.
+const dumpStore = async (store, onlyKey = null) => {
   const out = {};
-  await store.iterate((value, key) => { out[key] = value; });
+  await store.iterate((value, key) => {
+    if (onlyKey && key !== onlyKey) return;
+    out[key] = value;
+  });
   return out;
 };
 
-/** Everything, ready to be written to a file. */
+// chatFolders:<id> and samplingPresets:<id> — the suffixed form belongs to a
+// specific profile. The bare form is the guest's.
+const OTHER_PROFILE_KEY = /^(chatFolders|samplingPresets)(:|$)/;
+
+// Keys that belong to one profile, in the stores that are shared between them.
+const scopedKeys = (scope) => ({
+  sessions: scope ? `${SESSION_PREFIX}:${scope}` : SESSION_PREFIX,
+  knowledge: `knowledge:${scope || 'guest'}`,
+  memory: `memory:${scope || 'guest'}`,
+  folders: scope ? `chatFolders:${scope}` : 'chatFolders',
+  presets: scope ? `samplingPresets:${scope}` : 'samplingPresets',
+});
+
+/**
+ * Everything, ready to be written to a file.
+ *
+ * `scope` limits it to one profile. Sync always passes one: the stores are
+ * shared between profiles on a machine, so gathering them wholesale would
+ * publish the guest's chats and anyone else's alongside the account's, and put
+ * them on every other device. A file backup with no scope still takes
+ * everything, which is what "back up this browser" should mean.
+ */
 export const collectBackup = async ({
   includeAccounts = true, includeMachineSettings = false, primaryKey = '',
+  scope = null,
 } = {}) => {
+  const only = scope === null ? null : scopedKeys(scope);
   const settings = {};
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
     if (!key) continue;
     if (!includeMachineSettings && MACHINE_LOCAL.has(key)) continue;
+    // Another profile's folders and presets live in localStorage too, under
+    // their own suffixed keys. Only this profile's belong in this payload.
+    if (only && OTHER_PROFILE_KEY.test(key)) {
+      if (key !== only.folders && key !== only.presets) continue;
+    }
     settings[key] = localStorage.getItem(key);
   }
 
   // Chats sit in the default store under one key per profile.
   const sessions = {};
   await localforage.iterate((value, key) => {
+    if (only) { if (key === only.sessions) sessions[key] = value; return; }
     if (key === SESSION_PREFIX || key.startsWith(`${SESSION_PREFIX}:`)) sessions[key] = value;
   });
 
@@ -64,8 +98,8 @@ export const collectBackup = async ({
     primaryKey: primaryKey || null,
     settings,
     sessions,
-    knowledge: await dumpStore(named('knowledge')),
-    memory: await dumpStore(named('memory')),
+    knowledge: await dumpStore(named('knowledge'), only && only.knowledge),
+    memory: await dumpStore(named('memory'), only && only.memory),
   };
 
   // Accounts hold password hashes and passkey public keys. Useful when moving
