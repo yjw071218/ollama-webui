@@ -631,6 +631,31 @@ function App() {
   // --- Accounts (device-local profiles) ---
   const [currentUser, setCurrentUser] = useState(null);
   const [authReady, setAuthReady] = useState(false);
+
+  // Chats live under a per-profile key, so switching profiles swaps the
+  // whole history. The guest keeps the original key, which also means an
+  // existing install keeps its chats.
+  // --- The server's own account, and the state that follows it ---
+  // Browser storage is per origin, so a device-local account cannot carry
+  // settings to a phone. This one can: the server knows who signed in.
+  const [syncUser, setSyncUser] = useState(null);
+  const [syncInfo, setSyncInfo] = useState(null);
+  const [syncBusy, setSyncBusy] = useState('');
+  const [syncForm, setSyncForm] = useState({ mode: 'login', name: '', email: '', password: '' });
+  const [serverConfig, setServerConfig] = useState(null);
+  const syncRef = useRef(null);
+
+  /**
+   * Who the stored data belongs to.
+   *
+   * The server account id when signed in to one, because that is the only
+   * identifier that is the same in every browser. The local profile id
+   * otherwise, which is what this has always been and still works fine when
+   * there is no server.
+   */
+  const profileScope = syncUser ? `srv-${syncUser.id}` : (currentUser?.id || '');
+  const localScope = currentUser?.id || '';
+  const storageKey = sessionStorageKeyFor(profileScope);
   const [showAuthScreen, setShowAuthScreen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showProfileDialog, setShowProfileDialog] = useState(false);
@@ -769,8 +794,8 @@ function App() {
   const [newPresetName, setNewPresetName] = useState('');
 
   useEffect(() => { localStorage.setItem('autoContinue', String(autoContinue)); }, [autoContinue]);
-  useEffect(() => { setFolders(loadFolders(currentUser?.id)); }, [currentUser?.id]);
-  useEffect(() => { setPresets(loadPresets(currentUser?.id)); }, [currentUser?.id]);
+  useEffect(() => { setFolders(loadFolders(profileScope)); }, [profileScope]);
+  useEffect(() => { setPresets(loadPresets(profileScope)); }, [profileScope]);
 
   // --- Context compaction ---
   const [autoCompact, setAutoCompact] = useState(() => localStorage.getItem('autoCompact') !== 'false');
@@ -1120,10 +1145,6 @@ function App() {
   const [currentSessionId, setCurrentSessionId] = useState(sessions[0].id);
   const [isStorageLoaded, setIsStorageLoaded] = useState(false);
 
-  // Chats live under a per-profile key, so switching profiles swaps the
-  // whole history. The guest keeps the original key, which also means an
-  // existing install keeps its chats.
-  const storageKey = sessionStorageKeyFor(currentUser?.id);
   // The active chat is remembered per profile. Ids are numbers but localStorage
   // hands back strings, so every comparison goes through String().
   const lastChatKey = `${storageKey}:last`;
@@ -1142,23 +1163,38 @@ function App() {
 
   useEffect(() => {
     let cancelled = false;
-    loadLibrary(currentUser?.id).then(list => { if (!cancelled) setKnowledge(list); });
+    loadLibrary(profileScope).then(list => { if (!cancelled) setKnowledge(list); });
     return () => { cancelled = true; };
-  }, [currentUser?.id]);
+  }, [profileScope]);
 
   useEffect(() => {
     let cancelled = false;
-    loadMemories(currentUser?.id).then(list => { if (!cancelled) setMemories(list); });
+    loadMemories(profileScope).then(list => { if (!cancelled) setMemories(list); });
     return () => { cancelled = true; };
-  }, [currentUser?.id]);
+  }, [profileScope]);
 
   useEffect(() => {
     if (!authReady) return;
     let cancelled = false;
     setIsStorageLoaded(false);
 
-    localforage.getItem(storageKey).then(saved => {
+    localforage.getItem(storageKey).then(async saved => {
       if (cancelled) return;
+
+      // Joining a server account changes the key. The chats this browser
+      // already had sit under the local profile's key, so they are adopted
+      // once rather than stranded — and only when the account key is empty,
+      // so this never overwrites what the account already holds.
+      if ((!saved || saved.length === 0) && profileScope !== localScope) {
+        const carried = await localforage.getItem(sessionStorageKeyFor(localScope));
+        if (!cancelled && Array.isArray(carried) && carried.length > 0) {
+          await localforage.setItem(storageKey, carried);
+          saved = carried;
+          addLog(`Moved ${carried.length} chats onto the account.`, 'info');
+        }
+      }
+      if (cancelled) return;
+
       if (saved && saved.length > 0) {
         setSessions(saved);
         setCurrentSessionId(pickRestoredId(saved));
@@ -1190,7 +1226,7 @@ function App() {
     });
 
     return () => { cancelled = true; };
-  }, [storageKey, authReady]);
+  }, [storageKey, localScope, profileScope, authReady]);
   
   const currentSession = sessions.find(s => s.id === currentSessionId) || sessions[0] || { id: Date.now(), title: 'New Chat', messages: [], createdAt: Date.now(), updatedAt: Date.now(), lastModel: '' };
   const messages = currentSession?.messages || [];
@@ -1813,7 +1849,7 @@ function App() {
         .slice(0, 12000);
 
       const candidates = await extractMemories(transcript, selectedModel);
-      const { memories: next, added } = await addMemories(currentUser?.id, candidates);
+      const { memories: next, added } = await addMemories(profileScope, candidates);
       setMemories(next);
 
       if (added.length === 0) toast(t('memory.nothingNew'), 'info');
@@ -1829,14 +1865,14 @@ function App() {
 
   const toggleMemory = async (id) => {
     const next = memories.map(m => (m.id === id ? { ...m, enabled: m.enabled === false } : m));
-    await saveMemories(currentUser?.id, next);
+    await saveMemories(profileScope, next);
     setMemories(next);
   };
 
-  const deleteMemory = async (id) => setMemories(await removeMemory(currentUser?.id, id));
+  const deleteMemory = async (id) => setMemories(await removeMemory(profileScope, id));
 
   const addManualMemory = async (text, kind) => {
-    const { memories: next, added } = await addMemories(currentUser?.id, [{ text, kind }]);
+    const { memories: next, added } = await addMemories(profileScope, [{ text, kind }]);
     setMemories(next);
     if (added.length === 0) toast(t('memory.duplicate'), 'info');
   };
@@ -1945,16 +1981,6 @@ function App() {
   // ---- Whole-state backup ----
   // Browser storage is per origin, so opening this app on a phone, or on a
   // different port, starts from nothing. This is how state moves.
-
-  // --- The server's own account, and the state that follows it ---
-  // Browser storage is per origin, so a device-local account cannot carry
-  // settings to a phone. This one can: the server knows who signed in.
-  const [syncUser, setSyncUser] = useState(null);
-  const [syncInfo, setSyncInfo] = useState(null);
-  const [syncBusy, setSyncBusy] = useState('');
-  const [syncForm, setSyncForm] = useState({ mode: 'login', name: '', email: '', password: '' });
-  const [serverConfig, setServerConfig] = useState(null);
-  const syncRef = useRef(null);
 
   const [restoring, setRestoring] = useState(false);
   const backupInputRef = useRef(null);
@@ -3441,7 +3467,7 @@ Rules
 
   // ---- Chat folders ----
 
-  const persistFolders = (next) => { setFolders(next); saveFolders(currentUser?.id, next); };
+  const persistFolders = (next) => { setFolders(next); saveFolders(profileScope, next); };
 
   const saveFolderDialog = () => {
     const draft = folderDialog;
@@ -3494,7 +3520,7 @@ Rules
     toast(t('presets.applied', { name: preset.builtin ? t(preset.nameKey) : preset.name }), 'success');
   };
 
-  const persistPresets = (next) => { setPresets(next); savePresets(currentUser?.id, next); };
+  const persistPresets = (next) => { setPresets(next); savePresets(profileScope, next); };
 
   const savePresetFromCurrent = () => {
     if (!newPresetName.trim()) return;
