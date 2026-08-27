@@ -1252,18 +1252,14 @@ function App() {
     localforage.getItem(storageKey).then(async saved => {
       if (cancelled) return;
 
-      // Joining a server account changes the key. The chats this browser
-      // already had sit under the local profile's key, so they are adopted
-      // once rather than stranded — and only when the account key is empty,
-      // so this never overwrites what the account already holds.
-      if ((!saved || saved.length === 0) && profileScope !== localScope) {
-        const carried = await localforage.getItem(sessionStorageKeyFor(localScope));
-        if (!cancelled && Array.isArray(carried) && carried.length > 0) {
-          await localforage.setItem(storageKey, carried);
-          saved = carried;
-          addLog(`Moved ${carried.length} chats onto the account.`, 'info');
-        }
-      }
+      // Nothing is copied between buckets here any more. This used to adopt the
+      // local profile's chats when the account's bucket looked empty, which
+      // sounds harmless and was not: localScope is '' — the guest — for as long
+      // as the local profile is still being restored, so a signed-in account
+      // could adopt the guest's history, and it ran again on every load where
+      // the account bucket had not yet been filled by a pull. Chats move
+      // between profiles by syncing or by an explicit backup, never by
+      // arriving here first.
       if (cancelled) return;
 
       if (saved && saved.length > 0) {
@@ -2209,11 +2205,12 @@ function App() {
 
     addLog(`[sync] ${pulled.restored.chats} chats and ${pulled.restored.settings} settings arrived from the account.`, 'info');
 
-    // Settings live in React state that was read from storage at mount, so the
-    // page has to be re-read for them to take effect. Doing that under someone
-    // mid-sentence would be worse than waiting.
+    // Both chats and settings were read into React state at mount, so storage
+    // having changed is not enough — the page has to be re-read. Chats counted
+    // for nothing here before, which is why a phone could refresh and still
+    // show none of them.
     const busy = isGenerating || input.trim().length > 0;
-    if (!busy && (pulled.restored.settings || 0) > 0) {
+    if (!busy) {
       window.location.reload();
       return pulled;
     }
@@ -6338,6 +6335,20 @@ Rules
                           <button className="icon-btn bordered" disabled={!!syncBusy} onClick={() => syncPull('merge')}>
                             {syncBusy === 'pull' ? <RefreshCcw size={14} className="spin" /> : <ArrowDown size={14} />}
                             {t('sync.pull')}
+                          </button>
+                          <button
+                            className="icon-btn bordered"
+                            style={{ color: 'var(--danger)' }}
+                            disabled={!!syncBusy}
+                            onClick={() => {
+                              // The recovery path when a device's local copy is
+                              // wrong: the account is authoritative, so throw
+                              // the local one away rather than merging the mess
+                              // back in.
+                              if (window.confirm(t('sync.confirmReplace'))) syncPull('replace');
+                            }}
+                          >
+                            <TriangleAlert size={14} /> {t('sync.pullReplace')}
                           </button>
                           <button className="icon-btn bordered" disabled={!!syncBusy} onClick={syncSignOut}>
                             <LogOut size={14} /> {t('sync.signOut')}

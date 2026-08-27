@@ -197,8 +197,16 @@ export const restoreBackup = async (backup, {
     const target = rename(key);
     const existing = replace ? [] : await localforage.getItem(target);
     const merged = mergeSessions(existing, incoming);
-    await localforage.setItem(target, merged);
-    restored.chats += (incoming || []).length;
+
+    // What actually changed, not what arrived. The caller reloads the page when
+    // this is non-zero, so counting every incoming chat every time would mean
+    // reloading forever against an account that is already in sync.
+    const before = JSON.stringify(existing || []);
+    const after = JSON.stringify(merged);
+    if (before !== after) {
+      await localforage.setItem(target, merged);
+      restored.chats += Math.max(merged.length - (existing?.length || 0), 1);
+    }
     if (target !== key) restored.remapped = { from: key, to: target };
   }
 

@@ -121,6 +121,9 @@ eq('and it says what it did', restored.chats, 3);
 // -------------------------------------------------- restore: twice over
 restored = await B.restoreBackup(backup);
 eq('restoring twice does not duplicate chats', storeFor('default').get('ollama-sessions').length, 2);
+// The caller reloads when this is non-zero; a state already applied must report
+// nothing, or the page reloads forever.
+eq('and reports no change the second time', restored.chats, 0);
 eq('nor memories', storeFor('memory').get('memories').length, 1);
 eq('nor accounts', storeFor('auth').get('ollama-users').length, 1);
 

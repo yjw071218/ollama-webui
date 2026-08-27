@@ -21,6 +21,8 @@ export const LANGUAGES = [
 ];
 
 const en = {
+  'sync.pullReplace': 'Replace this device with the account',
+  'sync.confirmReplace': 'Throw away this device\'s chats and settings for this profile, and take the account\'s instead?\n\nUse this when a device has picked up the wrong data. It cannot be undone.',
   'composer.placeholderShort': 'Message...',
   'sidebar.close': 'Close the chat list',
   'auth.switchedElsewhere': 'The signed-in profile changed in another tab. Every tab on this address shares one. Reload when you are ready.',
@@ -418,6 +420,8 @@ const en = {
 };
 
 const ko = {
+  'sync.pullReplace': '이 기기를 계정 것으로 덮어쓰기',
+  'sync.confirmReplace': '이 프로필의 기기 쪽 대화와 설정을 버리고 계정 것으로 가져올까요?\n\n기기에 잘못된 데이터가 섞였을 때 쓰세요. 되돌릴 수 없습니다.',
   'composer.placeholderShort': '메시지 보내기...',
   'sidebar.close': '대화 목록 닫기',
   'auth.switchedElsewhere': '다른 탭에서 로그인한 프로필이 바뀌었습니다. 이 주소의 모든 탭은 하나를 공유합니다. 준비되면 새로고침하세요.',
@@ -815,6 +819,8 @@ const ko = {
 };
 
 const ja = {
+  'sync.pullReplace': 'この端末をアカウントの内容で置き換え',
+  'sync.confirmReplace': 'このプロフィールの端末側のチャットと設定を破棄し、アカウントのものに置き換えますか？\n\n端末に誤ったデータが混ざったときに使います。元に戻せません。',
   'composer.placeholderShort': 'メッセージ...',
   'sidebar.close': 'チャット一覧を閉じる',
   'auth.switchedElsewhere': '別のタブでサインイン中のプロフィールが変わりました。このアドレスのすべてのタブは 1 つを共有します。準備ができたら再読み込みしてください。',
@@ -1212,6 +1218,8 @@ const ja = {
 };
 
 const zhHans = {
+  'sync.pullReplace': '用账户内容覆盖此设备',
+  'sync.confirmReplace': '丢弃此设备上该资料的对话与设置，改用账户的内容吗？\n\n用于设备混入了错误数据时。无法撤销。',
   'composer.placeholderShort': '发送消息…',
   'sidebar.close': '关闭对话列表',
   'auth.switchedElsewhere': '另一个标签页中登录的个人资料已更改。此地址的所有标签页共用一个。准备好后请刷新。',
@@ -1610,6 +1618,8 @@ const zhHans = {
 
 const zhHant = {
   ...zhHans,
+  'sync.pullReplace': '用帳戶內容覆寫此裝置',
+  'sync.confirmReplace': '捨棄此裝置上該檔案的對話與設定，改用帳戶的內容嗎？\n\n用於裝置混入了錯誤資料時。無法復原。',
   'composer.placeholderShort': '傳送訊息…',
   'sidebar.close': '關閉對話清單',
   'auth.switchedElsewhere': '另一個分頁中登入的個人檔案已變更。此位址的所有分頁共用一個。準備好後請重新整理。',
@@ -2006,6 +2016,8 @@ const zhHant = {
 };
 
 const es = {
+  'sync.pullReplace': 'Reemplazar este dispositivo con la cuenta',
+  'sync.confirmReplace': '¿Descartar los chats y ajustes de este dispositivo para este perfil y tomar los de la cuenta?\n\nÚsalo cuando un dispositivo tenga datos equivocados. No se puede deshacer.',
   'composer.placeholderShort': 'Mensaje...',
   'sidebar.close': 'Cerrar la lista de chats',
   'auth.switchedElsewhere': 'El perfil con sesión iniciada cambió en otra pestaña. Todas las pestañas de esta dirección comparten uno. Recarga cuando quieras.',
@@ -2403,6 +2415,8 @@ const es = {
 };
 
 const fr = {
+  'sync.pullReplace': 'Remplacer cet appareil par le compte',
+  'sync.confirmReplace': 'Jeter les discussions et réglages de cet appareil pour ce profil et prendre ceux du compte ?\n\nÀ utiliser quand un appareil a récupéré de mauvaises données. Irréversible.',
   'composer.placeholderShort': 'Message...',
   'sidebar.close': 'Fermer la liste des discussions',
   'auth.switchedElsewhere': 'Le profil connecté a changé dans un autre onglet. Tous les onglets de cette adresse en partagent un seul. Rechargez quand vous voulez.',
@@ -2800,6 +2814,8 @@ const fr = {
 };
 
 const de = {
+  'sync.pullReplace': 'Dieses Gerät durch das Konto ersetzen',
+  'sync.confirmReplace': 'Chats und Einstellungen dieses Geräts für dieses Profil verwerfen und die des Kontos übernehmen?\n\nFür ein Gerät, das falsche Daten übernommen hat. Nicht umkehrbar.',
   'composer.placeholderShort': 'Nachricht...',
   'sidebar.close': 'Chatliste schließen',
   'auth.switchedElsewhere': 'Das angemeldete Profil wurde in einem anderen Tab geändert. Alle Tabs dieser Adresse teilen sich eines. Laden Sie neu, wenn es passt.',
@@ -3197,6 +3213,8 @@ const de = {
 };
 
 const pt = {
+  'sync.pullReplace': 'Substituir este dispositivo pela conta',
+  'sync.confirmReplace': 'Descartar as conversas e configurações deste dispositivo para este perfil e usar as da conta?\n\nUse quando um dispositivo pegou dados errados. Não há como desfazer.',
   'composer.placeholderShort': 'Mensagem...',
   'sidebar.close': 'Fechar a lista de conversas',
   'auth.switchedElsewhere': 'O perfil conectado mudou em outra aba. Todas as abas deste endereço compartilham um. Recarregue quando quiser.',
@@ -3594,6 +3612,8 @@ const pt = {
 };
 
 const ru = {
+  'sync.pullReplace': 'Заменить это устройство данными аккаунта',
+  'sync.confirmReplace': 'Отбросить чаты и настройки этого устройства для этого профиля и взять данные аккаунта?\n\nДля устройства, получившего чужие данные. Отменить нельзя.',
   'composer.placeholderShort': 'Сообщение...',
   'sidebar.close': 'Закрыть список чатов',
   'auth.switchedElsewhere': 'Профиль, под которым выполнен вход, изменился в другой вкладке. Все вкладки этого адреса используют один. Обновите, когда будет удобно.',
@@ -3991,6 +4011,8 @@ const ru = {
 };
 
 const vi = {
+  'sync.pullReplace': 'Thay thế thiết bị này bằng tài khoản',
+  'sync.confirmReplace': 'Bỏ các cuộc trò chuyện và cài đặt của thiết bị này cho hồ sơ này và lấy của tài khoản?\n\nDùng khi thiết bị đã nhận nhầm dữ liệu. Không thể hoàn tác.',
   'composer.placeholderShort': 'Tin nhắn...',
   'sidebar.close': 'Đóng danh sách trò chuyện',
   'auth.switchedElsewhere': 'Hồ sơ đăng nhập đã thay đổi ở tab khác. Mọi tab của địa chỉ này dùng chung một hồ sơ. Hãy tải lại khi bạn sẵn sàng.',
@@ -4388,6 +4410,8 @@ const vi = {
 };
 
 const ar = {
+  'sync.pullReplace': 'استبدال هذا الجهاز بمحتوى الحساب',
+  'sync.confirmReplace': 'هل تريد التخلص من محادثات وإعدادات هذا الجهاز لهذا الملف وأخذ ما في الحساب؟\n\nاستخدمه عندما يلتقط جهاز بيانات خاطئة. لا يمكن التراجع.',
   'composer.placeholderShort': 'رسالة...',
   'sidebar.close': 'إغلاق قائمة المحادثات',
   'auth.switchedElsewhere': 'تغيّر الملف الشخصي المسجّل في تبويب آخر. كل تبويبات هذا العنوان تتشارك ملفاً واحداً. أعد التحميل عندما تكون جاهزاً.',
