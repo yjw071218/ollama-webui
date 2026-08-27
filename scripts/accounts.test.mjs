@@ -134,6 +134,50 @@ threw = '';
 try { await A.updateUser('no-such-id', { name: 'x' }); } catch (e) { threw = e.message; }
 check('updating a missing account is refused', /no such account/i.test(threw));
 
+// ------------------------------------------------- social identities
+// This is where account takeover would hide: adopting an existing account on
+// the strength of an email address the provider never verified.
+
+const google = (over = {}) => ({
+  provider: 'google', providerId: 'g-1', email: 'social@example.com',
+  emailVerified: true, name: 'Social User', avatar: null, ...over,
+});
+
+const first = A.findOrCreateSocialUser(google());
+eq('a social sign-in creates an account', first.email, 'social@example.com');
+eq('and records the provider', first.provider, 'google');
+check('with no password material', !('hash' in first) && !('salt' in first));
+
+const again = A.findOrCreateSocialUser(google({ name: 'Renamed' }));
+eq('signing in again is the same account', again.id, first.id);
+
+const other = A.findOrCreateSocialUser(google({ providerId: 'g-2', email: 'other@example.com' }));
+check('a different provider id is a different account', other.id !== first.id);
+
+// A password account, then the same address arriving from a provider.
+const pw = await A.registerUser({ name: 'Carol', email: 'carol@example.com', password: 'a-long-password' });
+
+const unverified = A.findOrCreateSocialUser(
+  google({ providerId: 'g-3', email: 'carol@example.com', emailVerified: false }));
+check('an unverified email does NOT adopt an existing account', unverified.id !== pw.id);
+
+const verified = A.findOrCreateSocialUser(
+  google({ providerId: 'g-4', email: 'carol@example.com', emailVerified: true }));
+eq('a verified email does adopt it', verified.id, pw.id);
+check('and the password still works afterwards',
+  !!(await A.verifyPassword('carol@example.com', 'a-long-password')));
+
+for (const bad of [null, {}, { provider: 'google' }, { providerId: 'x' }]) {
+  let refused = false;
+  try { A.findOrCreateSocialUser(bad); } catch (e) { refused = true; }
+  check(`an identity with no provider pair is refused: ${JSON.stringify(bad)}`, refused);
+}
+
+// A social account can hold state like any other.
+S.writeState(first.id, { settings: { systemPrompt: 'From the phone' } });
+eq('a social account carries state', S.readState(first.id).settings.systemPrompt, 'From the phone');
+eq('and it is its own', S.readState(other.id), null);
+
 fs.rmSync(scratch, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

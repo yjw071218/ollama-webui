@@ -73,7 +73,7 @@ export const publicUser = (user) => user && ({
   name: user.name,
   email: user.email,
   avatar: user.avatar || null,
-  provider: 'server',
+  provider: user.provider || 'server',
   createdAt: user.createdAt,
 });
 
@@ -179,4 +179,61 @@ export const destroySession = (token) => {
     delete sessions[token];
     saveSessions(sessions);
   }
+};
+
+/**
+ * The account behind a verified social identity, creating it on first sight.
+ *
+ * This is what stops there being two separate notions of "your account". A
+ * Google or Kakao sign-in already proves who you are; without this the person
+ * would have to discover a second password in a settings tab before their
+ * settings followed them anywhere.
+ *
+ * `identity` must come from a check the *server* performed. An identity posted
+ * by a browser is a claim, and honouring claims would let anyone sign in as
+ * anyone by sending a different email address.
+ */
+export const findOrCreateSocialUser = (identity) => {
+  const { provider, providerId, email, name, avatar, emailVerified } = identity || {};
+  if (!provider || !providerId) throw new Error('That identity names no account.');
+
+  const users = loadUsers();
+  const cleanEmail = normaliseEmail(email);
+
+  // Same person signing in again.
+  let index = users.findIndex(u => u.provider === provider && u.providerId === String(providerId));
+
+  // A password account with the same address is the same person only if the
+  // provider actually verified that address. Adopting an unverified one would
+  // let anyone take over an account by claiming its email at their provider.
+  if (index === -1 && cleanEmail && emailVerified) {
+    index = users.findIndex(u => u.email === cleanEmail);
+  }
+
+  if (index !== -1) {
+    const merged = {
+      ...users[index],
+      provider,
+      providerId: String(providerId),
+      name: users[index].name || name || cleanEmail,
+      avatar: avatar || users[index].avatar || null,
+      lastSeenAt: Date.now(),
+    };
+    users[index] = merged;
+    saveUsers(users);
+    return publicUser(merged);
+  }
+
+  const user = {
+    id: crypto.randomUUID(),
+    name: String(name || cleanEmail || 'User').trim().slice(0, 60),
+    email: cleanEmail,
+    provider,
+    providerId: String(providerId),
+    avatar: avatar || null,
+    // No salt or hash: this account is only reachable through its provider.
+    createdAt: Date.now(),
+  };
+  saveUsers([...users, user]);
+  return publicUser(user);
 };

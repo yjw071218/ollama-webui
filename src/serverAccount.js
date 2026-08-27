@@ -52,6 +52,26 @@ export const serverLogin = (email, password) =>
 
 export const serverLogout = () => json('/api/account/logout', { method: 'POST' });
 
+/**
+ * Turn a Google sign-in into a server session as well.
+ *
+ * The credential is verified by the server against Google, so this is not the
+ * browser asserting who it is. Failure is not fatal: the social sign-in still
+ * worked, it just stays device-local, which is what happened before any of this
+ * existed.
+ */
+export const linkGoogleSession = async (credential) => {
+  try {
+    const result = await json('/api/account/social', {
+      method: 'POST',
+      body: JSON.stringify({ credential }),
+    });
+    return result.success ? result : null;
+  } catch (e) {
+    return null;
+  }
+};
+
 export const serverUpdateProfile = (patch) =>
   json('/api/account/profile', { method: 'POST', body: JSON.stringify(patch) });
 

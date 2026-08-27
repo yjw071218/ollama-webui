@@ -38,7 +38,7 @@ import { relativeTime, absoluteTime } from './relativeTime.js';
 import { collectBackup, restoreBackup, describeBackup, isBackup } from './backup.js';
 import {
   fetchServerConfig, serverMe, serverRegister, serverLogin, serverLogout,
-  pushState, pullState, createSyncScheduler,
+  linkGoogleSession, pushState, pullState, createSyncScheduler,
 } from './serverAccount.js';
 import { appendVariant, selectVariant, removeVariant, variantsOf, variantCount, variantIndexOf } from './variants.js';
 import { wasTruncated, joinContinuation, looksRestarted, CONTINUE_PROMPT } from './continuation.js';
@@ -1725,6 +1725,46 @@ function App() {
     setActiveArtifact(null);
     toast(created ? t('auth.created') : t('auth.welcomeUser', { name: user.name }), 'success');
     addLog(`Signed in as ${user.name} (${user.provider}).`, 'success');
+
+    // A social sign-in already proved who this is, so it should also be the
+    // server account. Otherwise "the same account" on two devices shares
+    // nothing, because each browser has its own storage for that origin.
+    adoptServerSession(user);
+  };
+
+  /**
+   * Make the sign-in that just happened the server session too, then bring the
+   * account's settings down.
+   *
+   * Google hands over a credential the server verifies itself. Kakao is already
+   * exchanged server-side, so that flow sets the cookie on its way through and
+   * there is nothing left to send — asking /api/account/me finds it.
+   */
+  const adoptServerSession = async (user) => {
+    try {
+      if (user?.credential) await linkGoogleSession(user.credential);
+
+      const me = await serverMe();
+      if (!me?.success || !me.user) return;
+
+      setSyncUser(me.user);
+      setSyncInfo(me.state || null);
+      addLog(`[sync] signed in to this server as ${me.user.name}.`, 'info');
+
+      // Merge, so a device that already has chats keeps them. An account with
+      // nothing on it is seeded from whatever this device has.
+      const pulled = await pullState({ mode: 'merge' });
+      if (!pulled.summary) { await pushState(); return; }
+      if ((pulled.restored?.chats ?? 0) > 0) {
+        toast(t('sync.pulled', { chats: pulled.restored.chats }), 'success', 8000, {
+          label: t('backup.reload'),
+          onClick: () => window.location.reload(),
+        });
+      }
+    } catch (e) {
+      // Sync is a bonus; a failure here must not break signing in.
+      addLog(`[sync] could not join the server account: ${e.message}`, 'info');
+    }
   };
 
   const handleGuest = () => {

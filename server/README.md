@@ -102,8 +102,19 @@ IndexedDB, which the browser scopes to the origin. A phone reaching the app as
 `http://192.168.1.9:5173` therefore starts empty, and always will — that is a
 browser rule, not something a server can override.
 
-What a server *can* do is hold the state itself. **Settings > Account > Sync
-with this server** registers or signs in to an account the backend owns, then:
+What a server *can* do is hold the state itself.
+
+**Signing in with Google or Kakao does this automatically.** That sign-in
+already proves who you are, so the same one becomes the server session and your
+settings follow you to any device that can reach the server. Nothing to set up.
+
+  - Google's credential is verified by the server against Google's own
+    endpoint, so a browser cannot simply assert an identity
+  - Kakao's code exchange already happens server-side, so it issues the session
+    on its way through
+
+An email/password account for the server exists too, under **Settings > Account
+> Sync with this server**, for when there is no social provider. Either way:
 
   - signing in pulls the account's state down and merges it in
   - changes are uploaded a few seconds after they settle, coalesced, so a
@@ -285,5 +296,6 @@ Ollama must be running too (`ollama serve`, or its own service).
 | Model list empty | Ollama is not running, or `OLLAMA_URL` is wrong |
 | **All my chats and settings are gone** | Almost certainly the port changed. Browser storage is per origin — serve on `:5173` again and everything reappears. Nothing is deleted by changing ports |
 | `Local file access is disabled` | Working as intended; see the warning above before changing it |
-| Asked for the access token on a phone | The request did not arrive from the local network. Open `/api/whoami` on that phone — it reports the address the server saw and whether it counted as local. Reaching the server by its public address always asks |
+| Asked for the access token on a phone | The request did not arrive from the local network. Open `/api/whoami` on that phone — it answers without a token and reports the address the server saw. Reaching the server by its public address always asks |
+| Signed in on two addresses but nothing is shared | Both have to reach the *same server*. A social sign-in links automatically; check **Settings > Account** shows "Signed in as" on both. A device-local account only ever covers one origin |
 | Google: "Invalid Origin: must end with a public top-level domain" | Google refuses bare IPs. Use the `nip.io` hostname the server prints |

@@ -200,6 +200,31 @@ const apiRoutes = createApiRoutes(env, { allowLocalFs: ALLOW_LOCAL_FS });
 const handler = (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
 
+  // Deliberately in front of the token gate. This reports nothing the caller
+  // does not already know — the address they are coming from — and being asked
+  // for a token is precisely the situation it explains, so gating it would make
+  // it useless at the only moment it is wanted.
+  if (url.pathname === '/api/whoami') {
+    const seen = req.socket?.remoteAddress || '';
+    const lan = isPrivateAddress(seen);
+    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+    res.end(JSON.stringify({
+      youAppearAs: seen,
+      onThisNetwork: lan,
+      tokenRequired: REQUIRE_TOKEN && !(TRUST_LAN && lan),
+      trustLan: TRUST_LAN,
+      youAsked: req.headers.host || '',
+      servingPort: PORT,
+      explanation: !REQUIRE_TOKEN
+        ? 'This server is not asking anyone for a token.'
+        : (TRUST_LAN && lan)
+          ? "You are on this server's own network, so no token is needed."
+          : "You are not on this server's network, so the token is required. "
+            + 'The startup output prints a link that carries it.',
+    }, null, 2));
+    return;
+  }
+
   // Judged on the socket's peer address only: X-Forwarded-For is a header the
   // caller writes, so believing it would let anyone claim to be on the LAN.
   const fromLan = TRUST_LAN && isPrivateAddress(req.socket?.remoteAddress);
@@ -236,23 +261,6 @@ const handler = (req, res) => {
         : 'This server asks every client for the access token (TRUST_LAN=false).'));
       return;
     }
-  }
-
-  // Says what the server saw. Opening this on a phone answers "why is it
-  // asking me for a token" without anyone having to guess which address the
-  // request actually came in on.
-  if (url.pathname === '/api/whoami') {
-    const seen = req.socket?.remoteAddress || '';
-    res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-    res.end(JSON.stringify({
-      youAppearAs: seen,
-      onThisNetwork: isPrivateAddress(seen),
-      tokenRequired: REQUIRE_TOKEN && !(TRUST_LAN && isPrivateAddress(seen)),
-      trustLan: TRUST_LAN,
-      youAsked: req.headers.host || '',
-      servingPort: PORT,
-    }, null, 2));
-    return;
   }
 
   // Longest match first, so /api/tts-status is not swallowed by /api.

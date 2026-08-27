@@ -16,8 +16,9 @@ import {
 } from '../src/newsFeed.js';
 import {
   registerUser, verifyPassword, updateUser, createSession,
-  userForSession, destroySession, listUsers,
+  userForSession, destroySession, listUsers, findOrCreateSocialUser,
 } from './accounts.js';
+import { verifyGoogleIdToken } from './social.js';
 import { readState, writeState, stateInfo, MAX_STATE_BYTES } from './state.js';
 
 
@@ -642,6 +643,24 @@ export const createApiRoutes = (env = {}, options = {}) => {
       }
     });
 
+    // Signing in with Google is already proof of who you are, so it should also
+    // be the server account. Otherwise there are two notions of "your account"
+    // and only the obscure one makes settings follow you anywhere.
+    route('/api/account/social', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, { error: 'POST required' }, 405);
+      try {
+        const { credential } = JSON.parse(await readBody(req, 64 * 1024) || '{}');
+        const clientId = env.VITE_GOOGLE_CLIENT_ID || env.GOOGLE_CLIENT_ID || '';
+        // Verified against Google, not taken on trust from the browser.
+        const identity = await verifyGoogleIdToken(credential, clientId);
+        const user = findOrCreateSocialUser(identity);
+        setSessionCookie(res, createSession(user.id));
+        sendJson(res, { success: true, user, state: stateInfo(user.id) });
+      } catch (e) {
+        sendJson(res, { success: false, error: e.message }, 401);
+      }
+    });
+
     // The settings and history that follow the account.
     route('/api/account/state', async (req, res) => {
       const user = currentUser(req);
@@ -900,15 +919,42 @@ export const createApiRoutes = (env = {}, options = {}) => {
 
           const account = me.kakao_account || {};
           const profile = account.profile || {};
+          const identity = {
+            provider: 'kakao',
+            providerId: String(me.id),
+            email: account.email || '',
+            // Kakao states this separately, and only a verified address may be
+            // used to adopt an existing account.
+            emailVerified: account.is_email_verified === true,
+            name: profile.nickname || me.properties?.nickname || 'Kakao user',
+            avatar: profile.profile_image_url || me.properties?.profile_image || '',
+          };
+
+          // The exchange above already proved this identity against Kakao, so
+          // the same sign-in can carry the server session. Without this a Kakao
+          // user would still have to find a second account in the settings
+          // before anything followed them to another device.
+          let synced = null;
+          try {
+            const user = findOrCreateSocialUser(identity);
+            res.setHeader('Set-Cookie',
+              `webui_session=${createSession(user.id)}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 86400}`);
+            synced = user;
+          } catch (e) {
+            // Sign-in still succeeds without sync; it just stays device-local.
+            synced = null;
+          }
+
           res.setHeader('Content-Type', 'application/json');
           res.end(JSON.stringify({
             success: true,
             profile: {
-              id: String(me.id),
-              email: account.email || '',
-              name: profile.nickname || me.properties?.nickname || 'Kakao user',
-              avatar: profile.profile_image_url || me.properties?.profile_image || '',
+              id: identity.providerId,
+              email: identity.email,
+              name: identity.name,
+              avatar: identity.avatar,
             },
+            syncAccount: synced,
           }));
         } catch (e) {
           fail(500, e.message);

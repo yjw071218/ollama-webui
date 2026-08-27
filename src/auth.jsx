@@ -353,15 +353,19 @@ export const decodeJwtPayload = (token) => {
  * straight to the browser — no secret and no redirect needed.
  */
 /** Turns an ID token into a stored profile. */
-const acceptGoogleCredential = (credential) => {
+const acceptGoogleCredential = async (credential) => {
   const payload = decodeJwtPayload(credential);
-  return upsertSocialUser({
+  const user = await upsertSocialUser({
     provider: 'google',
     providerId: payload.sub,
     email: payload.email,
     name: payload.name || payload.given_name,
     avatar: payload.picture,
   });
+  // Hand the same credential to the backend so the sign-in is one account
+  // rather than two. It verifies the token itself; this is only delivery.
+  // A missing or older backend just means sync stays off.
+  return { ...user, credential };
 };
 
 /**
