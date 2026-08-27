@@ -72,6 +72,16 @@ await send('Page.enable');
 await send('Emulation.setDeviceMetricsOverride', {
   width: WIDTH, height: HEIGHT, deviceScaleFactor: 2, mobile: true,
 });
+// A session cookie can be planted first, which is how the state a provider
+// redirect leaves behind gets exercised without completing a real consent.
+if (process.env.COOKIE) {
+  const [name, value] = process.env.COOKIE.split('=');
+  await send('Network.enable');
+  await send('Network.setCookie', {
+    name, value, domain: 'localhost', path: '/', httpOnly: true,
+  });
+}
+
 await send('Page.navigate', { url: URL_ });
 await sleep(6000);
 
@@ -90,6 +100,22 @@ if (process.env.AS_GUEST === '1') {
     returnByValue: true,
   });
   await sleep(3000);
+}
+
+// Click a named button and report where the page ended up, so a login flow can
+// be driven rather than reasoned about.
+if (process.env.CLICK_TEXT) {
+  await send('Runtime.evaluate', {
+    expression: `(() => {
+      const re = new RegExp(${JSON.stringify(process.env.CLICK_TEXT)}, 'i');
+      const b = [...document.querySelectorAll('button')].find(x => re.test(x.textContent || ''));
+      if (!b) return 'not found';
+      b.click();
+      return 'clicked';
+    })()`,
+    returnByValue: true,
+  });
+  await sleep(Number(process.env.CLICK_WAIT || 5000));
 }
 
 // Open the drawer if asked, so its layout can be measured too.

@@ -2092,11 +2092,15 @@ function App() {
         setSyncUser(me.user || null);
         setSyncInfo(me.state || null);
 
-        // Kakao finishes on the server and returns here by redirect, so the
-        // session exists before this page has any idea who signed in. Give the
-        // profile menu something to show rather than leaving it on "guest"
-        // while the account is plainly signed in.
-        if (me.user && !readSession()) {
+        // A server session decides who is signed in, full stop.
+        //
+        // This used to run only when there was no local session at all, which
+        // meant signing in with Kakao while already signed in as someone else
+        // left the previous profile on screen: the account had changed
+        // underneath and nothing said so. Adopting unconditionally is also
+        // idempotent — upsertSocialUser keys on the account id, so arriving
+        // here already correct changes nothing.
+        if (me.user) {
           const local = await upsertSocialUser({
             provider: me.user.provider || 'server',
             providerId: me.user.id,
@@ -2107,6 +2111,7 @@ function App() {
           if (!cancelled && local?.user) {
             setCurrentUser(local.user);
             saveSession(local.user);
+            setActiveScope(deriveScope(me.user, local.user), local.user.id);
           }
         }
       }
