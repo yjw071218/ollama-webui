@@ -97,12 +97,28 @@ export const pushState = async ({ primaryKey = '' } = {}) => {
  * Merge by default: a device that already has chats keeps them, and the account
  * adds what is missing. Replace is for making a new device match exactly.
  */
-export const pullState = async ({ mode = 'merge', primaryKey = '' } = {}) => {
+export const pullState = async ({ mode = 'merge', primaryKey = '', settingsWin = false } = {}) => {
   const result = await json('/api/account/state');
   if (!result.success) throw new Error(result.error || 'Could not read the account state.');
-  if (!result.state) return { restored: null, summary: null };
-  const restored = await restoreBackup(result.state, { mode, includeAccounts: false, primaryKey });
-  return { restored, summary: describeBackup(result.state) };
+  if (!result.state) return { restored: null, summary: null, savedAt: null };
+  const restored = await restoreBackup(result.state, {
+    mode, includeAccounts: false, primaryKey, settingsWin,
+  });
+  return {
+    restored,
+    summary: describeBackup(result.state),
+    savedAt: result.info?.savedAt || result.state.savedAt || null,
+  };
+};
+
+/** When the account was last written, without downloading the whole thing. */
+export const accountStamp = async () => {
+  try {
+    const me = await json('/api/account/me');
+    return me?.success && me.user ? (me.state?.savedAt || 0) : null;
+  } catch (e) {
+    return null;
+  }
 };
 
 /**

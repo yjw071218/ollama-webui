@@ -21,6 +21,7 @@ export const LANGUAGES = [
 ];
 
 const en = {
+  'sync.remoteChanges': 'Changes arrived from another device. Reload to apply them.',
   'sync.linkGoogle': 'Link this device with Google',
   'sync.noCredential': 'Google did not return a credential. The sign-in was probably closed or blocked.',
   'sync.linkRefused': 'The server refused that Google credential. Check that this exact address is registered in the Google console.',
@@ -414,6 +415,7 @@ const en = {
 };
 
 const ko = {
+  'sync.remoteChanges': '다른 기기의 변경사항이 도착했습니다. 새로고침하면 적용됩니다.',
   'sync.linkGoogle': 'Google로 이 기기 연결하기',
   'sync.noCredential': 'Google가 자격증명을 반환하지 않았습니다. 로그인 창이 닫혔거나 차단된 것 같습니다.',
   'sync.linkRefused': '서버가 해당 Google 자격증명을 거부했습니다. 이 주소가 Google 콘솔에 정확히 등록되어 있는지 확인하세요.',
@@ -807,6 +809,7 @@ const ko = {
 };
 
 const ja = {
+  'sync.remoteChanges': '別の端末からの変更が届きました。再読み込みで反映されます。',
   'sync.linkGoogle': 'Google でこの端末を接続',
   'sync.noCredential': 'Google が認証情報を返しませんでした。サインインが閉じられたかブロックされたようです。',
   'sync.linkRefused': 'サーバーがその Google 認証情報を拒否しました。このアドレスが Google コンソールに正確に登録されているか確認してください。',
@@ -1200,6 +1203,7 @@ const ja = {
 };
 
 const zhHans = {
+  'sync.remoteChanges': '收到了来自其他设备的更改。刷新后生效。',
   'sync.linkGoogle': '用 Google 连接此设备',
   'sync.noCredential': 'Google 未返回凭据。登录窗口可能被关闭或拦截了。',
   'sync.linkRefused': '服务器拒绝了该 Google 凭据。请确认此地址已准确注册在 Google 控制台中。',
@@ -1594,6 +1598,7 @@ const zhHans = {
 
 const zhHant = {
   ...zhHans,
+  'sync.remoteChanges': '收到了來自其他裝置的變更。重新整理後生效。',
   'sync.linkGoogle': '用 Google 連接此裝置',
   'sync.noCredential': 'Google 未回傳憑證。登入視窗可能被關閉或攔截了。',
   'sync.linkRefused': '伺服器拒絕了該 Google 憑證。請確認此位址已準確註冊在 Google 主控台中。',
@@ -1986,6 +1991,7 @@ const zhHant = {
 };
 
 const es = {
+  'sync.remoteChanges': 'Llegaron cambios de otro dispositivo. Recarga para aplicarlos.',
   'sync.linkGoogle': 'Vincular este dispositivo con Google',
   'sync.noCredential': 'Google no devolvió una credencial. Probablemente se cerró o bloqueó el inicio de sesión.',
   'sync.linkRefused': 'El servidor rechazó esa credencial de Google. Comprueba que esta dirección exacta está registrada en la consola de Google.',
@@ -2379,6 +2385,7 @@ const es = {
 };
 
 const fr = {
+  'sync.remoteChanges': 'Des modifications sont arrivées d’un autre appareil. Rechargez pour les appliquer.',
   'sync.linkGoogle': 'Lier cet appareil avec Google',
   'sync.noCredential': 'Google n’a pas renvoyé d’identifiant. La connexion a sans doute été fermée ou bloquée.',
   'sync.linkRefused': 'Le serveur a refusé cet identifiant Google. Vérifiez que cette adresse exacte est enregistrée dans la console Google.',
@@ -2772,6 +2779,7 @@ const fr = {
 };
 
 const de = {
+  'sync.remoteChanges': 'Änderungen von einem anderen Gerät sind eingetroffen. Zum Anwenden neu laden.',
   'sync.linkGoogle': 'Dieses Gerät mit Google verknüpfen',
   'sync.noCredential': 'Google hat keine Anmeldedaten zurückgegeben. Die Anmeldung wurde vermutlich geschlossen oder blockiert.',
   'sync.linkRefused': 'Der Server hat diese Google-Anmeldedaten abgelehnt. Prüfen Sie, ob genau diese Adresse in der Google-Konsole registriert ist.',
@@ -3165,6 +3173,7 @@ const de = {
 };
 
 const pt = {
+  'sync.remoteChanges': 'Chegaram alterações de outro dispositivo. Recarregue para aplicá-las.',
   'sync.linkGoogle': 'Vincular este dispositivo com o Google',
   'sync.noCredential': 'O Google não retornou uma credencial. O login provavelmente foi fechado ou bloqueado.',
   'sync.linkRefused': 'O servidor recusou essa credencial do Google. Verifique se este endereço exato está registrado no console do Google.',
@@ -3558,6 +3567,7 @@ const pt = {
 };
 
 const ru = {
+  'sync.remoteChanges': 'Пришли изменения с другого устройства. Обновите страницу, чтобы применить.',
   'sync.linkGoogle': 'Связать это устройство через Google',
   'sync.noCredential': 'Google не вернул учётные данные. Вероятно, вход был закрыт или заблокирован.',
   'sync.linkRefused': 'Сервер отклонил эти учётные данные Google. Проверьте, что именно этот адрес зарегистрирован в консоли Google.',
@@ -3951,6 +3961,7 @@ const ru = {
 };
 
 const vi = {
+  'sync.remoteChanges': 'Đã nhận thay đổi từ thiết bị khác. Tải lại để áp dụng.',
   'sync.linkGoogle': 'Liên kết thiết bị này bằng Google',
   'sync.noCredential': 'Google không trả về thông tin xác thực. Có thể cửa sổ đăng nhập đã bị đóng hoặc chặn.',
   'sync.linkRefused': 'Máy chủ đã từ chối thông tin xác thực Google đó. Hãy kiểm tra địa chỉ này đã được đăng ký chính xác trong Google console.',
@@ -4344,6 +4355,7 @@ const vi = {
 };
 
 const ar = {
+  'sync.remoteChanges': 'وصلت تغييرات من جهاز آخر. أعد التحميل لتطبيقها.',
   'sync.linkGoogle': 'اربط هذا الجهاز عبر Google',
   'sync.noCredential': 'لم يُعِد Google بيانات اعتماد. على الأرجح أُغلقت نافذة الدخول أو حُجبت.',
   'sync.linkRefused': 'رفض الخادم بيانات اعتماد Google تلك. تأكد من تسجيل هذا العنوان بالضبط في وحدة تحكم Google.',

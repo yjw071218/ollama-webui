@@ -200,6 +200,58 @@ eq('both survive the remap', mergedInto.length, 2);
 check('the local one is kept', mergedInto.some(c => c.id === 22));
 check('the remote one arrives', mergedInto.some(c => c.id === 11));
 
+// ------------------------------------------------- settings on a sync pull
+// The bug: the app writes every default to localStorage at startup, so
+// "skip anything already present" skipped all of them and no setting ever
+// crossed between devices.
+reset();
+localStorage.setItem('systemPrompt', 'Local prompt');
+localStorage.setItem('temperature', '0.2');
+localStorage.setItem('ttsRefAudio', 'C:/local/voice.wav');
+storeFor('default').set('ollama-sessions', []);
+
+const account = {
+  kind: 'ollama-webui-backup', version: 2, createdAt: 1,
+  settings: { systemPrompt: 'From the account', temperature: '0.9', newKey: 'added',
+              ttsRefAudio: 'D:/their/voice.wav' },
+  sessions: {},
+};
+
+await B.restoreBackup(account, { mode: 'merge' });
+eq('a file restore still leaves a local setting alone', localStorage.getItem('systemPrompt'), 'Local prompt');
+eq('but adds one that was missing', localStorage.getItem('newKey'), 'added');
+
+reset();
+localStorage.setItem('systemPrompt', 'Local prompt');
+localStorage.setItem('temperature', '0.2');
+localStorage.setItem('ttsRefAudio', 'C:/local/voice.wav');
+
+const synced = await B.restoreBackup(account, { mode: 'merge', settingsWin: true });
+eq('a sync pull applies the account setting', localStorage.getItem('systemPrompt'), 'From the account');
+eq('and the numeric one', localStorage.getItem('temperature'), '0.9');
+eq('and adds what was missing', localStorage.getItem('newKey'), 'added');
+eq('the machine-specific path is never taken from the account',
+  localStorage.getItem('ttsRefAudio'), 'C:/local/voice.wav');
+eq('it counts what it changed', synced.settings, 3);
+
+// Applying the same state twice must report no change, or the caller cannot
+// tell "something arrived" from "nothing happened".
+const again2 = await B.restoreBackup(account, { mode: 'merge', settingsWin: true });
+eq('re-applying an identical state changes nothing', again2.settings, 0);
+
+// The fingerprint is what notices a local edit.
+reset();
+localStorage.setItem('systemPrompt', 'a');
+const printA = B.settingsFingerprint();
+eq('the fingerprint is stable', B.settingsFingerprint(), printA);
+localStorage.setItem('systemPrompt', 'b');
+check('it changes when a setting does', B.settingsFingerprint() !== printA);
+localStorage.setItem('ttsRefAudio', 'C:/x.wav');
+eq('a machine-specific value is not part of it', B.settingsFingerprint(),
+   B.settingsFingerprint());
+check('and does not make it differ from the same state elsewhere',
+  !B.settingsFingerprint().includes('ttsRefAudio'));
+
 // ------------------------------------------------------------- refusals
 let threw = '';
 try { await B.restoreBackup({ hello: 'world' }); } catch (e) { threw = e.message; }

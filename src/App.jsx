@@ -35,10 +35,10 @@ import {
 import { sessionToHtml } from './htmlExport.js';
 import { decodeByteFallback } from './byteFallback.js';
 import { relativeTime, absoluteTime } from './relativeTime.js';
-import { collectBackup, restoreBackup, describeBackup, isBackup } from './backup.js';
+import { collectBackup, restoreBackup, describeBackup, isBackup, settingsFingerprint } from './backup.js';
 import {
   fetchServerConfig, serverMe, serverRegister, serverLogin, serverLogout,
-  linkGoogleSession, pushState, pullState, createSyncScheduler,
+  linkGoogleSession, pushState, pullState, createSyncScheduler, accountStamp,
 } from './serverAccount.js';
 import { appendVariant, selectVariant, removeVariant, variantsOf, variantCount, variantIndexOf } from './variants.js';
 import { wasTruncated, joinContinuation, looksRestarted, CONTINUE_PROMPT } from './continuation.js';
@@ -644,6 +644,11 @@ function App() {
   const [syncForm, setSyncForm] = useState({ mode: 'login', name: '', email: '', password: '' });
   const [serverConfig, setServerConfig] = useState(null);
   const syncRef = useRef(null);
+  // The account's savedAt that this device already accounts for. Anything newer
+  // came from somewhere else and is worth pulling; our own pushes update it so
+  // they do not read as remote changes.
+  const syncStampRef = useRef(0);
+  const settingsPrintRef = useRef('');
 
   /**
    * Who the stored data belongs to.
@@ -2038,7 +2043,10 @@ function App() {
       // Read at push time: the active profile can change without the scheduler
       // being rebuilt.
       primaryKey: () => storageKeyRef.current,
-      onResult: (result) => setSyncInfo({ exists: true, bytes: result.bytes, savedAt: result.savedAt }),
+      onResult: (result) => {
+        syncStampRef.current = result.savedAt || syncStampRef.current;
+        setSyncInfo({ exists: true, bytes: result.bytes, savedAt: result.savedAt });
+      },
       onError: (e) => addLog(`[sync] upload failed: ${e.message}`, 'error'),
     });
 
@@ -2082,6 +2090,87 @@ function App() {
     });
     return () => { cancelled = true; };
   }, [showSettings, settingsTab, syncUser, serverConfig?.googleClientId, lang]);
+
+  /**
+   * Bring down whatever another device has changed, and apply it.
+   *
+   * Settings are taken from the account rather than merged: every setting
+   * already exists locally, since the app writes its defaults at startup, so
+   * "keep what is here" would mean never applying anything.
+   */
+  const pullRemoteChanges = async ({ announce = true } = {}) => {
+    const pulled = await pullState({ mode: 'merge', primaryKey: storageKey, settingsWin: true });
+    if (pulled.savedAt) syncStampRef.current = pulled.savedAt;
+    settingsPrintRef.current = settingsFingerprint();
+
+    const changed = (pulled.restored?.settings || 0) + (pulled.restored?.chats || 0);
+    if (!changed) return pulled;
+
+    addLog(`[sync] ${pulled.restored.chats} chats and ${pulled.restored.settings} settings arrived from the account.`, 'info');
+
+    // Settings live in React state that was read from storage at mount, so the
+    // page has to be re-read for them to take effect. Doing that under someone
+    // mid-sentence would be worse than waiting.
+    const busy = isGenerating || input.trim().length > 0;
+    if (!busy && (pulled.restored.settings || 0) > 0) {
+      window.location.reload();
+      return pulled;
+    }
+    if (announce) {
+      toast(t('sync.remoteChanges'), 'info', 10000, {
+        label: t('backup.reload'),
+        onClick: () => window.location.reload(),
+      });
+    }
+    return pulled;
+  };
+
+  // Local changes: settings are spread across some fifty pieces of state, so
+  // rather than listing them all — and missing the fifty-first — the stored
+  // values are fingerprinted on a slow interval.
+  useEffect(() => {
+    if (!syncUser || !isStorageLoaded) return undefined;
+    settingsPrintRef.current = settingsFingerprint();
+
+    const timer = setInterval(() => {
+      const now = settingsFingerprint();
+      if (now === settingsPrintRef.current) return;
+      settingsPrintRef.current = now;
+      syncRef.current?.schedule();
+    }, 3000);
+    return () => clearInterval(timer);
+  }, [syncUser, isStorageLoaded]);
+
+  // Remote changes: ask only for the timestamp, and download the state itself
+  // only when it is newer than what this device already has.
+  useEffect(() => {
+    if (!syncUser) return undefined;
+
+    let stopped = false;
+    const check = async () => {
+      if (stopped || document.hidden) return;
+      const stamp = await accountStamp();
+      if (stopped || !stamp || stamp <= syncStampRef.current) return;
+      try {
+        await pullRemoteChanges();
+      } catch (e) {
+        addLog(`[sync] could not fetch remote changes: ${e.message}`, 'info');
+      }
+    };
+
+    const timer = setInterval(check, 15000);
+    // A device that was asleep should catch up the moment it is looked at.
+    window.addEventListener('focus', check);
+    document.addEventListener('visibilitychange', check);
+    check();
+
+    return () => {
+      stopped = true;
+      clearInterval(timer);
+      window.removeEventListener('focus', check);
+      document.removeEventListener('visibilitychange', check);
+    };
+  }, [syncUser, storageKey]);
 
   // ---- Syncing with the server account ----
 
@@ -2179,6 +2268,7 @@ function App() {
     setSyncBusy('push');
     try {
       const result = await pushState({ primaryKey: storageKey });
+      syncStampRef.current = result.savedAt || syncStampRef.current;
       setSyncInfo({ exists: true, bytes: result.bytes, savedAt: result.savedAt });
       toast(t('sync.pushed', { chats: result.summary.chats }), 'success');
     } catch (e) {
@@ -2191,7 +2281,7 @@ function App() {
   const syncPull = async (mode) => {
     setSyncBusy('pull');
     try {
-      const pulled = await pullState({ mode, primaryKey: storageKey });
+      const pulled = await pullState({ mode, primaryKey: storageKey, settingsWin: true });
       if (!pulled.summary) { toast(t('sync.nothingStored'), 'info'); return; }
       toast(t('sync.pulled', { chats: pulled.restored?.chats ?? 0 }), 'success', 8000, {
         label: t('backup.reload'),

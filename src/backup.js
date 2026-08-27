@@ -108,7 +108,7 @@ const mergeSessions = (existing, incoming) => {
  * default because the destructive one should be asked for.
  */
 export const restoreBackup = async (backup, {
-  mode = 'merge', includeAccounts = true, primaryKey = '',
+  mode = 'merge', includeAccounts = true, primaryKey = '', settingsWin = false,
 } = {}) => {
   if (!isBackup(backup)) throw new Error('That file is not an Ollama WebUI backup.');
   if (backup.version > BACKUP_VERSION) {
@@ -118,9 +118,16 @@ export const restoreBackup = async (backup, {
   const replace = mode === 'replace';
   const restored = { settings: 0, chats: 0, documents: 0, memories: 0, accounts: 0, remapped: null };
 
+  // Settings are not a set to union. Every one of them already exists locally,
+  // because the app writes its defaults on startup — so "keep what is here"
+  // meant nothing was ever applied. When the account is the source of truth
+  // (a sync pull) its values win; a restore from a file stays conservative.
+  const settingsOverwrite = replace || settingsWin;
   for (const [key, value] of Object.entries(backup.settings || {})) {
-    if (MACHINE_LOCAL.has(key) && !replace) continue;
-    if (!replace && localStorage.getItem(key) !== null) continue;
+    if (MACHINE_LOCAL.has(key)) continue;   // names a path on one machine
+    const current = localStorage.getItem(key);
+    if (!settingsOverwrite && current !== null) continue;
+    if (current === value) continue;
     try { localStorage.setItem(key, value); restored.settings++; } catch (e) { /* quota */ }
   }
 
@@ -177,4 +184,23 @@ export const restoreBackup = async (backup, {
   }
 
   return restored;
+};
+
+/**
+ * A fingerprint of the settings this browser holds.
+ *
+ * Auto-sync needs to know when anything changed, and there are around fifty
+ * settings spread across as many pieces of React state. Listing them all in a
+ * dependency array is the kind of thing that silently misses the fifty-first,
+ * so the stored values are read directly instead — it is a few dozen
+ * localStorage reads and costs nothing at the interval this runs on.
+ */
+export const settingsFingerprint = () => {
+  const parts = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (!key || MACHINE_LOCAL.has(key)) continue;
+    parts.push(`${key}=${localStorage.getItem(key)}`);
+  }
+  return parts.sort().join(' ');
 };
