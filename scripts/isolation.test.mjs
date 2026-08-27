@@ -51,7 +51,7 @@ const load = async (entry, out) => {
 
 globalThis.__localforage = { ...instance('default'), createInstance: ({ storeName }) => instance(storeName) };
 const B = await load('../src/backup.js', '../node_modules/.iso-backup.mjs');
-const S = await load('../src/settingsScope.js', '../node_modules/.iso-settings.mjs');
+const S = await load('../src/settingsStore.js', '../node_modules/.iso-settings.mjs');
 const P = await load('../src/profileScope.js', '../node_modules/.iso-scope.mjs');
 
 let pass = 0, fail = 0;
@@ -122,46 +122,48 @@ eq("another profile's chats are untouched", storeFor('default').get('ollama-sess
 eq("another profile's documents survive", storeFor('knowledge').get('knowledge:bob-local').length, 1);
 
 // ------------------------------------------------------------- settings per profile
+// Settings used to share bare keys across every profile, so two tabs with two
+// accounts overwrote each other continuously. They carry the scope now.
 reset();
-localStorage.setItem('systemPrompt', 'guest prompt');
-localStorage.setItem('temperature', '0.3');
 
-check('a settings key is recognised', S.isSettingKey('systemPrompt'));
-check('a chat bucket is not a setting', !S.isSettingKey('ollama-sessions:srv-alice'));
-check('another profile folders key is not a setting', !S.isSettingKey('chatFolders:srv-alice'));
-check('the account list is not a setting', !S.isSettingKey('ollama-users'));
-check('a snapshot is not a setting', !S.isSettingKey('settingsSnapshot:guest'));
+check('a setting is scoped', S.isScopedSetting('systemPrompt'));
+check('the chat store is not', !S.isScopedSetting('ollama-sessions'));
+check('the account list is not', !S.isScopedSetting('ollama-users'));
+check("another profile's folders are not", !S.isScopedSetting('chatFolders:srv-alice'));
+check('a machine-local path is not', !S.isScopedSetting('ttsRefAudio'));
 
-// Guest sets up, then an account signs in for the first time.
-S.saveSnapshot('');
-eq('a first sign-in inherits rather than resetting',
-  S.switchScope('', 'srv-alice'), false);
-eq('so the values are still there', localStorage.getItem('systemPrompt'), 'guest prompt');
+eq('the guest keeps the bare key', S.scopedKey('systemPrompt', ''), 'systemPrompt');
+eq('an account gets its own', S.scopedKey('systemPrompt', 'srv-alice'), 'systemPrompt@srv-alice');
+eq('a machine-local key is never scoped', S.scopedKey('ttsRefAudio', 'srv-alice'), 'ttsRefAudio');
 
-// The account changes things.
-localStorage.setItem('systemPrompt', 'alice prompt');
-localStorage.setItem('aliceOnly', 'yes');
-S.saveSnapshot('srv-alice');
+// Two profiles writing the same setting must not meet.
+S.setActiveScope('');
+S.setSetting('systemPrompt', 'guest prompt');
+S.setActiveScope('srv-alice');
+S.setSetting('systemPrompt', 'alice prompt');
 
-// Back to guest.
-check('switching back reports a change', S.switchScope('srv-alice', ''));
-eq('the guest prompt is restored', localStorage.getItem('systemPrompt'), 'guest prompt');
-eq('a setting only the account had is gone', localStorage.getItem('aliceOnly'), null);
+eq('alice reads her own', S.getSetting('systemPrompt'), 'alice prompt');
+S.setActiveScope('');
+eq('the guest still reads theirs', S.getSetting('systemPrompt'), 'guest prompt');
+S.setActiveScope('srv-bob');
+eq('a new profile inherits rather than starting empty', S.getSetting('systemPrompt'), 'guest prompt');
+S.setSetting('systemPrompt', 'bob prompt');
+S.setActiveScope('srv-alice');
+eq("and once it writes, alice is unaffected", S.getSetting('systemPrompt'), 'alice prompt');
 
-// And back again.
-check('switching forward reports a change', S.switchScope('', 'srv-alice'));
-eq('the account prompt is back', localStorage.getItem('systemPrompt'), 'alice prompt');
-eq('and its own setting', localStorage.getItem('aliceOnly'), 'yes');
+const aliceSettings = S.readScopeSettings('srv-alice');
+eq('a scope reads back its own settings', aliceSettings.systemPrompt, 'alice prompt');
+check("and not another's", !Object.values(aliceSettings).includes('bob prompt'));
 
-// The reference clip names a file on this computer and stays put.
-localStorage.setItem('ttsRefAudio', 'C:/mine.wav');
-S.saveSnapshot('srv-alice');
-S.switchScope('srv-alice', '');
-eq('a machine-local path does not travel with a profile',
-  localStorage.getItem('ttsRefAudio'), 'C:/mine.wav');
+const guestSettings = S.readScopeSettings('');
+eq('the guest reads back the bare keys', guestSettings.systemPrompt, 'guest prompt');
+check('and not a scoped one', !Object.values(guestSettings).includes('alice prompt'));
 
-eq('switching to the same profile does nothing', S.switchScope('srv-alice', 'srv-alice'), false);
-
+eq('writing a scope reports what changed', S.writeScopeSettings('srv-carol', { systemPrompt: 'carol' }), 1);
+eq('and writing the same twice reports nothing', S.writeScopeSettings('srv-carol', { systemPrompt: 'carol' }), 0);
+S.setActiveScope('srv-carol');
+eq('carol reads what was written for her', S.getSetting('systemPrompt'), 'carol');
+S.setActiveScope('');
 
 // ------------------------------------------------ which profile is in view
 // The bug this pins down: signing out left the server session attached, so the

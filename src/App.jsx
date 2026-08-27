@@ -36,7 +36,9 @@ import { sessionToHtml } from './htmlExport.js';
 import { decodeByteFallback } from './byteFallback.js';
 import { relativeTime, absoluteTime } from './relativeTime.js';
 import { collectBackup, restoreBackup, describeBackup, isBackup, settingsFingerprint } from './backup.js';
-import { switchScope, saveSnapshot } from './settingsScope.js';
+import {
+  bootScope, setActiveScope, getActiveScope, getSetting, setSetting,
+} from './settingsStore.js';
 import { deriveScope } from './profileScope.js';
 import {
   fetchServerConfig, serverMe, serverRegister, serverLogin, serverLogout,
@@ -585,6 +587,12 @@ const MarkdownCodeBlock = memo(({ inline, className, children, onOpenArtifact, .
   return <code className={className} {...props}>{children}</code>;
 });
 
+// Decided before React renders anything, because the useState initialisers
+// below read settings and must read the right profile's. A tab that has none of
+// its own inherits the last profile used in this browser, then stops following
+// it — which is what lets two tabs be two people.
+const BOOT = bootScope();
+
 function App() {
   const [models, setModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
@@ -629,16 +637,16 @@ function App() {
   const [downloadModelName, setDownloadModelName] = useState('');
   const [isDownloading, setIsDownloading] = useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
-  const [systemPrompt, setSystemPrompt] = useState(() => localStorage.getItem('systemPrompt') || 'You are Claude, a helpful, honest, and harmless AI assistant.');
+  const [systemPrompt, setSystemPrompt] = useState(() => getSetting('systemPrompt') || 'You are Claude, a helpful, honest, and harmless AI assistant.');
   const [temperature, setTemperature] = useState(() => {
-    const val = localStorage.getItem('temperature');
+    const val = getSetting('temperature');
     return val !== null ? parseFloat(val) : 0.7;
   });
   const [maxTokens, setMaxTokens] = useState(() => {
-    const val = localStorage.getItem('maxTokens');
+    const val = getSetting('maxTokens');
     return val !== null ? parseInt(val) : 4096;
   });
-  const [codeTheme, setCodeTheme] = useState(() => localStorage.getItem('codeTheme') || 'atom-one-dark');
+  const [codeTheme, setCodeTheme] = useState(() => getSetting('codeTheme') || 'atom-one-dark');
   const [chatSearchQuery, setChatSearchQuery] = useState('');
   const [searchHitIndex, setSearchHitIndex] = useState(0);
   const [starredOnly, setStarredOnly] = useState(false);
@@ -649,11 +657,11 @@ function App() {
   const [showChatInfo, setShowChatInfo] = useState(false);
   const [showSystemMonitor, setShowSystemMonitor] = useState(false);
   const [showCompare, setShowCompare] = useState(false);
-  const [showSystemStrip, setShowSystemStrip] = useState(() => localStorage.getItem('showSystemStrip') !== 'false');
+  const [showSystemStrip, setShowSystemStrip] = useState(() => getSetting('showSystemStrip') !== 'false');
   const lastDeletedRef = useRef(null);
 
   // --- Appearance ---
-  const [theme, setTheme] = useState(() => localStorage.getItem('theme') || 'system');
+  const [theme, setTheme] = useState(() => getSetting('theme') || 'system');
   const { t, lang, setLang } = useI18n();
 
   // --- Accounts (device-local profiles) ---
@@ -690,6 +698,11 @@ function App() {
    * there is no server.
    */
   const profileScope = deriveScope(syncUser, currentUser);
+
+  // The store is what every setting read goes through, so it has to be told
+  // before the render that reads them. Doing it here rather than in an effect
+  // means no render ever sees another profile's values.
+  if (getActiveScope() !== profileScope) setActiveScope(profileScope, currentUser?.id || null);
   const localScope = currentUser?.id || '';
   const storageKey = sessionStorageKeyFor(profileScope);
 
@@ -697,49 +710,38 @@ function App() {
   const profileScopeRef = useRef(profileScope);
   profileScopeRef.current = profileScope;
 
-  // Settings live under bare localStorage keys shared by every profile, so they
-  // are swapped when the profile changes rather than left to leak between them.
-  // The reload is what makes it visible: the values were read into React state
-  // at mount.
-  const settingsScopeRef = useRef(null);
+  // Settings are stored per profile now, so switching does not need a swap —
+  // the keys simply differ. What still needs a reload is React: the values were
+  // read into state when this render tree mounted.
+  const settingsScopeRef = useRef(BOOT.scope);
   useEffect(() => {
     if (!authReady || !syncChecked) return;
-    const previous = settingsScopeRef.current;
+    if (settingsScopeRef.current === profileScope) return;
     settingsScopeRef.current = profileScope;
-
-    if (previous === null) { saveSnapshot(profileScope); return; }
-    if (previous === profileScope) return;
-    if (switchScope(previous, profileScope)) window.location.reload();
+    window.location.reload();
   }, [profileScope, authReady, syncChecked]);
 
   // Keep the active profile's snapshot current, so a switch takes the settings
   // as they are now rather than as they were when it was last written.
-  useEffect(() => {
-    if (!authReady || !syncChecked) return undefined;
-    // On the way out only. A periodic write races with any other tab that has a
-    // different profile open, and they corrupt each other's snapshots.
-    const onLeave = () => saveSnapshot(profileScopeRef.current);
-    window.addEventListener('beforeunload', onLeave);
-    return () => {
-      window.removeEventListener('beforeunload', onLeave);
-      onLeave();
-    };
-  }, [authReady, syncChecked]);
+
   const [showAuthScreen, setShowAuthScreen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showProfileDialog, setShowProfileDialog] = useState(false);
-  const [googleClientId, setGoogleClientId] = useState(() => localStorage.getItem('googleClientId') || '');
-  const [kakaoRestKey, setKakaoRestKey] = useState(() => localStorage.getItem('kakaoRestKey') || '');
+  const [googleClientId, setGoogleClientId] = useState(() => getSetting('googleClientId') || '');
+  const [kakaoRestKey, setKakaoRestKey] = useState(() => getSetting('kakaoRestKey') || '');
 
-  useEffect(() => { localStorage.setItem('googleClientId', googleClientId); }, [googleClientId]);
-  useEffect(() => { localStorage.setItem('kakaoRestKey', kakaoRestKey); }, [kakaoRestKey]);
+  useEffect(() => { setSetting('googleClientId', googleClientId); }, [googleClientId]);
+  useEffect(() => { setSetting('kakaoRestKey', kakaoRestKey); }, [kakaoRestKey]);
 
   // Restore the stored session, or show the sign-in screen on a first visit.
   useEffect(() => {
     let cancelled = false;
     (async () => {
-      const session = readSession();
-      if (session) {
+      // This tab's own record first. Falling straight back to the shared one is
+      // what made a reload adopt whatever another tab had signed in as.
+      const tabUserId = BOOT.localUserId;
+      const session = tabUserId ? { userId: tabUserId } : readSession();
+      if (session?.userId) {
         const users = await loadUsers();
         const found = users.find(u => u.id === session.userId);
         if (!cancelled && found) {
@@ -750,17 +752,17 @@ function App() {
       }
       if (cancelled) return;
       // Someone who already chose "continue as guest" is not asked again.
-      const seenAuth = localStorage.getItem('authIntroSeen') === 'true';
+      const seenAuth = getSetting('authIntroSeen') === 'true';
       setShowAuthScreen(!seenAuth);
       setAuthReady(true);
     })();
     return () => { cancelled = true; };
   }, []);
 
-  const [chatFontSize, setChatFontSize] = useState(() => localStorage.getItem('chatFontSize') || 'medium');
-  const [chatDensity, setChatDensity] = useState(() => localStorage.getItem('chatDensity') || 'comfortable');
+  const [chatFontSize, setChatFontSize] = useState(() => getSetting('chatFontSize') || 'medium');
+  const [chatDensity, setChatDensity] = useState(() => getSetting('chatDensity') || 'comfortable');
   const [showOutline, setShowOutline] = useState(false);
-  const [motionMode, setMotionMode] = useState(() => localStorage.getItem('motionMode') || 'system');
+  const [motionMode, setMotionMode] = useState(() => getSetting('motionMode') || 'system');
   // Watched live: the OS toggle is what silently suppressed motion before,
   // and there was nothing on screen saying so.
   const [osReducedMotion, setOsReducedMotion] = useState(
@@ -783,22 +785,22 @@ function App() {
   const [topK, setTopK] = useState(() => readNum('topK', 40));
   const [repeatPenalty, setRepeatPenalty] = useState(() => readNum('repeatPenalty', 1.1));
   const [numCtx, setNumCtx] = useState(() => readNum('numCtx', 4096));
-  const [seed, setSeed] = useState(() => localStorage.getItem('seed') || '');
+  const [seed, setSeed] = useState(() => getSetting('seed') || '');
   // 'auto' leaves the field out entirely so each model keeps its own default.
-  const [thinkMode, setThinkMode] = useState(() => localStorage.getItem('thinkMode') || 'auto');
+  const [thinkMode, setThinkMode] = useState(() => getSetting('thinkMode') || 'auto');
   // One tool call per turn made `search -> open the page -> answer` impossible,
   // so answers stayed at snippet depth. A small budget allows a real chain.
   const [toolBudget, setToolBudget] = useState(() => readNum('toolBudget', 5));
-  const [autoGround, setAutoGround] = useState(() => localStorage.getItem('autoGround') !== 'false');
+  const [autoGround, setAutoGround] = useState(() => getSetting('autoGround') !== 'false');
   // Ollama's `format` field: 'json' forces valid JSON, and a JSON Schema
   // object constrains the shape field by field.
-  const [outputFormat, setOutputFormat] = useState(() => localStorage.getItem('outputFormat') || 'text');
-  const [outputSchema, setOutputSchema] = useState(() => localStorage.getItem('outputSchema') || '');
+  const [outputFormat, setOutputFormat] = useState(() => getSetting('outputFormat') || 'text');
+  const [outputSchema, setOutputSchema] = useState(() => getSetting('outputSchema') || '');
   const [schemaError, setSchemaError] = useState('');
 
   useEffect(() => {
-    localStorage.setItem('outputFormat', outputFormat);
-    localStorage.setItem('outputSchema', outputSchema);
+    setSetting('outputFormat', outputFormat);
+    setSetting('outputSchema', outputSchema);
   }, [outputFormat, outputSchema]);
 
   // Parsed once here so a broken schema is reported in settings rather than
@@ -826,14 +828,14 @@ function App() {
 
   // --- Knowledge (retrieval over attached documents) ---
   const [knowledge, setKnowledge] = useState([]);
-  const [ragEnabled, setRagEnabled] = useState(() => localStorage.getItem('ragEnabled') !== 'false');
-  const [embedModel, setEmbedModel] = useState(() => localStorage.getItem('embedModel') || DEFAULT_EMBED_MODEL);
+  const [ragEnabled, setRagEnabled] = useState(() => getSetting('ragEnabled') !== 'false');
+  const [embedModel, setEmbedModel] = useState(() => getSetting('embedModel') || DEFAULT_EMBED_MODEL);
   const [ragTopK, setRagTopK] = useState(() => readNum('ragTopK', 5));
 
   // --- Cross-chat memory ---
   const [memories, setMemories] = useState([]);
-  const [memoryEnabled, setMemoryEnabled] = useState(() => localStorage.getItem('memoryEnabled') !== 'false');
-  const [autoRemember, setAutoRemember] = useState(() => localStorage.getItem('autoRemember') === 'true');
+  const [memoryEnabled, setMemoryEnabled] = useState(() => getSetting('memoryEnabled') !== 'false');
+  const [autoRemember, setAutoRemember] = useState(() => getSetting('autoRemember') === 'true');
   const [extractingMemory, setExtractingMemory] = useState(false);
 
   // --- Regeneration variants ---
@@ -842,7 +844,7 @@ function App() {
   const pendingVariantsRef = useRef(null);
 
   // --- Auto-continue ---
-  const [autoContinue, setAutoContinue] = useState(() => localStorage.getItem('autoContinue') === 'true');
+  const [autoContinue, setAutoContinue] = useState(() => getSetting('autoContinue') === 'true');
   const [truncatedIndex, setTruncatedIndex] = useState(null);
   const continueDepthRef = useRef(0);
   const continuationTargetRef = useRef(null);   // { index, before, mode }
@@ -862,37 +864,37 @@ function App() {
   const [presets, setPresets] = useState([]);
   const [newPresetName, setNewPresetName] = useState('');
 
-  useEffect(() => { localStorage.setItem('autoContinue', String(autoContinue)); }, [autoContinue]);
+  useEffect(() => { setSetting('autoContinue', String(autoContinue)); }, [autoContinue]);
   useEffect(() => { setFolders(loadFolders(profileScope)); }, [profileScope]);
   useEffect(() => { setPresets(loadPresets(profileScope)); }, [profileScope]);
 
   // --- Context compaction ---
-  const [autoCompact, setAutoCompact] = useState(() => localStorage.getItem('autoCompact') !== 'false');
+  const [autoCompact, setAutoCompact] = useState(() => getSetting('autoCompact') !== 'false');
   const [compacting, setCompacting] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem('memoryEnabled', String(memoryEnabled));
-    localStorage.setItem('autoRemember', String(autoRemember));
-    localStorage.setItem('autoCompact', String(autoCompact));
+    setSetting('memoryEnabled', String(memoryEnabled));
+    setSetting('autoRemember', String(autoRemember));
+    setSetting('autoCompact', String(autoCompact));
   }, [memoryEnabled, autoRemember, autoCompact]);
 
   useEffect(() => {
-    localStorage.setItem('ragEnabled', String(ragEnabled));
-    localStorage.setItem('embedModel', embedModel);
-    localStorage.setItem('ragTopK', String(ragTopK));
+    setSetting('ragEnabled', String(ragEnabled));
+    setSetting('embedModel', embedModel);
+    setSetting('ragTopK', String(ragTopK));
   }, [ragEnabled, embedModel, ragTopK]);
-  const [stopSequences, setStopSequences] = useState(() => localStorage.getItem('stopSequences') || '');
+  const [stopSequences, setStopSequences] = useState(() => getSetting('stopSequences') || '');
   const [minP, setMinP] = useState(() => readNum('minP', 0));
   const [presencePenalty, setPresencePenalty] = useState(() => readNum('presencePenalty', 0));
   const [frequencyPenalty, setFrequencyPenalty] = useState(() => readNum('frequencyPenalty', 0));
   // How long Ollama keeps a model in VRAM after the last request.
-  const [keepAlive, setKeepAlive] = useState(() => localStorage.getItem('keepAlive') || '5m');
+  const [keepAlive, setKeepAlive] = useState(() => getSetting('keepAlive') || '5m');
 
   // --- Behaviour ---
-  const [defaultModel, setDefaultModel] = useState(() => localStorage.getItem('defaultModel') || '');
-  const [autoTitle, setAutoTitle] = useState(() => localStorage.getItem('autoTitle') !== 'false');
-  const [sendKey, setSendKey] = useState(() => localStorage.getItem('sendKey') || 'enter');
-  const [showTimestamps, setShowTimestamps] = useState(() => localStorage.getItem('showTimestamps') === 'true');
+  const [defaultModel, setDefaultModel] = useState(() => getSetting('defaultModel') || '');
+  const [autoTitle, setAutoTitle] = useState(() => getSetting('autoTitle') !== 'false');
+  const [sendKey, setSendKey] = useState(() => getSetting('sendKey') || 'enter');
+  const [showTimestamps, setShowTimestamps] = useState(() => getSetting('showTimestamps') === 'true');
   const [storageUsage, setStorageUsage] = useState(null);
 
   // --- Command palette / shortcuts ---
@@ -909,7 +911,7 @@ function App() {
   // --- Prompt library ---
   const [promptLibrary, setPromptLibrary] = useState(() => {
     try {
-      const saved = JSON.parse(localStorage.getItem('promptLibrary') || 'null');
+      const saved = JSON.parse(getSetting('promptLibrary') || 'null');
       return Array.isArray(saved) ? saved : DEFAULT_PROMPT_LIBRARY;
     } catch (e) {
       return DEFAULT_PROMPT_LIBRARY;
@@ -942,7 +944,7 @@ function App() {
     } else {
       document.documentElement.setAttribute('data-theme', theme);
     }
-    localStorage.setItem('theme', theme);
+    setSetting('theme', theme);
   }, [theme]);
 
   // Reading comfort is expressed as CSS variables so every surface follows.
@@ -953,8 +955,8 @@ function App() {
     const compact = chatDensity === 'compact';
     root.style.setProperty('--chat-gap', compact ? '1.15rem' : '2rem');
     root.style.setProperty('--bubble-padding', compact ? '0.5rem 0.8rem' : '0.75rem 1rem');
-    localStorage.setItem('chatFontSize', chatFontSize);
-    localStorage.setItem('chatDensity', chatDensity);
+    setSetting('chatFontSize', chatFontSize);
+    setSetting('chatDensity', chatDensity);
   }, [chatFontSize, chatDensity]);
 
   // 'system' leaves the attribute off so the prefers-reduced-motion media
@@ -963,35 +965,35 @@ function App() {
     const root = document.documentElement;
     if (motionMode === 'system') root.removeAttribute('data-motion');
     else root.setAttribute('data-motion', motionMode);
-    localStorage.setItem('motionMode', motionMode);
+    setSetting('motionMode', motionMode);
   }, [motionMode]);
 
   useEffect(() => {
-    localStorage.setItem('topP', String(topP));
-    localStorage.setItem('topK', String(topK));
-    localStorage.setItem('repeatPenalty', String(repeatPenalty));
-    localStorage.setItem('numCtx', String(numCtx));
-    localStorage.setItem('seed', seed);
-    localStorage.setItem('stopSequences', stopSequences);
-    localStorage.setItem('thinkMode', thinkMode);
-    localStorage.setItem('minP', String(minP));
-    localStorage.setItem('presencePenalty', String(presencePenalty));
-    localStorage.setItem('frequencyPenalty', String(frequencyPenalty));
-    localStorage.setItem('keepAlive', keepAlive);
-    localStorage.setItem('toolBudget', String(toolBudget));
-    localStorage.setItem('autoGround', String(autoGround));
+    setSetting('topP', String(topP));
+    setSetting('topK', String(topK));
+    setSetting('repeatPenalty', String(repeatPenalty));
+    setSetting('numCtx', String(numCtx));
+    setSetting('seed', seed);
+    setSetting('stopSequences', stopSequences);
+    setSetting('thinkMode', thinkMode);
+    setSetting('minP', String(minP));
+    setSetting('presencePenalty', String(presencePenalty));
+    setSetting('frequencyPenalty', String(frequencyPenalty));
+    setSetting('keepAlive', keepAlive);
+    setSetting('toolBudget', String(toolBudget));
+    setSetting('autoGround', String(autoGround));
   }, [topP, topK, repeatPenalty, numCtx, seed, stopSequences, thinkMode, minP, presencePenalty, frequencyPenalty, keepAlive, toolBudget, autoGround]);
 
   useEffect(() => {
-    localStorage.setItem('defaultModel', defaultModel);
-    localStorage.setItem('autoTitle', String(autoTitle));
-    localStorage.setItem('sendKey', sendKey);
-    localStorage.setItem('showTimestamps', String(showTimestamps));
-    localStorage.setItem('showSystemStrip', String(showSystemStrip));
+    setSetting('defaultModel', defaultModel);
+    setSetting('autoTitle', String(autoTitle));
+    setSetting('sendKey', sendKey);
+    setSetting('showTimestamps', String(showTimestamps));
+    setSetting('showSystemStrip', String(showSystemStrip));
   }, [defaultModel, autoTitle, sendKey, showTimestamps, showSystemStrip]);
 
   useEffect(() => {
-    localStorage.setItem('promptLibrary', JSON.stringify(promptLibrary));
+    setSetting('promptLibrary', JSON.stringify(promptLibrary));
   }, [promptLibrary]);
 
   useEffect(() => {
@@ -1006,10 +1008,10 @@ function App() {
   }, [codeTheme]);
 
   useEffect(() => {
-    localStorage.setItem('systemPrompt', systemPrompt);
-    localStorage.setItem('temperature', temperature.toString());
-    localStorage.setItem('maxTokens', maxTokens.toString());
-    localStorage.setItem('codeTheme', codeTheme);
+    setSetting('systemPrompt', systemPrompt);
+    setSetting('temperature', temperature.toString());
+    setSetting('maxTokens', maxTokens.toString());
+    setSetting('codeTheme', codeTheme);
   }, [systemPrompt, temperature, maxTokens, codeTheme]);
 
   // --- Toasts (replaces the blocking alert() calls) ---
@@ -1046,14 +1048,14 @@ function App() {
   const [isSynthesizing, setIsSynthesizing] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem('ttsEngine', ttsEngine);
-    localStorage.setItem('ttsRefAudio', ttsRefAudio);
-    localStorage.setItem('ttsPromptText', ttsPromptText);
-    localStorage.setItem('ttsTextLang', ttsTextLang);
-    localStorage.setItem('ttsPromptLang', ttsPromptLang);
-    localStorage.setItem('ttsSpeed', String(ttsSpeed));
-    localStorage.setItem('ttsMaxChars', String(ttsMaxChars));
-    localStorage.setItem('ttsAutoPlay', String(ttsAutoPlay));
+    setSetting('ttsEngine', ttsEngine);
+    setSetting('ttsRefAudio', ttsRefAudio);
+    setSetting('ttsPromptText', ttsPromptText);
+    setSetting('ttsTextLang', ttsTextLang);
+    setSetting('ttsPromptLang', ttsPromptLang);
+    setSetting('ttsSpeed', String(ttsSpeed));
+    setSetting('ttsMaxChars', String(ttsMaxChars));
+    setSetting('ttsAutoPlay', String(ttsAutoPlay));
   }, [ttsEngine, ttsRefAudio, ttsPromptText, ttsTextLang, ttsPromptLang, ttsSpeed, ttsMaxChars, ttsAutoPlay]);
 
   useEffect(() => {
@@ -1362,11 +1364,11 @@ function App() {
   const [consoleDockHeight, setConsoleDockHeight] = usePersistedNumber('consoleDockHeight', DEFAULT_CONSOLE_HEIGHT);
   const [artifactMaximized, setArtifactMaximized] = useState(false);
   const [consoleDocked, setConsoleDocked] = useState(false);
-  const [viewportPreset, setViewportPreset] = useState(() => localStorage.getItem('viewportPreset') || 'fit');
+  const [viewportPreset, setViewportPreset] = useState(() => getSetting('viewportPreset') || 'fit');
   const [viewportLandscape, setViewportLandscape] = useState(false);
   const [previewZoom, setPreviewZoom] = useState('fit');
 
-  useEffect(() => { localStorage.setItem('viewportPreset', viewportPreset); }, [viewportPreset]);
+  useEffect(() => { setSetting('viewportPreset', viewportPreset); }, [viewportPreset]);
 
   // Keep the panels usable when the window shrinks.
   useEffect(() => {
@@ -1822,44 +1824,17 @@ function App() {
     return options;
   };
 
-  // Every tab on this address shares one localStorage, so it shares one signed-in
-  // profile. Rather than each tab discovering that on its next reload — and
-  // appearing to swap identities — a change made anywhere is adopted here at
-  // once.
-  useEffect(() => {
-    if (!authReady) return undefined;
-
-    const onStorage = (event) => {
-      // Only the keys that decide who is signed in.
-      if (event.key !== null && event.key !== 'ollama-auth-session') return;
-
-      const nowLocal = readSession();
-      const sameUser = (nowLocal?.id || '') === (currentUser?.id || '');
-      if (sameUser) return;
-
-      // Settings and chats were both read at mount for the previous profile,
-      // so this is a reload rather than a re-render. Anything half-typed would
-      // be lost, so that waits for a quiet moment.
-      if (isGenerating || input.trim().length > 0) {
-        toast(t('auth.switchedElsewhere'), 'info', 12000, {
-          label: t('backup.reload'),
-          onClick: () => window.location.reload(),
-        });
-        return;
-      }
-      window.location.reload();
-    };
-
-    window.addEventListener('storage', onStorage);
-    return () => window.removeEventListener('storage', onStorage);
-  }, [authReady, currentUser?.id, isGenerating, input]);
+  // No cross-tab watcher any more. A tab's signed-in profile lives in its own
+  // sessionStorage, so another tab signing in is none of this one's business —
+  // which is the point: two tabs can be two accounts without dragging each
+  // other around, and their data cannot mix.
 
   // ---- Accounts ----
 
   const handleAuthenticated = (user, { created } = {}) => {
     setCurrentUser(user);
     saveSession(user);
-    localStorage.setItem('authIntroSeen', 'true');
+    setSetting('authIntroSeen', 'true');
     setShowAuthScreen(false);
     setShowProfileMenu(false);
     setActiveArtifact(null);
@@ -1929,7 +1904,7 @@ function App() {
     // Reached from the auth screen, where there may be no account attached, and
     // from "continue as guest", where there may be. Releasing is safe either way.
     if (syncUser) await releaseServerAccount();
-    localStorage.setItem('authIntroSeen', 'true');
+    setSetting('authIntroSeen', 'true');
     setShowAuthScreen(false);
   };
 
@@ -1937,6 +1912,7 @@ function App() {
     await releaseServerAccount();
     signOutSocial();
     saveSession(null);
+    setActiveScope('', null);   // this tab is the guest now
     setCurrentUser(null);
     setShowProfileMenu(false);
     setActiveArtifact(null);
@@ -1953,6 +1929,7 @@ function App() {
     await localforage.removeItem(sessionStorageKeyFor(victim.id));
     signOutSocial();
     saveSession(null);
+    setActiveScope('', null);   // this tab is the guest now
     setCurrentUser(null);
     setShowProfileMenu(false);
     setShowAuthScreen(true);

@@ -15,6 +15,7 @@
 //   localforage 'auth'                accounts (password hashes, passkeys)
 
 import localforage from 'localforage';
+import { readScopeSettings, writeScopeSettings, isScopedSetting } from './settingsStore.js';
 
 export const BACKUP_VERSION = 2;
 
@@ -39,9 +40,7 @@ const dumpStore = async (store, onlyKey = null) => {
   return out;
 };
 
-// chatFolders:<id> and samplingPresets:<id> — the suffixed form belongs to a
-// specific profile. The bare form is the guest's.
-const OTHER_PROFILE_KEY = /^(chatFolders|samplingPresets)(:|$)/;
+
 
 // Keys that belong to one profile, in the stores that are shared between them.
 const scopedKeys = (scope) => ({
@@ -66,17 +65,24 @@ export const collectBackup = async ({
   scope = null,
 } = {}) => {
   const only = scope === null ? null : scopedKeys(scope);
+  // Settings are stored per profile, so this is a lookup rather than a filter.
+  // An unscoped backup still sweeps the browser, which is what backing up a
+  // browser means.
   const settings = {};
-  for (let i = 0; i < localStorage.length; i++) {
-    const key = localStorage.key(i);
-    if (!key) continue;
-    if (!includeMachineSettings && MACHINE_LOCAL.has(key)) continue;
-    // Another profile's folders and presets live in localStorage too, under
-    // their own suffixed keys. Only this profile's belong in this payload.
-    if (only && OTHER_PROFILE_KEY.test(key)) {
-      if (key !== only.folders && key !== only.presets) continue;
+  if (only) {
+    Object.assign(settings, readScopeSettings(scope));
+    // Folders and presets keep their own suffixed keys; take just this one's.
+    for (const key of [only.folders, only.presets]) {
+      const value = localStorage.getItem(key);
+      if (value !== null) settings[key] = value;
     }
-    settings[key] = localStorage.getItem(key);
+  } else {
+    for (let i = 0; i < localStorage.length; i++) {
+      const key = localStorage.key(i);
+      if (!key) continue;
+      if (!includeMachineSettings && MACHINE_LOCAL.has(key)) continue;
+      settings[key] = localStorage.getItem(key);
+    }
   }
 
   // Chats sit in the default store under one key per profile.
@@ -157,8 +163,24 @@ export const restoreBackup = async (backup, {
   // meant nothing was ever applied. When the account is the source of truth
   // (a sync pull) its values win; a restore from a file stays conservative.
   const settingsOverwrite = replace || settingsWin;
+  const scope = primaryKey && primaryKey.startsWith(`${SESSION_PREFIX}:`)
+    ? primaryKey.slice(SESSION_PREFIX.length + 1)
+    : '';
+
   for (const [key, value] of Object.entries(backup.settings || {})) {
     if (MACHINE_LOCAL.has(key)) continue;   // names a path on one machine
+
+    // A scoped setting has to land where that profile reads it, or it is
+    // written into the browser-wide slot and every profile inherits it.
+    if (isScopedSetting(key)) {
+      if (!settingsOverwrite) {
+        const existing = readScopeSettings(scope);
+        if (key in existing) continue;
+      }
+      restored.settings += writeScopeSettings(scope, { [key]: value });
+      continue;
+    }
+
     const current = localStorage.getItem(key);
     if (!settingsOverwrite && current !== null) continue;
     if (current === value) continue;
