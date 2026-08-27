@@ -131,7 +131,9 @@ await send('Emulation.setDeviceMetricsOverride', {
 });
 await sleep(1200);
 
-const { result } = await send('Runtime.evaluate', { expression: probe, returnByValue: true });
+const { result } = await send('Runtime.evaluate', {
+  expression: probe, returnByValue: true, awaitPromise: true,
+});
 console.log(result?.result?.value ?? '(no result)');
 
 // A screenshot taken through the emulated viewport, unlike --window-size, is

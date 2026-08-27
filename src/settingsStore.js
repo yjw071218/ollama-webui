@@ -30,10 +30,15 @@ const NOT_A_SETTING = new Set([
   SESSION_KEY, LAST_USED_KEY,
 ]);
 
+// Marks a profile whose settings have been seeded, so the inheritance below
+// happens once instead of forever.
+const SEEDED_PREFIX = 'settingsSeeded';
+
 export const isScopedSetting = (key) =>
   !!key && !NOT_A_SETTING.has(key) && !MACHINE_LOCAL.has(key)
   && !key.startsWith('ollama-sessions') && !key.startsWith('chatFolders')
-  && !key.startsWith('samplingPresets') && !key.startsWith('settingsSnapshot');
+  && !key.startsWith('samplingPresets') && !key.startsWith('settingsSnapshot')
+  && !key.startsWith(SEEDED_PREFIX);
 
 /**
  * Where a setting is stored for a given profile.
@@ -83,9 +88,31 @@ export const bootScope = () => {
 
 export const getActiveScope = () => activeScope;
 
+const seedMarker = (scope) => `${SEEDED_PREFIX}@${scope}`;
+
+export const isSeeded = (scope) =>
+  !scope || localStorage.getItem(seedMarker(scope)) === '1';
+
+/**
+ * Give a profile the settings that were in effect when it first appeared.
+ *
+ * Once, and never again: after this the profile owns its settings outright and
+ * nothing another profile does can reach them.
+ */
+export const seedScope = (scope, fromScope = '') => {
+  if (!scope || isSeeded(scope)) return 0;
+  const copied = writeScopeSettings(scope, readScopeSettings(fromScope), { onlyMissing: true });
+  try { localStorage.setItem(seedMarker(scope), '1'); } catch (e) { /* quota */ }
+  return copied;
+};
+
 /** Point this tab at a profile. Other tabs are untouched. */
 export const setActiveScope = (scope, localUserId = null) => {
+  const previous = activeScope;
   activeScope = scope || '';
+  // A profile being activated for the first time takes over the setup that was
+  // on screen a moment ago, rather than snapping to defaults.
+  if (activeScope) seedScope(activeScope, previous);
   const record = { scope: activeScope, localUserId };
   try { globalThis.sessionStorage?.setItem(SESSION_KEY, JSON.stringify(record)); } catch (e) {}
   // Only so a *new* tab opens where you left off; existing tabs never read it.
@@ -94,16 +121,16 @@ export const setActiveScope = (scope, localUserId = null) => {
 
 // ------------------------------------------------------------ the accessors
 
-export const getSetting = (key) => {
-  const scoped = scopedKey(key, activeScope);
-  const value = localStorage.getItem(scoped);
-  if (value !== null || scoped === key) return value;
-
-  // First time this profile reads a setting it has never written: fall back to
-  // the browser-wide value so a new profile starts from the current setup
-  // rather than from defaults, which is what people expect on a first sign-in.
-  return localStorage.getItem(key);
-};
+/**
+ * Reads only this profile's own value.
+ *
+ * There is deliberately no fallback to the browser-wide key. Falling back
+ * looked like "a new profile inherits the current setup", and it is: once. As a
+ * read-time rule it means every profile that has not overridden a setting keeps
+ * reading the guest's, so changing something as the guest changes it for all of
+ * them. Inheritance happens once, when the profile is first activated.
+ */
+export const getSetting = (key) => localStorage.getItem(scopedKey(key, activeScope));
 
 export const setSetting = (key, value) => {
   try { localStorage.setItem(scopedKey(key, activeScope), value); } catch (e) { /* quota */ }
@@ -133,12 +160,22 @@ export const readScopeSettings = (scope) => {
   return out;
 };
 
-export const writeScopeSettings = (scope, settings) => {
+/**
+ * Write settings into a scope.
+ *
+ * `onlyMissing` is what seeding uses. A profile can already hold settings
+ * before it is first activated here — restored from its account on another
+ * device, say — and filling in around them is inheritance; writing over them
+ * would be losing the very thing that was synced.
+ */
+export const writeScopeSettings = (scope, settings, { onlyMissing = false } = {}) => {
   let changed = 0;
   for (const [key, value] of Object.entries(settings || {})) {
     if (!isScopedSetting(key)) continue;
     const target = scopedKey(key, scope);
-    if (localStorage.getItem(target) === value) continue;
+    const current = localStorage.getItem(target);
+    if (current === value) continue;
+    if (onlyMissing && current !== null) continue;
     try { localStorage.setItem(target, value); changed++; } catch (e) { /* quota */ }
   }
   return changed;

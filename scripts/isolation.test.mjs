@@ -145,18 +145,48 @@ S.setSetting('systemPrompt', 'alice prompt');
 eq('alice reads her own', S.getSetting('systemPrompt'), 'alice prompt');
 S.setActiveScope('');
 eq('the guest still reads theirs', S.getSetting('systemPrompt'), 'guest prompt');
+// Inheritance happens once, at first activation, and never again. As a
+// read-time fallback it meant every profile that had not overridden a setting
+// kept reading the guest's — so changing something as the guest changed it
+// everywhere, which is exactly what was reported.
+S.setActiveScope('');
 S.setActiveScope('srv-bob');
-eq('a new profile inherits rather than starting empty', S.getSetting('systemPrompt'), 'guest prompt');
+eq('a new profile inherits the setup that was on screen', S.getSetting('systemPrompt'), 'guest prompt');
+check('and is marked as seeded', S.isSeeded('srv-bob'));
+
+// The guest now changes their mind. Bob must not follow.
+S.setActiveScope('');
+S.setSetting('systemPrompt', 'guest changed this later');
+eq('the guest sees their own change', S.getSetting('systemPrompt'), 'guest changed this later');
+S.setActiveScope('srv-bob');
+eq('a seeded profile does not follow the guest', S.getSetting('systemPrompt'), 'guest prompt');
+
+// A setting the guest changes that bob never had is still not inherited.
+S.setActiveScope('');
+S.setSetting('chatFontSize', '20');
+S.setActiveScope('srv-bob');
+eq('nor does it pick up a setting added later', S.getSetting('chatFontSize'), null);
+
 S.setSetting('systemPrompt', 'bob prompt');
 S.setActiveScope('srv-alice');
 eq("and once it writes, alice is unaffected", S.getSetting('systemPrompt'), 'alice prompt');
+eq('re-seeding an already seeded profile does nothing', S.seedScope('srv-bob', ''), 0);
+
+// Seeding must fill in around what a profile already has, not write over it:
+// those values may have just been restored from the account.
+S.writeScopeSettings('srv-dave', { systemPrompt: 'from the account', theme: 'dark' });
+S.setActiveScope('');
+S.setActiveScope('srv-dave');
+eq('a synced value survives seeding', S.getSetting('systemPrompt'), 'from the account');
+eq('and its own settings too', S.getSetting('theme'), 'dark');
+S.setActiveScope('');
 
 const aliceSettings = S.readScopeSettings('srv-alice');
 eq('a scope reads back its own settings', aliceSettings.systemPrompt, 'alice prompt');
 check("and not another's", !Object.values(aliceSettings).includes('bob prompt'));
 
 const guestSettings = S.readScopeSettings('');
-eq('the guest reads back the bare keys', guestSettings.systemPrompt, 'guest prompt');
+eq('the guest reads back the bare keys', guestSettings.systemPrompt, 'guest changed this later');
 check('and not a scoped one', !Object.values(guestSettings).includes('alice prompt'));
 
 eq('writing a scope reports what changed', S.writeScopeSettings('srv-carol', { systemPrompt: 'carol' }), 1);
