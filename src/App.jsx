@@ -640,6 +640,9 @@ function App() {
   // Browser storage is per origin, so a device-local account cannot carry
   // settings to a phone. This one can: the server knows who signed in.
   const [syncUser, setSyncUser] = useState(null);
+  // Whether the server has been asked who is signed in. Until it answers,
+  // profileScope is not final and nothing should be loaded against it.
+  const [syncChecked, setSyncChecked] = useState(false);
   const [syncInfo, setSyncInfo] = useState(null);
   const [syncBusy, setSyncBusy] = useState('');
   const [syncForm, setSyncForm] = useState({ mode: 'login', name: '', email: '', password: '' });
@@ -673,28 +676,28 @@ function App() {
   // at mount.
   const settingsScopeRef = useRef(null);
   useEffect(() => {
-    if (!authReady) return;
+    if (!authReady || !syncChecked) return;
     const previous = settingsScopeRef.current;
     settingsScopeRef.current = profileScope;
 
     if (previous === null) { saveSnapshot(profileScope); return; }
     if (previous === profileScope) return;
     if (switchScope(previous, profileScope)) window.location.reload();
-  }, [profileScope, authReady]);
+  }, [profileScope, authReady, syncChecked]);
 
   // Keep the active profile's snapshot current, so a switch takes the settings
   // as they are now rather than as they were when it was last written.
   useEffect(() => {
-    if (!authReady) return undefined;
-    const timer = setInterval(() => saveSnapshot(profileScopeRef.current), 5000);
+    if (!authReady || !syncChecked) return undefined;
+    // On the way out only. A periodic write races with any other tab that has a
+    // different profile open, and they corrupt each other's snapshots.
     const onLeave = () => saveSnapshot(profileScopeRef.current);
     window.addEventListener('beforeunload', onLeave);
     return () => {
-      clearInterval(timer);
       window.removeEventListener('beforeunload', onLeave);
       onLeave();
     };
-  }, [authReady]);
+  }, [authReady, syncChecked]);
   const [showAuthScreen, setShowAuthScreen] = useState(false);
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showProfileDialog, setShowProfileDialog] = useState(false);
@@ -1213,7 +1216,7 @@ function App() {
   }, [profileScope]);
 
   useEffect(() => {
-    if (!authReady) return;
+    if (!authReady || !syncChecked) return;
     let cancelled = false;
     setIsStorageLoaded(false);
 
@@ -1265,7 +1268,7 @@ function App() {
     });
 
     return () => { cancelled = true; };
-  }, [storageKey, localScope, profileScope, authReady]);
+  }, [storageKey, localScope, profileScope, authReady, syncChecked]);
   
   const currentSession = sessions.find(s => s.id === currentSessionId) || sessions[0] || { id: Date.now(), title: 'New Chat', messages: [], createdAt: Date.now(), updatedAt: Date.now(), lastModel: '' };
   const messages = currentSession?.messages || [];
@@ -1790,6 +1793,38 @@ function App() {
     return options;
   };
 
+  // Every tab on this address shares one localStorage, so it shares one signed-in
+  // profile. Rather than each tab discovering that on its next reload — and
+  // appearing to swap identities — a change made anywhere is adopted here at
+  // once.
+  useEffect(() => {
+    if (!authReady) return undefined;
+
+    const onStorage = (event) => {
+      // Only the keys that decide who is signed in.
+      if (event.key !== null && event.key !== 'ollama-auth-session') return;
+
+      const nowLocal = readSession();
+      const sameUser = (nowLocal?.id || '') === (currentUser?.id || '');
+      if (sameUser) return;
+
+      // Settings and chats were both read at mount for the previous profile,
+      // so this is a reload rather than a re-render. Anything half-typed would
+      // be lost, so that waits for a quiet moment.
+      if (isGenerating || input.trim().length > 0) {
+        toast(t('auth.switchedElsewhere'), 'info', 12000, {
+          label: t('backup.reload'),
+          onClick: () => window.location.reload(),
+        });
+        return;
+      }
+      window.location.reload();
+    };
+
+    window.addEventListener('storage', onStorage);
+    return () => window.removeEventListener('storage', onStorage);
+  }, [authReady, currentUser?.id, isGenerating, input]);
+
   // ---- Accounts ----
 
   const handleAuthenticated = (user, { created } = {}) => {
@@ -2003,17 +2038,19 @@ function App() {
     let cancelled = false;
     (async () => {
       const config = await fetchServerConfig();
-      if (cancelled || !config) return;
+      if (cancelled || !config) return;   // no backend: the gate opens in finally
       // Do this before anything renders a sign-in button, or it reads the
       // config as absent and hides itself.
       setServerSocialConfig(config);
       setServerConfig(config);
 
       const me = await serverMe();
-      if (cancelled || !me?.success) return;
-      setSyncUser(me.user || null);
-      setSyncInfo(me.state || null);
-    })();
+      if (cancelled) return;
+      if (me?.success) {
+        setSyncUser(me.user || null);
+        setSyncInfo(me.state || null);
+      }
+    })().finally(() => { if (!cancelled) setSyncChecked(true); });
     return () => { cancelled = true; };
   }, []);
 

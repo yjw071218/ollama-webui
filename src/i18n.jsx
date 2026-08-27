@@ -21,6 +21,7 @@ export const LANGUAGES = [
 ];
 
 const en = {
+  'auth.switchedElsewhere': 'The signed-in profile changed in another tab. Every tab on this address shares one. Reload when you are ready.',
   'sync.remoteChanges': 'Changes arrived from another device. Reload to apply them.',
   'sync.linkGoogle': 'Link this device with Google',
   'sync.noCredential': 'Google did not return a credential. The sign-in was probably closed or blocked.',
@@ -415,6 +416,7 @@ const en = {
 };
 
 const ko = {
+  'auth.switchedElsewhere': '다른 탭에서 로그인한 프로필이 바뀌었습니다. 이 주소의 모든 탭은 하나를 공유합니다. 준비되면 새로고침하세요.',
   'sync.remoteChanges': '다른 기기의 변경사항이 도착했습니다. 새로고침하면 적용됩니다.',
   'sync.linkGoogle': 'Google로 이 기기 연결하기',
   'sync.noCredential': 'Google가 자격증명을 반환하지 않았습니다. 로그인 창이 닫혔거나 차단된 것 같습니다.',
@@ -809,6 +811,7 @@ const ko = {
 };
 
 const ja = {
+  'auth.switchedElsewhere': '別のタブでサインイン中のプロフィールが変わりました。このアドレスのすべてのタブは 1 つを共有します。準備ができたら再読み込みしてください。',
   'sync.remoteChanges': '別の端末からの変更が届きました。再読み込みで反映されます。',
   'sync.linkGoogle': 'Google でこの端末を接続',
   'sync.noCredential': 'Google が認証情報を返しませんでした。サインインが閉じられたかブロックされたようです。',
@@ -1203,6 +1206,7 @@ const ja = {
 };
 
 const zhHans = {
+  'auth.switchedElsewhere': '另一个标签页中登录的个人资料已更改。此地址的所有标签页共用一个。准备好后请刷新。',
   'sync.remoteChanges': '收到了来自其他设备的更改。刷新后生效。',
   'sync.linkGoogle': '用 Google 连接此设备',
   'sync.noCredential': 'Google 未返回凭据。登录窗口可能被关闭或拦截了。',
@@ -1598,6 +1602,7 @@ const zhHans = {
 
 const zhHant = {
   ...zhHans,
+  'auth.switchedElsewhere': '另一個分頁中登入的個人檔案已變更。此位址的所有分頁共用一個。準備好後請重新整理。',
   'sync.remoteChanges': '收到了來自其他裝置的變更。重新整理後生效。',
   'sync.linkGoogle': '用 Google 連接此裝置',
   'sync.noCredential': 'Google 未回傳憑證。登入視窗可能被關閉或攔截了。',
@@ -1991,6 +1996,7 @@ const zhHant = {
 };
 
 const es = {
+  'auth.switchedElsewhere': 'El perfil con sesión iniciada cambió en otra pestaña. Todas las pestañas de esta dirección comparten uno. Recarga cuando quieras.',
   'sync.remoteChanges': 'Llegaron cambios de otro dispositivo. Recarga para aplicarlos.',
   'sync.linkGoogle': 'Vincular este dispositivo con Google',
   'sync.noCredential': 'Google no devolvió una credencial. Probablemente se cerró o bloqueó el inicio de sesión.',
@@ -2385,6 +2391,7 @@ const es = {
 };
 
 const fr = {
+  'auth.switchedElsewhere': 'Le profil connecté a changé dans un autre onglet. Tous les onglets de cette adresse en partagent un seul. Rechargez quand vous voulez.',
   'sync.remoteChanges': 'Des modifications sont arrivées d’un autre appareil. Rechargez pour les appliquer.',
   'sync.linkGoogle': 'Lier cet appareil avec Google',
   'sync.noCredential': 'Google n’a pas renvoyé d’identifiant. La connexion a sans doute été fermée ou bloquée.',
@@ -2779,6 +2786,7 @@ const fr = {
 };
 
 const de = {
+  'auth.switchedElsewhere': 'Das angemeldete Profil wurde in einem anderen Tab geändert. Alle Tabs dieser Adresse teilen sich eines. Laden Sie neu, wenn es passt.',
   'sync.remoteChanges': 'Änderungen von einem anderen Gerät sind eingetroffen. Zum Anwenden neu laden.',
   'sync.linkGoogle': 'Dieses Gerät mit Google verknüpfen',
   'sync.noCredential': 'Google hat keine Anmeldedaten zurückgegeben. Die Anmeldung wurde vermutlich geschlossen oder blockiert.',
@@ -3173,6 +3181,7 @@ const de = {
 };
 
 const pt = {
+  'auth.switchedElsewhere': 'O perfil conectado mudou em outra aba. Todas as abas deste endereço compartilham um. Recarregue quando quiser.',
   'sync.remoteChanges': 'Chegaram alterações de outro dispositivo. Recarregue para aplicá-las.',
   'sync.linkGoogle': 'Vincular este dispositivo com o Google',
   'sync.noCredential': 'O Google não retornou uma credencial. O login provavelmente foi fechado ou bloqueado.',
@@ -3567,6 +3576,7 @@ const pt = {
 };
 
 const ru = {
+  'auth.switchedElsewhere': 'Профиль, под которым выполнен вход, изменился в другой вкладке. Все вкладки этого адреса используют один. Обновите, когда будет удобно.',
   'sync.remoteChanges': 'Пришли изменения с другого устройства. Обновите страницу, чтобы применить.',
   'sync.linkGoogle': 'Связать это устройство через Google',
   'sync.noCredential': 'Google не вернул учётные данные. Вероятно, вход был закрыт или заблокирован.',
@@ -3961,6 +3971,7 @@ const ru = {
 };
 
 const vi = {
+  'auth.switchedElsewhere': 'Hồ sơ đăng nhập đã thay đổi ở tab khác. Mọi tab của địa chỉ này dùng chung một hồ sơ. Hãy tải lại khi bạn sẵn sàng.',
   'sync.remoteChanges': 'Đã nhận thay đổi từ thiết bị khác. Tải lại để áp dụng.',
   'sync.linkGoogle': 'Liên kết thiết bị này bằng Google',
   'sync.noCredential': 'Google không trả về thông tin xác thực. Có thể cửa sổ đăng nhập đã bị đóng hoặc chặn.',
@@ -4355,6 +4366,7 @@ const vi = {
 };
 
 const ar = {
+  'auth.switchedElsewhere': 'تغيّر الملف الشخصي المسجّل في تبويب آخر. كل تبويبات هذا العنوان تتشارك ملفاً واحداً. أعد التحميل عندما تكون جاهزاً.',
   'sync.remoteChanges': 'وصلت تغييرات من جهاز آخر. أعد التحميل لتطبيقها.',
   'sync.linkGoogle': 'اربط هذا الجهاز عبر Google',
   'sync.noCredential': 'لم يُعِد Google بيانات اعتماد. على الأرجح أُغلقت نافذة الدخول أو حُجبت.',
