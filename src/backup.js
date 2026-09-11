@@ -12,12 +12,16 @@
 //   localforage default store         chats, keyed per profile
 //   localforage 'knowledge'           RAG documents and their embeddings
 //   localforage 'memory'              cross-chat memories
-//   localforage 'auth'                accounts (password hashes, passkeys)
+//
+// There used to be a fifth: an 'auth' store holding browser-local accounts,
+// password hashes and passkey public keys. Accounts live on the server now, so
+// a backup no longer carries credentials at all — which is the right shape for
+// a file people email to themselves.
 
 import localforage from 'localforage';
 import { readScopeSettings, writeScopeSettings, isScopedSetting } from './settingsStore.js';
 
-export const BACKUP_VERSION = 2;
+export const BACKUP_VERSION = 3;
 
 const named = (storeName) => localforage.createInstance({ name: 'ollama-webui', storeName });
 
@@ -54,15 +58,18 @@ const scopedKeys = (scope) => ({
 /**
  * Everything, ready to be written to a file.
  *
- * `scope` limits it to one profile. Sync always passes one: the stores are
- * shared between profiles on a machine, so gathering them wholesale would
+ * `scope` limits it to one account. Sync always passes one: the stores are
+ * shared between accounts on a machine, so gathering them wholesale would
  * publish the guest's chats and anyone else's alongside the account's, and put
  * them on every other device. A file backup with no scope still takes
  * everything, which is what "back up this browser" should mean.
+ *
+ * `ownerId` stamps the payload with the account it belongs to. A sync payload
+ * always carries one and is refused at both ends without it matching; a file
+ * backup leaves it null, because a file belongs to whoever is holding it.
  */
 export const collectBackup = async ({
-  includeAccounts = true, includeMachineSettings = false, primaryKey = '',
-  scope = null,
+  includeMachineSettings = false, primaryKey = '', scope = null, ownerId = null,
 } = {}) => {
   const only = scope === null ? null : scopedKeys(scope);
   // Settings are stored per profile, so this is a lookup rather than a filter.
@@ -97,20 +104,18 @@ export const collectBackup = async ({
     version: BACKUP_VERSION,
     createdAt: Date.now(),
     origin: typeof location !== 'undefined' ? location.origin : '',
-    // Which of the session buckets belongs to whoever made this. Profile ids
-    // are random per browser, so the same person signing in on a second device
-    // gets a different key and would otherwise read an empty bucket while their
-    // chats sat in one nothing ever looked at.
+    // Which of the session buckets belongs to whoever made this, so a device
+    // that keys the same account differently still knows which bucket to read.
     primaryKey: primaryKey || null,
+    // The account this belongs to. A sync payload is refused at both ends when
+    // this disagrees with the session, which is what stops one person's chats
+    // being filed under another person's name.
+    ownerId: ownerId || null,
     settings,
     sessions,
     knowledge: await dumpStore(named('knowledge'), only && only.knowledge),
     memory: await dumpStore(named('memory'), only && only.memory),
   };
-
-  // Accounts hold password hashes and passkey public keys. Useful when moving
-  // to a new device, and not something to hand out by accident.
-  if (includeAccounts) backup.auth = await dumpStore(named('auth'));
 
   return backup;
 };
@@ -121,9 +126,9 @@ export const describeBackup = (backup) => ({
   settings: Object.keys(backup?.settings || {}).length,
   documents: Object.keys(backup?.knowledge || {}).length,
   memories: Object.values(backup?.memory || {}).reduce((n, list) => n + (list?.length || 0), 0),
-  accounts: Array.isArray(backup?.auth?.['ollama-users']) ? backup.auth['ollama-users'].length : 0,
   createdAt: backup?.createdAt || null,
   origin: backup?.origin || '',
+  ownerId: backup?.ownerId || null,
 });
 
 export const isBackup = (data) =>
@@ -148,7 +153,7 @@ const mergeSessions = (existing, incoming) => {
  * default because the destructive one should be asked for.
  */
 export const restoreBackup = async (backup, {
-  mode = 'merge', includeAccounts = true, primaryKey = '', settingsWin = false,
+  mode = 'merge', primaryKey = '', settingsWin = false,
 } = {}) => {
   if (!isBackup(backup)) throw new Error('That file is not an Ollama WebUI backup.');
   if (backup.version > BACKUP_VERSION) {
@@ -156,7 +161,7 @@ export const restoreBackup = async (backup, {
   }
 
   const replace = mode === 'replace';
-  const restored = { settings: 0, chats: 0, documents: 0, memories: 0, accounts: 0, remapped: null };
+  const restored = { settings: 0, chats: 0, documents: 0, memories: 0, remapped: null };
 
   // Settings are not a set to union. Every one of them already exists locally,
   // because the app writes its defaults on startup — so "keep what is here"
@@ -231,21 +236,10 @@ export const restoreBackup = async (backup, {
     }
   }
 
-  if (includeAccounts && backup.auth) {
-    const auth = named('auth');
-    for (const [key, value] of Object.entries(backup.auth)) {
-      if (key === 'ollama-users' && !replace) {
-        const existing = (await auth.getItem(key)) || [];
-        const seen = new Set(existing.map(u => u.id));
-        const merged = [...existing, ...(value || []).filter(u => !seen.has(u.id))];
-        await auth.setItem(key, merged);
-        restored.accounts += merged.length - existing.length;
-        continue;
-      }
-      await auth.setItem(key, value);
-      if (key === 'ollama-users') restored.accounts += (value || []).length;
-    }
-  }
+  // A version 2 backup carries an `auth` store of browser-local accounts. It is
+  // deliberately ignored: those accounts no longer exist, and restoring
+  // password hashes for a login that was removed would put credentials back on
+  // disk for nothing.
 
   return restored;
 };

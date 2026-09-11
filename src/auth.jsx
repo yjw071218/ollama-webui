@@ -1,216 +1,259 @@
-import localforage from 'localforage';
+// Getting a provider to hand us a credential. Nothing more.
+//
+// This file used to be an account system: a user table in IndexedDB, PBKDF2 in
+// the browser, its own sessions, its own passkey verification. All of it is
+// gone, and none of it was replaced here — identity moved to the server, where
+// it belongs, and the client's side of it lives in session.jsx.
+//
+// What is left is genuinely browser work: loading Google's script, rendering
+// its button, starting Kakao's redirect, and reading what the redirect left in
+// the address bar. Each of these ends by handing a credential to the server,
+// which decides what it means. Nothing here decides who anybody is.
 
-/**
- * Device-local accounts.
- *
- * There is no server here, so this is a *profile* system: it separates chats
- * and settings per account on this machine. Passwords are stored as PBKDF2
- * hashes rather than plaintext, but anyone with access to this browser profile
- * can read the underlying IndexedDB. Treat it as separation, not as a security
- * boundary — the UI says so too.
- */
+import { api } from './session.jsx';
 
-const USERS_KEY = 'ollama-users';
-const SESSION_KEY = 'ollama-auth-session';
-const PBKDF2_ITERATIONS = 210000; // OWASP 2023 guidance for PBKDF2-SHA512
-const SESSION_DAYS = 30;
+/* =========================================================================
+   Provider configuration
+   ========================================================================= */
 
-const store = localforage.createInstance({ name: 'ollama-webui', storeName: 'auth' });
+// Filled in from /api/config at boot. Serving the identifiers at runtime is
+// what lets a phone — a different origin, with its own empty localStorage — get
+// a working sign-in button without anyone pasting keys in.
+let serverProvided = { googleClientId: '', kakaoRestKey: '' };
 
-const toBase64 = (buffer) => {
-  const bytes = new Uint8Array(buffer);
-  let binary = '';
-  for (let i = 0; i < bytes.length; i++) binary += String.fromCharCode(bytes[i]);
-  return btoa(binary);
+export const setServerSocialConfig = (config) => {
+  serverProvided = {
+    googleClientId: config?.googleClientId || '',
+    kakaoRestKey: config?.kakaoRestKey || '',
+  };
 };
 
-const fromBase64 = (text) => {
-  const binary = atob(text);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-  return bytes;
-};
-
-const randomBytes = (length) => {
-  const bytes = new Uint8Array(length);
-  crypto.getRandomValues(bytes);
-  return bytes;
-};
-
-export const randomId = () => toBase64(randomBytes(16)).replace(/[+/=]/g, '').slice(0, 20);
-
-export const derivePasswordHash = async (password, saltB64, iterations = PBKDF2_ITERATIONS) => {
-  const salt = saltB64 ? fromBase64(saltB64) : randomBytes(16);
-  const key = await crypto.subtle.importKey(
-    'raw',
-    new TextEncoder().encode(password),
-    'PBKDF2',
-    false,
-    ['deriveBits']
-  );
-  const bits = await crypto.subtle.deriveBits(
-    { name: 'PBKDF2', salt, iterations, hash: 'SHA-512' },
-    key,
-    256
-  );
-  return { hash: toBase64(bits), salt: toBase64(salt), iterations };
-};
-
-/** Length-independent comparison so a mismatch does not leak its position. */
-export const constantTimeEqual = (a, b) => {
-  const left = String(a);
-  const right = String(b);
-  let diff = left.length ^ right.length;
-  const max = Math.max(left.length, right.length);
-  for (let i = 0; i < max; i++) {
-    diff |= (left.charCodeAt(i) || 0) ^ (right.charCodeAt(i) || 0);
-  }
-  return diff === 0;
-};
-
-export const isValidEmail = (email) => /^[^\s@]+@[^\s@]+\.[^\s@]{2,}$/.test(String(email || '').trim());
-
-export const normalizeEmail = (email) => String(email || '').trim().toLowerCase();
-
-export const loadUsers = async () => {
-  const users = await store.getItem(USERS_KEY);
-  return Array.isArray(users) ? users : [];
-};
-
-const saveUsers = (users) => store.setItem(USERS_KEY, users);
-
-export const publicUser = (user) => user && ({
-  id: user.id,
-  email: user.email,
-  name: user.name,
-  provider: user.provider,
-  avatar: user.avatar || '',
-  createdAt: user.createdAt,
+export const socialConfig = () => ({
+  googleClientId: localStorage.getItem('googleClientId')
+    || serverProvided.googleClientId
+    || import.meta.env?.VITE_GOOGLE_CLIENT_ID || '',
+  // Kakao's code exchange needs the REST API key; the JavaScript key cannot be
+  // used for it. An older stored JS key is ignored rather than silently
+  // producing an invalid_client error.
+  kakaoRestKey: localStorage.getItem('kakaoRestKey')
+    || serverProvided.kakaoRestKey
+    || import.meta.env?.VITE_KAKAO_REST_KEY || '',
 });
 
-export const registerWithPassword = async ({ email, password, name }) => {
-  const clean = normalizeEmail(email);
-  if (!isValidEmail(clean)) return { error: 'auth.invalidEmail' };
-  if (!password || password.length < 8) return { error: 'auth.passwordShort' };
+// What is in effect without anything stored in this browser — which is what a
+// settings box should show as the placeholder rather than as a value.
+export const socialDefaults = () => ({
+  googleClientId: serverProvided.googleClientId || import.meta.env?.VITE_GOOGLE_CLIENT_ID || '',
+  kakaoRestKey: serverProvided.kakaoRestKey || import.meta.env?.VITE_KAKAO_REST_KEY || '',
+});
 
-  const users = await loadUsers();
-  if (users.some(u => u.email === clean && u.provider === 'password')) {
-    return { error: 'auth.emailTaken' };
-  }
+/* =========================================================================
+   Google
+   ========================================================================= */
 
-  const { hash, salt, iterations } = await derivePasswordHash(password);
-  const user = {
-    id: randomId(),
-    email: clean,
-    name: (name || '').trim() || clean.split('@')[0],
-    provider: 'password',
-    hash,
-    salt,
-    iterations,
-    createdAt: Date.now(),
-  };
-  await saveUsers([...users, user]);
-  return { user: publicUser(user) };
-};
-
-export const signInWithPassword = async ({ email, password }) => {
-  const clean = normalizeEmail(email);
-  const users = await loadUsers();
-  const user = users.find(u => u.email === clean && u.provider === 'password');
-
-  // Derive regardless of whether the account exists so a missing account and a
-  // wrong password take the same amount of time.
-  const salt = user?.salt || toBase64(randomBytes(16));
-  const iterations = user?.iterations || PBKDF2_ITERATIONS;
-  const { hash } = await derivePasswordHash(password || '', salt, iterations);
-
-  if (!user || !constantTimeEqual(hash, user.hash)) return { error: 'auth.invalidCredentials' };
-  return { user: publicUser(user) };
-};
-
-/** Upserts the account behind a social identity and returns it. */
-export const upsertSocialUser = async ({ provider, providerId, email, name, avatar }) => {
-  const users = await loadUsers();
-  const clean = normalizeEmail(email);
-  const existing = users.find(u => u.provider === provider && u.providerId === providerId);
-
+const loadScriptOnce = (id, src) => new Promise((resolve, reject) => {
+  const existing = document.getElementById(id);
   if (existing) {
-    const updated = { ...existing, name: name || existing.name, avatar: avatar || existing.avatar, email: clean || existing.email };
-    await saveUsers(users.map(u => (u.id === existing.id ? updated : u)));
-    return { user: publicUser(updated) };
+    if (existing.dataset.loaded === 'true') return resolve();
+    existing.addEventListener('load', () => resolve(), { once: true });
+    existing.addEventListener('error', () => reject(new Error(`Could not load ${src}`)), { once: true });
+    return;
   }
+  const script = document.createElement('script');
+  script.id = id;
+  script.src = src;
+  script.async = true;
+  script.onload = () => { script.dataset.loaded = 'true'; resolve(); };
+  script.onerror = () => reject(new Error(`Could not load ${src}`));
+  document.head.appendChild(script);
+});
 
-  const user = {
-    id: randomId(),
-    provider,
-    providerId,
-    email: clean,
-    name: name || clean.split('@')[0] || provider,
-    avatar: avatar || '',
-    createdAt: Date.now(),
-  };
-  await saveUsers([...users, user]);
-  return { user: publicUser(user) };
+/**
+ * Decode the payload of a JWT, for display only.
+ *
+ * Deliberately not used to decide anything. There is no signature check here
+ * and there cannot be a meaningful one — the server verifies the token against
+ * Google, and that is the only reading of it that counts.
+ */
+export const decodeJwtPayload = (token) => {
+  const parts = String(token || '').split('.');
+  if (parts.length < 2) throw new Error('Malformed token');
+  const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
+  const json = decodeURIComponent(
+    atob(padded)
+      .split('')
+      .map(c => `%${`00${c.charCodeAt(0).toString(16)}`.slice(-2)}`)
+      .join('')
+  );
+  return JSON.parse(json);
+};
+
+/**
+ * Render Google's own button into `container`.
+ *
+ * This is the reliable path: One Tap (`prompt()`) is suppressed whenever
+ * third-party cookies are blocked, the user dismissed it recently, or no Google
+ * session exists — in all of which the old flow silently produced "invalid
+ * credentials". The rendered button always works.
+ *
+ * `onCredential` receives the raw ID token. What it means is the server's to
+ * say; this function does not look inside it.
+ */
+export const renderGoogleButton = async (container, { onCredential, onError, locale, theme = 'outline' } = {}) => {
+  const { googleClientId } = socialConfig();
+  if (!googleClientId) return { error: 'auth.notConfigured' };
+  if (!container) return { error: 'auth.googleFailed' };
+
+  try {
+    await loadScriptOnce('google-gsi', 'https://accounts.google.com/gsi/client');
+  } catch (e) {
+    return { error: 'auth.googleScript' };
+  }
+  if (!window.google?.accounts?.id) return { error: 'auth.googleScript' };
+
+  window.google.accounts.id.initialize({
+    client_id: googleClientId,
+    callback: (response) => {
+      if (!response?.credential) return onError?.({ error: 'auth.googleFailed' });
+      onCredential?.(response.credential);
+    },
+    auto_select: false,
+    cancel_on_tap_outside: true,
+    use_fedcm_for_prompt: true,
+  });
+
+  container.innerHTML = '';
+  window.google.accounts.id.renderButton(container, {
+    type: 'standard',
+    theme,
+    size: 'large',
+    text: 'continue_with',
+    shape: 'rectangular',
+    logo_alignment: 'left',
+    width: Math.min(Math.round(container.clientWidth) || 320, 400),
+    locale,
+  });
+
+  return { rendered: true };
+};
+
+/**
+ * Let Google forget the automatic choice.
+ *
+ * Without this a sign-out is undone by the next visit: One Tap picks the same
+ * account again without asking, which on a shared computer means the previous
+ * person is back.
+ */
+export const forgetGoogleAutoSelect = () => {
+  try {
+    window.google?.accounts?.id?.disableAutoSelect?.();
+  } catch (e) {
+    // Signing out must succeed even if a provider SDK misbehaves.
+  }
 };
 
 /* =========================================================================
-   Profile editing
+   Kakao
    ========================================================================= */
 
-/** Patches the stored record and returns the public view of it. */
-export const updateUser = async (userId, patch) => {
-  const users = await loadUsers();
-  const existing = users.find(u => u.id === userId);
-  if (!existing) return { error: 'auth.invalidCredentials' };
+export const kakaoRedirectUri = () => `${window.location.origin}/kakao/callback`;
 
-  const name = patch.name !== undefined ? String(patch.name).trim() : existing.name;
-  if (patch.name !== undefined && !name) return { error: 'auth.nameRequired' };
+/**
+ * Kakao Login, authorization-code grant.
+ *
+ * The JS SDK v2 removed `Kakao.Auth.login()`, and Kakao's token endpoint
+ * neither allows browser calls (no CORS) nor accepts the JavaScript key — it
+ * wants the REST API key. So the server starts it, the server exchanges the
+ * code, and the browser comes back already holding a session.
+ */
+export const signInWithKakao = async () => {
+  const redirectUri = kakaoRedirectUri();
 
-  let email = existing.email;
-  if (patch.email !== undefined) {
-    const clean = normalizeEmail(patch.email);
-    if (clean && !isValidEmail(clean)) return { error: 'auth.invalidEmail' };
-    // Only password accounts key on email, so only they need uniqueness.
-    if (clean && clean !== existing.email
-        && users.some(u => u.id !== userId && u.provider === 'password' && u.email === clean)) {
-      return { error: 'auth.emailTaken' };
-    }
-    email = clean;
+  // The state has to be issued by whoever will verify it — a value this page
+  // invents and this page checks says nothing about a forged callback.
+  let start;
+  try {
+    // Through `api` for the session header: the state issued here remembers
+    // which tab started the sign-in, and the callback uses that to replace this
+    // tab's session rather than whichever one another tab is holding.
+    start = await api(`/kakao/start?redirect_uri=${encodeURIComponent(redirectUri)}`);
+  } catch (e) {
+    // 501 is the server saying Kakao was never set up here, which is a
+    // different thing to tell someone than "it failed".
+    return e.status === 501
+      ? { error: 'auth.notConfigured', detail: e.message }
+      : { error: 'auth.kakaoFailed', detail: e.message };
   }
 
-  const updated = {
-    ...existing,
-    name,
-    email,
-    avatar: patch.avatar !== undefined ? patch.avatar : existing.avatar,
-  };
-
-  await saveUsers(users.map(u => (u.id === userId ? updated : u)));
-  return { user: publicUser(updated) };
+  // A full navigation, not a popup. Popups are blocked by default in plenty of
+  // browsers and are miserable on a phone, and a redirect is what both Kakao's
+  // documentation and the redirect URI itself describe.
+  window.location.assign(start.authorizeUrl);
+  return { redirecting: true };
 };
 
-export const changePassword = async (userId, currentPassword, nextPassword) => {
-  const users = await loadUsers();
-  const existing = users.find(u => u.id === userId);
-  if (!existing) return { error: 'auth.invalidCredentials' };
-  if (existing.provider !== 'password') return { error: 'auth.passwordUnavailable' };
-  if (!nextPassword || nextPassword.length < 8) return { error: 'auth.passwordShort' };
+/**
+ * What the callback left in the address bar, if anything.
+ *
+ * The login finishes on the server and ends in a redirect, so its outcome
+ * arrives as a query parameter rather than a return value. Reading it clears
+ * it, so a refresh does not report the same thing twice.
+ */
+export const readKakaoOutcome = () => {
+  const params = new URLSearchParams(window.location.search);
+  const outcome = params.get('kakao');
+  if (!outcome) return null;
 
-  const { hash } = await derivePasswordHash(currentPassword || '', existing.salt, existing.iterations);
-  if (!constantTimeEqual(hash, existing.hash)) return { error: 'auth.wrongCurrentPassword' };
+  const detail = params.get('detail') || '';
+  params.delete('kakao');
+  params.delete('detail');
+  const query = params.toString();
+  window.history.replaceState({}, '', window.location.pathname + (query ? `?${query}` : ''));
 
-  // A new salt on every change, so the stored hash never repeats.
-  const next = await derivePasswordHash(nextPassword);
-  const updated = { ...existing, hash: next.hash, salt: next.salt, iterations: next.iterations };
-  await saveUsers(users.map(u => (u.id === userId ? updated : u)));
-  return { user: publicUser(updated) };
+  return { outcome, detail };
 };
+
+/**
+ * Sever the connection between this app and the Kakao account.
+ *
+ * Distinct from logging out, and what 연결 끊기 means: the app's permission is
+ * withdrawn and the next sign-in asks for consent again. Signing out already
+ * ends the Kakao session server-side, so there is no separate call for that.
+ */
+export const kakaoUnlink = async () => {
+  try {
+    return await api('/kakao/unlink', { method: 'POST' });
+  } catch (e) {
+    return { success: false, error: e.message };
+  }
+};
+
+/**
+ * Whether this account still holds a live Kakao connection.
+ *
+ * Through `api` rather than a bare fetch, so it carries the header naming which
+ * of this browser's sessions is asking. A raw fetch would be answered for
+ * whichever account signed in most recently — which, with two tabs open, is
+ * frequently not the one on this screen.
+ */
+export const kakaoStatus = async () => {
+  try {
+    return await api('/kakao/status');
+  } catch (e) {
+    return { success: false, connected: false };
+  }
+};
+
+/* =========================================================================
+   Avatars
+   ========================================================================= */
 
 const AVATAR_SIZE = 160;
 
 /**
- * Squares and shrinks an uploaded image before it is stored, so a profile
- * picture cannot bloat IndexedDB with a multi-megabyte data URL.
+ * Square and shrink an uploaded image before it is stored, so a profile picture
+ * cannot bloat the account's state with a multi-megabyte data URL.
  */
 export const prepareAvatar = (file) => new Promise((resolve, reject) => {
   if (!file || !file.type.startsWith('image/')) return reject(new Error('Not an image'));
@@ -238,540 +281,17 @@ export const prepareAvatar = (file) => new Promise((resolve, reject) => {
   reader.readAsDataURL(file);
 });
 
-export const deleteUser = async (userId) => {
-  const users = await loadUsers();
-  await saveUsers(users.filter(u => u.id !== userId));
-  await localforage.removeItem(sessionStorageKeyFor(userId));
-};
-
-/** Chats are namespaced per profile; the guest keeps the original key. */
-export const sessionStorageKeyFor = (userId) => (
-  userId ? `ollama-sessions:${userId}` : 'ollama-sessions'
-);
-
-export const saveSession = (user) => {
-  if (!user) {
-    localStorage.removeItem(SESSION_KEY);
-    return;
-  }
-  localStorage.setItem(SESSION_KEY, JSON.stringify({
-    userId: user.id,
-    expiresAt: Date.now() + SESSION_DAYS * 24 * 60 * 60 * 1000,
-  }));
-};
-
-export const readSession = () => {
-  try {
-    const raw = localStorage.getItem(SESSION_KEY);
-    if (!raw) return null;
-    const parsed = JSON.parse(raw);
-    if (!parsed?.userId || !parsed?.expiresAt || parsed.expiresAt < Date.now()) {
-      localStorage.removeItem(SESSION_KEY);
-      return null;
-    }
-    return parsed;
-  } catch (e) {
-    return null;
-  }
-};
-
 /* =========================================================================
-   Social sign-in
-   =========================================================================
-   Both providers here are pure browser flows keyed by a *public* client
-   identifier, so no client secret ever lives in this repo. The user supplies
-   their own IDs in Settings -> Account.
+   Storage keys
    ========================================================================= */
 
-// A build-time value from .env behaves like a real site: whoever opens the app
-// just sees a working button. The stored value lets you override it at runtime.
-// Filled in from /api/config once the backend answers. Serving the identifiers
-// at runtime is what lets a phone — a different origin, with its own empty
-// localStorage — get a working sign-in button without anyone pasting keys in.
-let serverProvided = { googleClientId: '', kakaoRestKey: '' };
-
-export const setServerSocialConfig = (config) => {
-  serverProvided = {
-    googleClientId: config?.googleClientId || '',
-    kakaoRestKey: config?.kakaoRestKey || '',
-  };
-};
-
-export const socialConfig = () => ({
-  googleClientId: localStorage.getItem('googleClientId')
-    || serverProvided.googleClientId
-    || import.meta.env?.VITE_GOOGLE_CLIENT_ID || '',
-  // Kakao's code exchange needs the REST API key; the JavaScript key cannot
-  // be used for it. An older stored JS key is ignored rather than silently
-  // producing an invalid_client error.
-  kakaoRestKey: localStorage.getItem('kakaoRestKey')
-    || serverProvided.kakaoRestKey
-    || import.meta.env?.VITE_KAKAO_REST_KEY || '',
-});
-
-// What is in effect without anything stored in this browser — which is what a
-// settings box should show as the placeholder rather than as a value.
-export const socialDefaults = () => ({
-  googleClientId: serverProvided.googleClientId || import.meta.env?.VITE_GOOGLE_CLIENT_ID || '',
-  kakaoRestKey: serverProvided.kakaoRestKey || import.meta.env?.VITE_KAKAO_REST_KEY || '',
-});
-
-const loadScriptOnce = (id, src) => new Promise((resolve, reject) => {
-  const existing = document.getElementById(id);
-  if (existing) {
-    if (existing.dataset.loaded === 'true') return resolve();
-    existing.addEventListener('load', () => resolve(), { once: true });
-    existing.addEventListener('error', () => reject(new Error(`Could not load ${src}`)), { once: true });
-    return;
-  }
-  const script = document.createElement('script');
-  script.id = id;
-  script.src = src;
-  script.async = true;
-  script.onload = () => { script.dataset.loaded = 'true'; resolve(); };
-  script.onerror = () => reject(new Error(`Could not load ${src}`));
-  document.head.appendChild(script);
-});
-
-/** Decodes the payload of a JWT. Signature checking needs a server. */
-export const decodeJwtPayload = (token) => {
-  const parts = String(token || '').split('.');
-  if (parts.length < 2) throw new Error('Malformed token');
-  const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
-  const padded = base64 + '='.repeat((4 - (base64.length % 4)) % 4);
-  const json = decodeURIComponent(
-    atob(padded)
-      .split('')
-      .map(c => `%${`00${c.charCodeAt(0).toString(16)}`.slice(-2)}`)
-      .join('')
-  );
-  return JSON.parse(json);
-};
-
 /**
- * Google Identity Services. The button flow returns an ID token (a JWT)
- * straight to the browser — no secret and no redirect needed.
- */
-/** Turns an ID token into a stored profile. */
-export const acceptGoogleCredential = async (credential) => {
-  const payload = decodeJwtPayload(credential);
-  const result = await upsertSocialUser({
-    provider: 'google',
-    providerId: payload.sub,
-    email: payload.email,
-    name: payload.name || payload.given_name,
-    avatar: payload.picture,
-  });
-  // The credential rides on the user object, not beside it: every caller passes
-  // `result.user` onwards and anything alongside it is dropped. The backend
-  // verifies the token itself; this is only delivery, and a backend that is not
-  // there simply means sync stays off.
-  return { user: { ...result.user, credential } };
-};
-
-/**
- * Renders Google's own button into `container`.
+ * Where a scope's chats live.
  *
- * This is the reliable path: One Tap (`prompt()`) is suppressed whenever
- * third-party cookies are blocked, the user dismissed it recently, or no
- * Google session exists — in all of which the old flow silently produced
- * "invalid credentials". The rendered button always works.
+ * The guest keeps the bare key, which is not only tidiness: every install that
+ * existed before any of this has its chats there, and the guest is who they
+ * belong to until somebody signs in and adopts them.
  */
-export const renderGoogleButton = async (container, { onResult, locale, theme = 'outline' } = {}) => {
-  const { googleClientId } = socialConfig();
-  if (!googleClientId) return { error: 'auth.notConfigured' };
-  if (!container) return { error: 'auth.googleFailed' };
-
-  try {
-    await loadScriptOnce('google-gsi', 'https://accounts.google.com/gsi/client');
-  } catch (e) {
-    return { error: 'auth.googleScript' };
-  }
-  if (!window.google?.accounts?.id) return { error: 'auth.googleScript' };
-
-  window.google.accounts.id.initialize({
-    client_id: googleClientId,
-    callback: async (response) => {
-      if (!response?.credential) {
-        onResult?.({ error: 'auth.googleFailed' });
-        return;
-      }
-      try {
-        onResult?.(await acceptGoogleCredential(response.credential));
-      } catch (err) {
-        onResult?.({ error: 'auth.googleFailed', detail: err.message });
-      }
-    },
-    auto_select: false,
-    cancel_on_tap_outside: true,
-    use_fedcm_for_prompt: true,
-  });
-
-  container.innerHTML = '';
-  window.google.accounts.id.renderButton(container, {
-    type: 'standard',
-    theme,
-    size: 'large',
-    text: 'continue_with',
-    shape: 'rectangular',
-    logo_alignment: 'left',
-    width: Math.min(Math.round(container.clientWidth) || 320, 400),
-    locale,
-  });
-
-  return { rendered: true };
-};
-
-/**
- * One Tap. Kept as a manual fallback; `renderGoogleButton` is what the UI uses.
- * A blocked prompt now reports Google's own reason instead of a generic error.
- */
-export const signInWithGoogle = async () => {
-  const { googleClientId } = socialConfig();
-  if (!googleClientId) return { error: 'auth.notConfigured' };
-
-  try {
-    await loadScriptOnce('google-gsi', 'https://accounts.google.com/gsi/client');
-  } catch (e) {
-    return { error: 'auth.googleScript' };
-  }
-  if (!window.google?.accounts?.id) return { error: 'auth.googleScript' };
-
-  const outcome = await new Promise((resolve) => {
-    let settled = false;
-    window.google.accounts.id.initialize({
-      client_id: googleClientId,
-      callback: (response) => {
-        settled = true;
-        resolve({ credential: response?.credential || null });
-      },
-      auto_select: false,
-      cancel_on_tap_outside: true,
-    });
-    window.google.accounts.id.prompt((notification) => {
-      if (settled) return;
-      if (notification.isNotDisplayed?.()) {
-        resolve({ blocked: notification.getNotDisplayedReason?.() || 'not_displayed' });
-      } else if (notification.isSkippedMoment?.()) {
-        resolve({ blocked: notification.getSkippedReason?.() || 'skipped' });
-      }
-    });
-  });
-
-  if (outcome.blocked) return { error: 'auth.googleBlocked', detail: outcome.blocked };
-  if (!outcome.credential) return { error: 'auth.googleFailed' };
-
-  return acceptGoogleCredential(outcome.credential);
-};
-
-/** Kakao JavaScript SDK: the JS key is a public app key, not a secret. */
-export const kakaoRedirectUri = () => `${window.location.origin}/kakao/callback`;
-
-/**
- * Kakao Login, authorization-code grant.
- *
- * The JS SDK v2 removed `Kakao.Auth.login()`, and Kakao's token endpoint
- * neither allows browser calls (no CORS) nor accepts the JavaScript key —
- * it wants the REST API key. So the popup collects the code and the dev
- * server's /kakao/exchange middleware trades it for a profile.
- */
-export const signInWithKakao = async () => {
-  const redirectUri = kakaoRedirectUri();
-
-  // Ask the server to start it. The state has to be issued by whoever will
-  // verify it — a value this page invents and this page checks says nothing
-  // about a forged callback — and the authorize URL carries the REST key,
-  // which belongs where it is configured.
-  let start;
-  try {
-    const res = await fetch(`/kakao/start?redirect_uri=${encodeURIComponent(redirectUri)}`, {
-      credentials: 'same-origin',
-    });
-    start = await res.json();
-  } catch (e) {
-    return { error: 'auth.kakaoFailed', detail: e.message };
-  }
-  if (!start?.success) return { error: 'auth.notConfigured', detail: start?.error };
-
-  // A full navigation, not a popup. Popups are blocked by default in plenty of
-  // browsers and are miserable on a phone, and a redirect is what both Kakao's
-  // documentation and the redirect URI itself describe. The page that comes
-  // back is already signed in, so there is nothing to return.
-  window.location.assign(start.authorizeUrl);
-  return { redirecting: true };
-};
-
-/**
- * What the callback left in the address bar, if anything.
- *
- * The login finishes on the server and ends in a redirect, so its outcome
- * arrives as a query parameter rather than a return value. Reading it clears
- * it, so a refresh does not report the same thing twice.
- */
-export const readKakaoOutcome = () => {
-  const params = new URLSearchParams(window.location.search);
-  const outcome = params.get('kakao');
-  if (!outcome) return null;
-
-  const detail = params.get('detail') || '';
-  params.delete('kakao');
-  params.delete('detail');
-  const query = params.toString();
-  window.history.replaceState({}, '', window.location.pathname + (query ? `?${query}` : ''));
-
-  return { outcome, detail };
-};
-
-export const signOutSocial = () => {
-  try {
-    window.google?.accounts?.id?.disableAutoSelect?.();
-  } catch (e) {
-    // Signing out locally must succeed even if a provider SDK misbehaves.
-  }
-};
-
-/* =========================================================================
-   Passkeys (WebAuthn)
-   =========================================================================
-   The zero-configuration path. No provider to register with, no client ID,
-   no redirect: the browser and the OS authenticator do the work, and the
-   signature is verified here with WebCrypto against the public key captured
-   at sign-up. On a device without a platform authenticator this simply
-   reports that it is unavailable and the other methods still work.
-   ========================================================================= */
-
-const toBase64Url = (buffer) => toBase64(buffer).replace(/\+/g, '-').replace(/\//g, '_').replace(/=+$/, '');
-
-export const isPasskeySupported = () => (
-  typeof window !== 'undefined'
-  && !!window.PublicKeyCredential
-  && !!navigator.credentials?.create
+export const sessionStorageKeyFor = (scope) => (
+  scope ? `ollama-sessions:${scope}` : 'ollama-sessions'
 );
-
-/** True when this device can create a passkey without a roaming security key. */
-export const hasPlatformAuthenticator = async () => {
-  if (!isPasskeySupported()) return false;
-  try {
-    return await window.PublicKeyCredential.isUserVerifyingPlatformAuthenticatorAvailable();
-  } catch (e) {
-    return false;
-  }
-};
-
-/**
- * WebAuthn returns ECDSA signatures DER-encoded, while WebCrypto verifies the
- * raw r||s form. Both integers are left-padded to 32 bytes.
- */
-export const derToRawEcdsaSignature = (der) => {
-  const bytes = new Uint8Array(der);
-  if (bytes[0] !== 0x30) throw new Error('Malformed ECDSA signature');
-
-  // Skip the SEQUENCE tag and its (possibly long-form) length.
-  let offset = 1;
-  offset += (bytes[offset] & 0x80) ? 1 + (bytes[offset] & 0x7f) : 1;
-
-  const readInteger = () => {
-    if (bytes[offset] !== 0x02) throw new Error('Malformed ECDSA signature');
-    const length = bytes[offset + 1];
-    const value = bytes.slice(offset + 2, offset + 2 + length);
-    offset += 2 + length;
-    return value;
-  };
-
-  const pad = (value) => {
-    let trimmed = value;
-    while (trimmed.length > 32 && trimmed[0] === 0) trimmed = trimmed.slice(1);
-    if (trimmed.length > 32) throw new Error('Malformed ECDSA signature');
-    const out = new Uint8Array(32);
-    out.set(trimmed, 32 - trimmed.length);
-    return out;
-  };
-
-  const r = pad(readInteger());
-  const s = pad(readInteger());
-  const raw = new Uint8Array(64);
-  raw.set(r, 0);
-  raw.set(s, 32);
-  return raw;
-};
-
-const COSE_ALGORITHMS = {
-  '-7': { name: 'ECDSA', importParams: { name: 'ECDSA', namedCurve: 'P-256' }, verifyParams: { name: 'ECDSA', hash: 'SHA-256' }, der: true },
-  '-257': { name: 'RSASSA-PKCS1-v1_5', importParams: { name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256' }, verifyParams: { name: 'RSASSA-PKCS1-v1_5' }, der: false },
-};
-
-const concatBytes = (a, b) => {
-  const out = new Uint8Array(a.byteLength + b.byteLength);
-  out.set(new Uint8Array(a), 0);
-  out.set(new Uint8Array(b), a.byteLength);
-  return out;
-};
-
-/** Verifies an assertion against the stored SPKI public key. */
-export const verifyAssertion = async ({ publicKeySpki, algorithm, authenticatorData, clientDataJSON, signature }) => {
-  const spec = COSE_ALGORITHMS[String(algorithm)];
-  if (!spec) throw new Error(`Unsupported passkey algorithm ${algorithm}`);
-
-  const key = await crypto.subtle.importKey(
-    'spki',
-    fromBase64(publicKeySpki),
-    spec.importParams,
-    false,
-    ['verify']
-  );
-
-  const clientDataHash = await crypto.subtle.digest('SHA-256', clientDataJSON);
-  const signedData = concatBytes(authenticatorData, clientDataHash);
-  const sig = spec.der ? derToRawEcdsaSignature(signature) : new Uint8Array(signature);
-
-  return crypto.subtle.verify(spec.verifyParams, key, sig, signedData);
-};
-
-const newChallenge = () => randomBytes(32);
-
-export const registerPasskey = async ({ name }) => {
-  if (!isPasskeySupported()) return { error: 'auth.passkeyUnsupported' };
-
-  const displayName = (name || '').trim() || 'Passkey user';
-  const userId = randomId();
-  const challenge = newChallenge();
-
-  let credential;
-  try {
-    credential = await navigator.credentials.create({
-      publicKey: {
-        challenge,
-        rp: { name: 'Ollama WebUI', id: window.location.hostname },
-        user: {
-          id: new TextEncoder().encode(userId),
-          name: displayName,
-          displayName,
-        },
-        pubKeyCredParams: [{ type: 'public-key', alg: -7 }, { type: 'public-key', alg: -257 }],
-        authenticatorSelection: {
-          residentKey: 'required',      // so sign-in needs no username
-          requireResidentKey: true,
-          userVerification: 'preferred',
-        },
-        timeout: 60000,
-        attestation: 'none',
-      },
-    });
-  } catch (err) {
-    if (err.name === 'NotAllowedError') return { error: 'auth.passkeyCancelled' };
-    return { error: 'auth.passkeyFailed', detail: err.message };
-  }
-
-  if (!credential) return { error: 'auth.passkeyCancelled' };
-
-  const response = credential.response;
-  if (typeof response.getPublicKey !== 'function') return { error: 'auth.passkeyUnsupported' };
-  const spki = response.getPublicKey();
-  if (!spki) return { error: 'auth.passkeyUnsupported' };
-
-  const user = {
-    id: userId,
-    provider: 'passkey',
-    credentialId: toBase64Url(credential.rawId),
-    publicKeySpki: toBase64(spki),
-    algorithm: response.getPublicKeyAlgorithm(),
-    email: '',
-    name: displayName,
-    avatar: '',
-    createdAt: Date.now(),
-  };
-
-  const users = await loadUsers();
-  await saveUsers([...users, user]);
-  return { user: publicUser(user) };
-};
-
-export const signInWithPasskey = async () => {
-  if (!isPasskeySupported()) return { error: 'auth.passkeyUnsupported' };
-
-  const users = await loadUsers();
-  const passkeyUsers = users.filter(u => u.provider === 'passkey');
-  if (passkeyUsers.length === 0) return { error: 'auth.passkeyNone' };
-
-  const challenge = newChallenge();
-  let assertion;
-  try {
-    assertion = await navigator.credentials.get({
-      publicKey: {
-        challenge,
-        rpId: window.location.hostname,
-        // Empty list => the browser offers every discoverable passkey for this site.
-        allowCredentials: [],
-        userVerification: 'preferred',
-        timeout: 60000,
-      },
-    });
-  } catch (err) {
-    if (err.name === 'NotAllowedError') return { error: 'auth.passkeyCancelled' };
-    return { error: 'auth.passkeyFailed', detail: err.message };
-  }
-
-  if (!assertion) return { error: 'auth.passkeyCancelled' };
-
-  const credentialId = toBase64Url(assertion.rawId);
-  const user = passkeyUsers.find(u => u.credentialId === credentialId);
-  if (!user) return { error: 'auth.passkeyUnknown' };
-
-  // Confirm the assertion really was signed by the key we stored, and that the
-  // authenticator echoed back the challenge we just generated.
-  const clientData = JSON.parse(new TextDecoder().decode(assertion.response.clientDataJSON));
-  if (clientData.type !== 'webauthn.get') return { error: 'auth.passkeyFailed' };
-  if (clientData.challenge !== toBase64Url(challenge)) return { error: 'auth.passkeyFailed' };
-
-  const valid = await verifyAssertion({
-    publicKeySpki: user.publicKeySpki,
-    algorithm: user.algorithm,
-    authenticatorData: assertion.response.authenticatorData,
-    clientDataJSON: assertion.response.clientDataJSON,
-    signature: assertion.response.signature,
-  });
-  if (!valid) return { error: 'auth.passkeyFailed' };
-
-  return { user: publicUser(user) };
-};
-
-/**
- * End the Kakao session as well as this app's.
- *
- * Signing out of an app that left the provider's session standing is a
- * half-measure: the next sign-in silently reuses it, and on a shared computer
- * that is someone else's account still being logged in.
- */
-export const kakaoLogout = async () => {
-  try {
-    const res = await fetch('/kakao/logout', { method: 'POST', credentials: 'same-origin' });
-    return await res.json();
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
-};
-
-/**
- * Sever the connection between this app and the Kakao account.
- *
- * Distinct from logging out, and what 연결 끊기 means: the app's permission is
- * withdrawn and the next sign-in asks for consent again.
- */
-export const kakaoUnlink = async () => {
-  try {
-    const res = await fetch('/kakao/unlink', { method: 'POST', credentials: 'same-origin' });
-    return await res.json();
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
-};
-
-/** Whether this account still holds a live Kakao connection. */
-export const kakaoStatus = async () => {
-  try {
-    const res = await fetch('/kakao/status', { credentials: 'same-origin' });
-    return await res.json();
-  } catch (e) {
-    return { success: false, connected: false };
-  }
-};

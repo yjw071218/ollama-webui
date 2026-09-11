@@ -1,6 +1,7 @@
 // Bundles artifacts.jsx with rolldown (already a Vite dependency) so the pure
 // helpers can be exercised in Node, then runs the assertions.
 import { rolldown } from 'rolldown';
+import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { pathToFileURL } from 'node:url';
@@ -20,6 +21,7 @@ await bundle.close();
 const {
   extractCodeBlocks, buildPreviewDocument, normalizeLanguage, isPreviewable, isPythonish,
   computeViewport, VIEWPORT_PRESETS,
+  PACKAGE_FOR_IMPORT, findsBlockingLoop, FIND_MISSING_IMPORTS, PYODIDE_VERSION,
 } = await import(pathToFileURL(OUT).href);
 
 let pass = 0, fail = 0;
@@ -136,6 +138,116 @@ check('an explicit zoom overrides fit', fixedZoom.scale === 0.5);
 
 const unmeasured = computeViewport({ preset: desktop, stage: { width: 0, height: 0 }, landscape: false, zoomMode: 'fit' });
 check('an unmeasured stage does not collapse the scale', unmeasured.scale === 1);
+
+/* ------------------------------------------- where a fence is recognised */
+
+// A block of code and a word inside a sentence are different things, and the
+// app confused them for a whole major version of react-markdown.
+//
+// The renderer used to be mapped onto `code` and asked its own `inline` prop
+// which of the two it was. react-markdown stopped passing `inline` in v9 --
+// the string does not appear anywhere in v10's source -- so it was `undefined`
+// on every call, `if (!inline)` was true on every call, and every scrap of
+// inline code became a full bordered block with a language header and a copy
+// button. "Use the `useState` hook" rendered as three separate pieces. It also
+// nested a <div> and a <pre> inside a <p>, which is invalid HTML that browsers
+// silently restructure.
+//
+// The fix is to stop asking. A fence is the only thing that parses to a <pre>,
+// so the renderer is mapped there and inline code never reaches it. These
+// checks are what keep it that way: none of them passes if someone maps it
+// back onto `code`, or starts trusting `inline` again.
+// Line endings are normalised because this repository checks out with
+// `core.autocrlf=true`, so a source file's newlines depend on whether git
+// last touched it. A pattern anchored on \n would then pass or fail for a
+// reason that has nothing to do with the code it is checking.
+const appSource = fs.readFileSync(path.resolve(HERE, '../src/App.jsx'), 'utf8').replace(/\r\n/g, '\n');
+
+check('the code renderer is mapped onto pre, not code',
+  /pre:\s*\(props\)\s*=>\s*<MarkdownCodeBlock/.test(appSource)
+  && !/\bcode:\s*\(props\)\s*=>\s*<MarkdownCodeBlock/.test(appSource));
+
+// Comments stripped first: the renderer's own comment explains this bug at
+// length, and a check that its explanation counts as a recurrence is a check
+// that punishes writing one down.
+const renderer = appSource
+  .slice(appSource.indexOf('const MarkdownCodeBlock'), appSource.indexOf('function App('))
+  .replace(/\/\*[\s\S]*?\*\//g, '')
+  .replace(/\/\/.*$/gm, '');
+check('nothing in the renderer depends on an `inline` prop', !/\binline\b/.test(renderer),
+  (renderer.match(/.*\binline\b.*/) || [''])[0].trim());
+
+// And the premise the whole thing rests on, asserted against the installed
+// copy rather than remembered: if a future version starts passing `inline`
+// again, the reasoning above needs revisiting rather than silently rotting.
+const markdownSource = fs.readFileSync(
+  path.resolve(HERE, '../node_modules/react-markdown/lib/index.js'), 'utf8');
+check('react-markdown still does not pass `inline`', !markdownSource.includes('inline'));
+
+/* ------------------------------------------ installing what Python imports */
+
+// The runner used to carry a hand-written list of twenty-two module names and
+// install nothing outside it — so `import pygame` ran, failed on the import,
+// and the Run button had said nothing about needing to install anything.
+//
+// Nothing is listed by hand now except the names that genuinely differ between
+// the import and the package, so what is checked here is that the machinery
+// stays that way: the version is pinned in one place, the import-to-package
+// exceptions are right, and the Python that finds missing imports is real
+// Python. The snippet itself is executed against a local interpreter by
+// `scripts/pyimports.test.mjs`, which is where the parsing is proved.
+
+check('the Pyodide version is pinned in one place', /^\d+\.\d+\.\d+$/.test(PYODIDE_VERSION || ''), PYODIDE_VERSION);
+
+// pygame is the one that prompted all this. Pyodide builds the community fork,
+// which installs as `pygame`, so code written against pygame needs no changes —
+// but it has to be *asked for* under the name Pyodide publishes.
+check('pygame maps to the fork Pyodide actually builds', PACKAGE_FOR_IMPORT.pygame === 'pygame-ce');
+check('sklearn still maps to scikit-learn', PACKAGE_FOR_IMPORT.sklearn === 'scikit-learn');
+check('PIL still maps to pillow', PACKAGE_FOR_IMPORT.PIL === 'pillow');
+check('cv2 maps to opencv-python', PACKAGE_FOR_IMPORT.cv2 === 'opencv-python');
+
+// Only exceptions belong in the map. An entry mapping a name to itself is a
+// line that does nothing and invites the list to grow back into the catalogue
+// it replaced.
+const pointless = Object.entries(PACKAGE_FOR_IMPORT).filter(([k, v]) => k === v);
+check('the map holds only the names that differ', pointless.length === 0, pointless.map(([k]) => k).join(', '));
+
+check('the missing-import finder is a Python snippet, not a regex',
+  FIND_MISSING_IMPORTS.includes('import ast')
+  && FIND_MISSING_IMPORTS.includes('sys.stdlib_module_names')
+  && FIND_MISSING_IMPORTS.includes('find_spec'));
+
+/* ------------------------------------------------- loops that hang the tab */
+
+// Python runs on the thread the page draws with, so `while True:` never gives
+// it back — and the Stop button cannot help, because processing the click is
+// what the loop is preventing. Flagged before running, not after hanging.
+check('a bare game loop is flagged', findsBlockingLoop('while True:\n    tick()'));
+// The shape that kept getting through, and the one models actually write:
+// `running` is never set false in a browser, because the QUIT event comes from
+// closing a window and there is no window to close. It is `while True:` wearing
+// a variable, and it hangs the tab exactly as hard.
+check('so is the pygame tutorial loop',
+  findsBlockingLoop('running = True\nwhile running:\n    for e in pygame.event.get():\n        pass\n    clock.tick(60)'));
+check('and a redraw loop with any condition',
+  findsBlockingLoop('done = False\nwhile not done:\n    pygame.display.flip()\n    clock.tick(30)'));
+check('and a sleep loop', findsBlockingLoop('while True:\n    time.sleep(1)'));
+// A conditional loop that is not driving a screen finishes on its own, and
+// flagging those would rewrite ordinary code for no reason.
+check('a loop that consumes a list is left alone',
+  !findsBlockingLoop('queue = [1, 2, 3]\nwhile queue:\n    queue.pop()'));
+check('and a counting loop is left alone',
+  !findsBlockingLoop('n = 10\nwhile n > 0:\n    n -= 1'));
+check('so is `while 1:`', findsBlockingLoop('while 1:\n    tick()'));
+check('and one inside a function', findsBlockingLoop('def go():\n    while True:\n        tick()'));
+
+// The suggested fix must not itself be flagged, or the warning tells people to
+// do something it then complains about.
+check('an awaiting loop is fine',
+  !findsBlockingLoop('async def main():\n    while True:\n        await asyncio.sleep(0)'));
+check('a loop with a condition is fine', !findsBlockingLoop('while running:\n    tick()'));
+check('code with no loop is fine', !findsBlockingLoop('print("hello")'));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

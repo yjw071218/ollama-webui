@@ -1,5 +1,6 @@
 // Checks translation completeness and the auth crypto helpers.
 import { rolldown } from 'rolldown';
+import fs from 'node:fs';
 import path from 'node:path';
 import { webcrypto } from 'node:crypto';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -74,6 +75,34 @@ for (const l of LANGUAGES) {
   check(`${l.code} keeps every placeholder`, broken.length === 0, broken.join(', '));
 }
 
+/* -------------------------------------- English that never reached a table
+ *
+ * Twelve toasts were written as plain string literals — "Message deleted.",
+ * 'Deleted "…"', "Web search failed: …" — so a Korean user got English at the
+ * moments that matter most: deleting a chat, deleting a message, a search
+ * failing. Nothing above catches that, because the strings were never keys.
+ *
+ * A toast is the whole of what the app says about an action that already
+ * happened, so this is the one place a stray literal is guaranteed to be
+ * read. `t(...)`, a variable and a template holding only interpolation are
+ * all fine; a literal with a letter in it is not.
+ */
+const appSource = fs.readFileSync(new URL('../src/App.jsx', import.meta.url), 'utf8').replace(/\r\n/g, '\n');
+const literalToasts = [...appSource.matchAll(/\btoast\(\s*(['"`])((?:[^\\]|\\.)*?)\1/g)]
+  .map(m => m[2])
+  // A template that is nothing but `${…}` carries no English of its own.
+  .filter(text => /[A-Za-z]/.test(text.replace(/\$\{[^}]*\}/g, '')));
+check('no toast is a bare English literal', literalToasts.length === 0,
+  literalToasts.slice(0, 5).map(s => JSON.stringify(s.slice(0, 60))).join('\n      '));
+
+// The same for the button inside a toast: five said t('common.undo') and
+// three said 'Undo', which is the shape a reviewer's eye slides over.
+const literalActions = [...appSource.matchAll(/\blabel:\s*(['"])([^'"]+)\1/g)]
+  .map(m => m[2])
+  .filter(text => /[A-Za-z]/.test(text));
+check('no toast action label is a bare English literal', literalActions.length === 0,
+  literalActions.slice(0, 5).join(', '));
+
 check('interpolation substitutes', translate('en', 'auth.signedInAs', { name: 'Ada' }) === 'Signed in as Ada');
 check('interpolation works in Korean', translate('ko', 'auth.signedInAs', { name: '정우' }).includes('정우'));
 check('unknown key returns the key', translate('en', 'nope.missing') === 'nope.missing');
@@ -88,35 +117,35 @@ check('Arabic is marked RTL', LANGUAGES.find(l => l.code === 'ar').dir === 'rtl'
 check('all other languages are LTR', LANGUAGES.filter(l => l.code !== 'ar').every(l => l.dir === 'ltr'));
 
 // ------------------------------------------------------------------ auth
+//
+// Almost everything that used to be checked here has moved. Password hashing,
+// session records, passkey verification and the DER/ECDSA plumbing were all
+// done in the browser — by a page verifying credentials against a store that
+// same page could write, which verifies nothing at all. They live on the server
+// now and are covered end-to-end, over real HTTP, by scripts/auth.test.mjs.
+//
+// What is left in auth.jsx is the part that genuinely belongs to a browser:
+// provider configuration, and reading what a redirect handed back.
 const {
-  derivePasswordHash, constantTimeEqual, isValidEmail, normalizeEmail,
-  sessionStorageKeyFor, decodeJwtPayload,
+  sessionStorageKeyFor, decodeJwtPayload, socialConfig, socialDefaults,
+  setServerSocialConfig, kakaoRedirectUri,
 } = auth;
 
-const first = await derivePasswordHash('correct horse battery staple');
-const again = await derivePasswordHash('correct horse battery staple', first.salt, first.iterations);
-check('the same password and salt derive the same hash', first.hash === again.hash);
-
-const wrong = await derivePasswordHash('Correct horse battery staple', first.salt, first.iterations);
-check('a different password derives a different hash', wrong.hash !== first.hash);
-
-const otherSalt = await derivePasswordHash('correct horse battery staple');
-check('each account gets its own salt', otherSalt.salt !== first.salt);
-check('the same password under a different salt hashes differently', otherSalt.hash !== first.hash);
-check('iterations meet the OWASP floor', first.iterations >= 210000, String(first.iterations));
-check('the hash is not the password', !first.hash.includes('correct'));
-
-check('constant-time compare accepts equal values', constantTimeEqual('abc123', 'abc123'));
-check('constant-time compare rejects different values', !constantTimeEqual('abc123', 'abc124'));
-check('constant-time compare rejects different lengths', !constantTimeEqual('abc', 'abcd'));
-
-check('valid emails pass', isValidEmail('a@b.co') && isValidEmail('user@university.ac.kr'));
-check('invalid emails fail', !isValidEmail('a@b') && !isValidEmail('nope') && !isValidEmail('') && !isValidEmail('a b@c.com'));
-check('emails are normalised', normalizeEmail('  Foo@Example.COM ') === 'foo@example.com');
+// The client no longer holds any machinery for deciding who someone is.
+// Asserting their absence is the point: a re-export would quietly restore the
+// second source of identity that this whole rework exists to remove.
+for (const gone of [
+  'derivePasswordHash', 'registerWithPassword', 'signInWithPassword',
+  'upsertSocialUser', 'loadUsers', 'saveSession', 'readSession', 'deleteUser',
+  'verifyAssertion', 'registerPasskey', 'derToRawEcdsaSignature', 'changePassword',
+]) {
+  check(`the client no longer exports ${gone}`, auth[gone] === undefined);
+}
 
 check('the guest keeps the original storage key', sessionStorageKeyFor(null) === 'ollama-sessions');
-check('a profile gets its own storage key', sessionStorageKeyFor('abc') === 'ollama-sessions:abc');
-check('two profiles do not share a key', sessionStorageKeyFor('a') !== sessionStorageKeyFor('b'));
+check('an empty scope is the guest too', sessionStorageKeyFor('') === 'ollama-sessions');
+check('an account gets its own storage key', sessionStorageKeyFor('srv-abc') === 'ollama-sessions:srv-abc');
+check('two accounts do not share a key', sessionStorageKeyFor('a') !== sessionStorageKeyFor('b'));
 
 const payload = { sub: '1234', email: 'user@example.com', name: 'Tester' };
 const fakeJwt = `header.${Buffer.from(JSON.stringify(payload)).toString('base64url')}.sig`;
@@ -130,111 +159,22 @@ let threw = false;
 try { decodeJwtPayload('not-a-jwt'); } catch { threw = true; }
 check('a malformed token throws instead of returning junk', threw);
 
-// --------------------------------------------------------------- passkeys
-const { derToRawEcdsaSignature, verifyAssertion, isPasskeySupported } = auth;
+// ------------------------------------------------------- provider config
+// Serving these at runtime is what lets a phone — a different origin with an
+// empty localStorage — get a working sign-in button without anyone pasting keys.
+setServerSocialConfig({ googleClientId: 'from-server', kakaoRestKey: 'kakao-server' });
+check('the server supplies the client id', socialConfig().googleClientId === 'from-server');
+check('and the Kakao REST key', socialConfig().kakaoRestKey === 'kakao-server');
+check('defaults report what applies with nothing stored', socialDefaults().googleClientId === 'from-server');
 
-check('passkey support probe is false in Node', isPasskeySupported() === false);
+localStorage.setItem('googleClientId', 'typed-in-settings');
+check('a value typed into settings overrides the server', socialConfig().googleClientId === 'typed-in-settings');
+check('but the default still reports the server value', socialDefaults().googleClientId === 'from-server');
+localStorage.removeItem('googleClientId');
 
-// A DER SEQUENCE of two 32-byte integers.
-const der32 = new Uint8Array([
-  0x30, 0x44,
-  0x02, 0x20, ...new Array(32).fill(0xAA),
-  0x02, 0x20, ...new Array(32).fill(0xBB),
-]);
-const raw32 = derToRawEcdsaSignature(der32);
-check('DER with two full-length integers converts to 64 bytes',
-  raw32.length === 64 && raw32[0] === 0xAA && raw32[32] === 0xBB);
-
-// A high bit in the first byte makes DER prepend 0x00; that pad must be dropped.
-const derPadded = new Uint8Array([
-  0x30, 0x46,
-  0x02, 0x21, 0x00, ...new Array(32).fill(0xFF),
-  0x02, 0x21, 0x00, ...new Array(32).fill(0xEE),
-]);
-const rawPadded = derToRawEcdsaSignature(derPadded);
-check('a DER sign-padding byte is stripped',
-  rawPadded.length === 64 && rawPadded[0] === 0xFF && rawPadded[31] === 0xFF && rawPadded[32] === 0xEE);
-
-// A short integer must be left-padded back out to 32 bytes.
-const derShort = new Uint8Array([
-  0x30, 0x26,
-  0x02, 0x02, 0x01, 0x02,
-  0x02, 0x20, ...new Array(32).fill(0x11),
-]);
-const rawShort = derToRawEcdsaSignature(derShort);
-check('a short DER integer is left-padded to 32 bytes',
-  rawShort.length === 64 && rawShort[0] === 0 && rawShort[30] === 0x01 && rawShort[31] === 0x02);
-
-let derThrew = false;
-try { derToRawEcdsaSignature(new Uint8Array([0x02, 0x01, 0x00])); } catch { derThrew = true; }
-check('a non-SEQUENCE signature is rejected', derThrew);
-
-// End-to-end: sign like an authenticator would, then verify through the app path.
-const keyPair = await webcrypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
-const spki = await webcrypto.subtle.exportKey('spki', keyPair.publicKey);
-const spkiB64 = Buffer.from(spki).toString('base64');
-
-const authenticatorData = webcrypto.getRandomValues(new Uint8Array(37));
-const clientDataJSON = new TextEncoder().encode(JSON.stringify({ type: 'webauthn.get', challenge: 'abc', origin: 'http://localhost:5173' }));
-const clientHash = await webcrypto.subtle.digest('SHA-256', clientDataJSON);
-const signedData = new Uint8Array(authenticatorData.length + clientHash.byteLength);
-signedData.set(authenticatorData, 0);
-signedData.set(new Uint8Array(clientHash), authenticatorData.length);
-
-const rawSig = new Uint8Array(await webcrypto.subtle.sign({ name: 'ECDSA', hash: 'SHA-256' }, keyPair.privateKey, signedData));
-
-// WebCrypto emits raw r||s; authenticators emit DER. Re-encode to mimic one.
-const toDerInteger = (bytes) => {
-  let start = 0;
-  while (start < bytes.length - 1 && bytes[start] === 0) start++;
-  let value = bytes.slice(start);
-  if (value[0] & 0x80) value = Uint8Array.from([0, ...value]);
-  return [0x02, value.length, ...value];
-};
-const rInts = toDerInteger(rawSig.slice(0, 32));
-const sInts = toDerInteger(rawSig.slice(32));
-const body = [...rInts, ...sInts];
-const derSig = Uint8Array.from([0x30, body.length, ...body]);
-
-check('re-encoded DER round-trips back to the raw signature',
-  Buffer.from(derToRawEcdsaSignature(derSig)).equals(Buffer.from(rawSig)));
-
-const verified = await verifyAssertion({
-  publicKeySpki: spkiB64,
-  algorithm: -7,
-  authenticatorData,
-  clientDataJSON,
-  signature: derSig,
-});
-check('a genuine passkey assertion verifies', verified === true);
-
-const tampered = new Uint8Array(authenticatorData);
-tampered[0] ^= 0xFF;
-const verifiedTampered = await verifyAssertion({
-  publicKeySpki: spkiB64,
-  algorithm: -7,
-  authenticatorData: tampered,
-  clientDataJSON,
-  signature: derSig,
-});
-check('a tampered assertion fails verification', verifiedTampered === false);
-
-const otherPair = await webcrypto.subtle.generateKey({ name: 'ECDSA', namedCurve: 'P-256' }, true, ['sign', 'verify']);
-const otherSpki = Buffer.from(await webcrypto.subtle.exportKey('spki', otherPair.publicKey)).toString('base64');
-const verifiedWrongKey = await verifyAssertion({
-  publicKeySpki: otherSpki,
-  algorithm: -7,
-  authenticatorData,
-  clientDataJSON,
-  signature: derSig,
-});
-check('another key does not verify the assertion', verifiedWrongKey === false);
-
-let algThrew = false;
-try {
-  await verifyAssertion({ publicKeySpki: spkiB64, algorithm: -999, authenticatorData, clientDataJSON, signature: derSig });
-} catch { algThrew = true; }
-check('an unsupported algorithm is rejected', algThrew);
+globalThis.window.location = { origin: 'http://192.168.1.9:5173' };
+check('the Kakao redirect URI names this exact origin',
+  kakaoRedirectUri() === 'http://192.168.1.9:5173/kakao/callback');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

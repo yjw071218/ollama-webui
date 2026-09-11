@@ -1,3 +1,5 @@
+import { stampSetting } from './settingsStore.js';
+
 // The generation settings are eleven separate controls. Tuning them for one
 // kind of task and then wanting the old numbers back is a real workflow, so a
 // preset is a named snapshot of all of them that can be applied in one click.
@@ -63,7 +65,7 @@ const STORAGE_KEY = 'samplingPresets';
 
 export const loadPresets = (userId) => {
   try {
-    const raw = localStorage.getItem(userId ? `${STORAGE_KEY}:${userId}` : STORAGE_KEY);
+    const raw = localStorage.getItem(presetStorageKey(userId));
     const parsed = raw ? JSON.parse(raw) : [];
     if (!Array.isArray(parsed)) return [];
     return parsed
@@ -74,10 +76,22 @@ export const loadPresets = (userId) => {
   }
 };
 
+export const presetStorageKey = (userId) =>
+  (userId ? `${STORAGE_KEY}:${userId}` : STORAGE_KEY);
+
+/**
+ * Write the preset list, and record when it changed.
+ *
+ * Same reasoning as `saveFolders` in src/folders.js, and the same bug: the
+ * list travels to the account as a single record whose timestamp is what the
+ * sync compares, so a save that does not move the stamp is a save no other
+ * device ever hears about. The first one went up and none after it did.
+ */
 export const savePresets = (userId, presets) => {
   try {
-    localStorage.setItem(userId ? `${STORAGE_KEY}:${userId}` : STORAGE_KEY, JSON.stringify(presets));
-  } catch (e) {}
+    localStorage.setItem(presetStorageKey(userId), JSON.stringify(presets));
+    stampSetting(userId, presetStorageKey(userId));
+  } catch (e) { /* quota, or storage disabled */ }
 };
 
 // Which preset, if any, describes the settings currently in effect. Compared on

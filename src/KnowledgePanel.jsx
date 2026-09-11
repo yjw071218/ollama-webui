@@ -1,18 +1,13 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { FileText, Trash2, Upload, RefreshCcw, TriangleAlert, Check, X } from 'lucide-react';
+import { FileText, Trash2, Upload, RefreshCcw, TriangleAlert, Check, X, Globe } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
 import {
-  extractDocument,
-  chunkPages,
-  embedTexts,
-  normalise,
-  isSupportedDocument,
   loadLibrary,
-  addDocument,
   removeDocument,
   saveLibrary,
   DEFAULT_EMBED_MODEL,
 } from './rag.js';
+import { ingestDocument } from './ingest.js';
 
 const formatBytes = (bytes) => {
   if (!bytes && bytes !== 0) return '';
@@ -23,10 +18,7 @@ const formatBytes = (bytes) => {
   return `${n.toFixed(n >= 10 || i === 0 ? 0 : 1)} ${units[i]}`;
 };
 
-// Embedding a large document in one request can time out; batch it.
-const EMBED_BATCH = 32;
-
-export const KnowledgePanel = ({ userId, models, embedModel, onEmbedModelChange, onLibraryChange }) => {
+export const KnowledgePanel = ({ userId, models, embedModel, onEmbedModelChange, onLibraryChange, chats, folders }) => {
   const { t } = useI18n();
   const fileRef = useRef(null);
   const [docs, setDocs] = useState([]);
@@ -47,47 +39,20 @@ export const KnowledgePanel = ({ userId, models, embedModel, onEmbedModelChange,
   const ingest = async (files) => {
     setError('');
     for (const file of files) {
-      if (!isSupportedDocument(file)) {
-        setError(t('rag.unsupported', { name: file.name }));
-        continue;
-      }
-
       try {
-        setBusy({ name: file.name, stage: 'extract', done: 0, total: 0 });
-        const pages = await extractDocument(file, (done, total) => {
-          setBusy({ name: file.name, stage: 'extract', done, total });
-        });
-
-        const chunks = chunkPages(pages);
-        if (chunks.length === 0) {
-          setError(t('rag.noText', { name: file.name }));
-          setBusy(null);
-          continue;
-        }
-
-        const vectors = [];
-        for (let i = 0; i < chunks.length; i += EMBED_BATCH) {
-          setBusy({ name: file.name, stage: 'embed', done: i, total: chunks.length });
-          const batch = chunks.slice(i, i + EMBED_BATCH).map(c => c.text);
-          const embedded = await embedTexts(batch, embedModel);
-          // Store normalised so retrieval is a dot product.
-          embedded.forEach(v => vectors.push(normalise(v)));
-        }
-
-        const doc = {
-          id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-          name: file.name,
-          size: file.size,
-          pages: pages.length,
-          addedAt: Date.now(),
+        // The same routine the composer uses when an attachment is too long to
+        // send whole -- see src/ingest.js. One copy, so a document embedded
+        // from here and one embedded from there are the same thing.
+        const { library } = await ingestDocument(file, {
+          userId,
           embedModel,
-          enabled: true,
-          chunks: chunks.map((c, i) => ({ page: c.page, text: c.text, vector: vectors[i] })),
-        };
-
-        publish(await addDocument(userId, doc));
+          onProgress: ({ stage, done, total }) => setBusy({ name: file.name, stage, done, total }),
+        });
+        publish(library);
       } catch (e) {
-        setError(`${file.name}: ${e.message}`);
+        if (e.code === 'binary') setError(t('rag.unsupported', { name: file.name }));
+        else if (e.code === 'no-text') setError(t('rag.noText', { name: file.name }));
+        else setError(`${file.name}: ${e.message}`);
       } finally {
         setBusy(null);
       }
@@ -102,6 +67,34 @@ export const KnowledgePanel = ({ userId, models, embedModel, onEmbedModelChange,
 
   const remove = async (id) => {
     publish(await removeDocument(userId, id));
+  };
+
+  /**
+   * Promote a document to the shared library.
+   *
+   * A file attached to a chat belongs to that chat, which is right by default
+   * and wrong the moment you realise the manual you dropped into one
+   * conversation is the manual you want in all of them. Dropping the owner is
+   * the whole operation; there is nothing to re-embed.
+   */
+  const share = async (id) => {
+    const next = docs.map(d => {
+      if (d.id !== id) return d;
+      const { chatId, folderId, ...rest } = d;
+      return rest;
+    });
+    await saveLibrary(userId, next);
+    publish(next);
+  };
+
+  // A document says which chat it came from, and a chat id is not a name.
+  const chatName = (id) => {
+    const found = (chats || []).find(c => String(c.id) === String(id));
+    return found ? (found.title || t('rag.scopeGoneChat')) : t('rag.scopeGoneChat');
+  };
+  const folderName = (id) => {
+    const found = (folders || []).find(f => String(f.id) === String(id));
+    return found ? found.name : t('rag.scopeGoneFolder');
   };
 
   const totalChunks = docs.reduce((sum, d) => sum + (d.chunks?.length || 0), 0);
@@ -130,7 +123,8 @@ export const KnowledgePanel = ({ userId, models, embedModel, onEmbedModelChange,
           ref={fileRef}
           type="file"
           multiple
-          accept=".pdf,.docx,.txt,.md,.markdown,.csv,.json,.log,.yaml,.yml,.xml,.html,.htm,.tsv"
+          /* No filter: what a file is, is decided by reading it. See
+             `sniffKind` in rag.js. */
           style={{ display: 'none' }}
           onChange={e => { ingest(Array.from(e.target.files)); e.target.value = ''; }}
         />
@@ -169,8 +163,23 @@ export const KnowledgePanel = ({ userId, models, embedModel, onEmbedModelChange,
                 <div className="rag-item-detail">
                   {formatBytes(doc.size)} · {t('rag.chunks', { count: doc.chunks?.length || 0 })}
                   {doc.pages > 1 ? ` · ${t('rag.pages', { count: doc.pages })}` : ''}
+                  {/* Where a document may be used. Without this the library is
+                      a flat pile and there is no way to tell a manual meant
+                      for every chat from an invoice that arrived in one. */}
+                  {doc.chatId && <span className="rag-scope">{chatName(doc.chatId)}</span>}
+                  {doc.folderId && <span className="rag-scope">{folderName(doc.folderId)}</span>}
+                  {!doc.chatId && !doc.folderId && <span className="rag-scope shared">{t('rag.scopeShared')}</span>}
                 </div>
               </div>
+              {(doc.chatId || doc.folderId) && (
+                <button
+                  className="icon-btn"
+                  title={t('rag.share')}
+                  onClick={() => share(doc.id)}
+                >
+                  <Globe size={14} />
+                </button>
+              )}
               <button
                 className={`icon-btn ${doc.enabled === false ? '' : 'toggled'}`}
                 title={doc.enabled === false ? t('rag.enable') : t('rag.disable')}

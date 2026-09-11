@@ -8,20 +8,22 @@
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
-import { pathToFileURL } from 'node:url';
 
-const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'webui-kakao-'));
-const HERE = path.dirname(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'));
-const serverDir = path.resolve(HERE, '../server');
+// Tokens live in the database now, beside the account they belong to, so
+// deleting an account takes them with it rather than leaving a live credential
+// in a file named after somebody who no longer exists. That means this test
+// needs a database — a scratch one, never the real data directory.
+const DATA = fs.mkdtempSync(path.join(os.tmpdir(), 'webui-kakao-'));
+process.env.WEBUI_DATA_DIR = DATA;
 
-// The module writes under <server>/data; stage copies beside a data dir we own.
-const stage = path.join(scratch, 'server');
-fs.mkdirSync(stage, { recursive: true });
-for (const file of ['accounts.js', 'kakao.js']) {
-  fs.copyFileSync(path.join(serverDir, file), path.join(stage, file));
-}
+const { closeDatabase, database } = await import('../server/db.js');
 
-const K = await import(pathToFileURL(path.join(stage, 'kakao.js')).href);
+process.on('exit', () => {
+  try { closeDatabase(); } catch (e) { /* never opened */ }
+  try { fs.rmSync(DATA, { recursive: true, force: true }); } catch (e) { /* windows lock */ }
+});
+
+const K = await import('../server/kakao.js');
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = '') => {
@@ -59,6 +61,9 @@ check('a scope is included when given',
 
 // ------------------------------------------------------------------ tokens
 const userId = '11111111-2222-3333-4444-555555555555';
+database().prepare(
+  "INSERT INTO users (id, name, provider, created_at, rev) VALUES (?, 'Kakao user', 'kakao', ?, 0)"
+).run(userId, Date.now());
 
 eq('an account with no connection has no tokens', K.readTokens(userId), null);
 
@@ -71,13 +76,18 @@ eq('tokens round-trip', K.readTokens(userId).accessToken, 'ACCESS');
 
 // Tokens are the thing that must never reach a browser; make sure they are
 // somewhere a request cannot name.
-const stored = fs.readFileSync(path.join(stage, 'data', 'kakao', `${userId}.json`), 'utf-8');
+const stored = JSON.stringify(
+  database().prepare('SELECT * FROM kakao_tokens WHERE user_id = ?').get(userId));
 check('the refresh token is stored server-side', stored.includes('REFRESH'));
 
+// These used to be checked because the id became a filename and a traversal
+// would have written anywhere the process could reach. There is no path any
+// more, and the constraint that matters now is different but stronger: a token
+// is a live credential, so it may not exist without an account to belong to.
 for (const bad of ['../../etc/passwd', '', null, 'not-a-uuid', 'a/../b']) {
   let refused = false;
   try { K.writeTokens(bad, { accessToken: 'x' }); } catch (e) { refused = true; }
-  check(`a path-shaped account id is refused: ${JSON.stringify(bad)}`, refused);
+  check(`an id naming no account is refused: ${JSON.stringify(bad)}`, refused);
 }
 
 // Expiry arithmetic decides whether a call refreshes or fails.
@@ -100,6 +110,5 @@ K.clearTokens(userId);
 eq('clearing removes them', K.readTokens(userId), null);
 check('clearing twice is not an error', (() => { K.clearTokens(userId); return true; })());
 
-fs.rmSync(scratch, { recursive: true, force: true });
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

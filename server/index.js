@@ -15,6 +15,10 @@
 //     loopback, because the Ollama proxy is otherwise an open LLM endpoint and
 //     the Kakao exchange holds a client secret.
 
+// First, before anything reaches node:sqlite: ES modules are evaluated in
+// import order, and the warning this filters is emitted at load time.
+import './quiet.js';
+
 import http from 'node:http';
 import https from 'node:https';
 import fs from 'node:fs';
@@ -22,8 +26,11 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createApiRoutes } from './api.js';
+import { backendOf } from './llamacpp.js';
+import { vramGuard, isInference } from './vram.js';
 import { isPrivateAddress, localAddresses, routedAddress } from './net.js';
 import os from 'node:os';
+import { normaliseOrigin } from './origin.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -58,7 +65,24 @@ const env = loadDotEnv();
 const PORT = Number(env.PORT || 5173);
 const HOST = env.HOST || '0.0.0.0';
 const OLLAMA = env.OLLAMA_URL || 'http://127.0.0.1:11434';
+/* Which engine answers. See server/llamacpp.js: llama.cpp is the faster of the
+ * two, but most of the speed is in flags Ollama does not expose rather than in
+ * the swap itself. */
+const BACKEND = backendOf(env);
+const LLAMACPP = env.LLAMACPP_URL || 'http://127.0.0.1:8080';
 const TTS = `http://${env.TTS_HOST || '127.0.0.1'}:${env.TTS_PORT || 9880}`;
+/* Speech to text, locally.
+ *
+ * The browser has `SpeechRecognition`, and on Chrome it works by uploading the
+ * audio to Google -- which needs a working internet connection, sends what you
+ * said to a third party, and is noticeably weaker in Korean than a local
+ * Whisper is. In an app whose entire premise is that the model runs on your own
+ * machine, the microphone was the one thing still leaving the building.
+ *
+ * Anything speaking the OpenAI /v1/audio/transcriptions shape will do:
+ * faster-whisper-server, whisper.cpp's server, speaches. Unset by default, and
+ * the browser's own recogniser stays the fallback when it is not there. */
+const STT = `http://${env.STT_HOST || '127.0.0.1'}:${env.STT_PORT || 8000}`;
 const ALLOW_LOCAL_FS = String(env.ALLOW_LOCAL_FS || '').toLowerCase() === 'true';
 const TOKEN = (env.ACCESS_TOKEN || '').trim();
 
@@ -73,6 +97,16 @@ const REQUIRE_TOKEN = !LOOPBACK_ONLY && TOKEN.length > 0;
 // presents it. Turn this off on a network you do not trust — a café, a shared
 // office — where "same network" means nothing.
 const TRUST_LAN = String(env.TRUST_LAN ?? 'true').toLowerCase() !== 'false';
+
+// The address everybody should be opening. A browser keys storage and cookies
+// to an origin, so `http://localhost:5173` and `http://1.2.3.4.nip.io:5173`
+// reach the same server and the same database while being, to the browser, two
+// unrelated websites: two local caches, two logins. Naming one here is how the
+// launcher and the app stop handing out both. See server/origin.js.
+const PUBLIC_ORIGIN = normaliseOrigin(env.PUBLIC_ORIGIN, {
+  scheme: env.TLS_KEY_FILE && env.TLS_CERT_FILE ? 'https' : 'http',
+  port: PORT,
+});
 
 if (!LOOPBACK_ONLY && !TOKEN) {
   console.error([
@@ -100,7 +134,15 @@ const MIME = {
   '.ico': 'image/x-icon', '.woff': 'font/woff', '.woff2': 'font/woff2',
   '.ttf': 'font/ttf', '.map': 'application/json; charset=utf-8',
   '.wasm': 'application/wasm', '.mjs': 'text/javascript; charset=utf-8',
+  '.webmanifest': 'application/manifest+json; charset=utf-8',
 };
+
+// Files whose *name* never changes but whose contents do. Everything else in
+// dist/ carries a content hash in its filename and can be cached forever; these
+// cannot, and a year-long immutable cache on any of them is a build that never
+// reaches the browser again. The service worker is the sharp one: it is the
+// thing that decides what else gets cached, so a stale copy is stale forever.
+const NEVER_CACHE = new Set(['/index.html', '/sw.js', '/manifest.webmanifest']);
 
 // Constant time, so a wrong token cannot be narrowed down by how long the
 // comparison took.
@@ -164,8 +206,9 @@ const serveStatic = (req, res, url) => {
 
   const ext = path.extname(file).toLowerCase();
   res.setHeader('Content-Type', MIME[ext] || 'application/octet-stream');
-  // Hashed asset names may be cached hard; index.html must never be.
-  res.setHeader('Cache-Control', file.endsWith('index.html')
+  // Hashed asset names may be cached hard; the fixed ones must never be.
+  const served = '/' + path.relative(DIST, file).split(path.sep).join('/');
+  res.setHeader('Cache-Control', NEVER_CACHE.has(served)
     ? 'no-cache'
     : 'public, max-age=31536000, immutable');
   fs.createReadStream(file).pipe(res);
@@ -196,6 +239,7 @@ ${message ? `<div class="err">${message}</div>` : ''}
 // ---------------------------------------------------------------- routing
 
 const apiRoutes = createApiRoutes(env, { allowLocalFs: ALLOW_LOCAL_FS });
+const vram = vramGuard(env);
 
 const handler = (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -263,6 +307,18 @@ const handler = (req, res) => {
     }
   }
 
+  /* ComfyUI lets go of the card before a language model is loaded onto it.
+     Waited for, because Ollama sizes its GPU share at load time. The body is
+     not read here, so it is still there for whoever handles the request next.
+     See server/vram.js. */
+  if (isInference(url.pathname)) {
+    vram.beforeInference().catch(() => {}).finally(() => dispatch(req, res, url));
+    return;
+  }
+  dispatch(req, res, url);
+};
+
+const dispatch = (req, res, url) => {
   // Longest match first, so /api/tts-status is not swallowed by /api.
   const route = apiRoutes
     .filter(r => url.pathname === r.path || url.pathname.startsWith(`${r.path}/`))
@@ -283,7 +339,31 @@ const handler = (req, res) => {
   if (url.pathname.startsWith('/tts-api')) {
     return proxy(TTS, req, res, p => p.replace(/^\/tts-api/, '') || '/');
   }
-  if (url.pathname.startsWith('/api/')) return proxy(OLLAMA, req, res);
+  // Same shape as the TTS proxy: the browser cannot reach another port on this
+  // machine without tripping over CORS and mixed content, so it goes through
+  // here and inherits the origin the app is already trusted on.
+  if (url.pathname.startsWith('/stt-api')) {
+    return proxy(STT, req, res, p => p.replace(/^\/stt-api/, '') || '/');
+  }
+  /* Whatever the routes above did not claim.
+   *
+   * Under Ollama that is every inference call, and the proxy has always been
+   * where they go. Under llama.cpp the translating routes have already claimed
+   * the ones the app uses, so anything still arriving here is a path llama.cpp
+   * has no answer for — and forwarding it to an Ollama that may not even be
+   * running would answer a question about one backend with the other one's
+   * silence. Saying so is shorter to debug than a connection refused. */
+  if (url.pathname.startsWith('/api/')) {
+    if (BACKEND === 'llamacpp') {
+      res.writeHead(404, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({
+        error: `${url.pathname} is an Ollama endpoint with no llama.cpp equivalent. `
+          + 'This server is running LLM_BACKEND=llamacpp.',
+      }));
+      return;
+    }
+    return proxy(OLLAMA, req, res);
+  }
 
   return serveStatic(req, res, url);
 };
@@ -326,11 +406,26 @@ server.listen(PORT, HOST, async () => {
   console.log('');
   console.log(`  Ollama WebUI  ${scheme}://${HOST}:${PORT}`);
   console.log(`  serving       ${DIST}`);
-  console.log(`  ollama        ${OLLAMA}`);
+  console.log(BACKEND === 'llamacpp'
+    ? `  llama.cpp     ${LLAMACPP}`
+    : `  ollama        ${OLLAMA}`);
   console.log(`  auth          ${REQUIRE_TOKEN
     ? (TRUST_LAN ? 'token required from outside this network' : 'token required')
     : 'off (loopback only)'}`);
   console.log(`  local files   ${ALLOW_LOCAL_FS ? 'ENABLED — read/write on this machine' : 'disabled'}`);
+  if (PUBLIC_ORIGIN) {
+    console.log('');
+    console.log('  Open this everywhere -- phone and desktop both:');
+    console.log(`    ${PUBLIC_ORIGIN}`);
+    console.log('');
+    console.log('  Not just a preference. A browser keeps chats, settings and the');
+    console.log('  sign-in cookie per *origin*, so opening this server on two');
+    console.log('  different hostnames gives you two of each -- two logins, and two');
+    console.log('  local caches that only the account sync ever reconciles. The');
+    console.log('  server database is one file either way; the browser is what splits.');
+    console.log('  Change it with PUBLIC_ORIGIN in .env.');
+  }
+
   if (!LOOPBACK_ONLY) {
     // The routing table knows which adapter actually leaves the machine. On a
     // PC with WSL, Docker or Hyper-V installed, guessing gets it wrong and
@@ -342,7 +437,9 @@ server.listen(PORT, HOST, async () => {
 
     if (usable.length > 0) {
       console.log('');
-      console.log('  Open this on your phone (same wifi or router):');
+      console.log(PUBLIC_ORIGIN
+        ? '  These reach it too, but each is a separate origin -- a separate login:'
+        : '  Open this on your phone (same wifi or router):');
       for (const entry of usable) {
         const mark = entry.address === preferred && usable.length > 1 ? '   <- this one' : '';
         console.log(`    ${scheme}://${entry.address}:${PORT}${mark}`);
@@ -365,10 +462,12 @@ server.listen(PORT, HOST, async () => {
     // public top-level domain. nip.io is public DNS that resolves right back to
     // this address, so it is a real .io hostname that still points at the LAN.
     const lan = usable[0]?.address;
-    if (lan) {
+    if (lan && !PUBLIC_ORIGIN) {
       console.log('');
       console.log('  For Google / Kakao sign-in, use this hostname instead of the');
-      console.log('  bare IP, and register it in their consoles:');
+      console.log('  bare IP, and register it in their consoles. Putting it in');
+      console.log('  PUBLIC_ORIGIN in .env makes it the address everything uses,');
+      console.log('  which is what keeps the desktop and the phone on one login:');
       console.log(`    ${scheme}://${lan}.nip.io:${PORT}`);
     }
 

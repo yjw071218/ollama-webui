@@ -1,0 +1,130 @@
+/* ------------------------------------------------------------ the safeguard
+
+   Frosted glass over a picture nobody has chosen to see yet. Loaded with
+   SafeImage.jsx, not with the Studio, because conversations show generated
+   pictures too. */
+
+.safe-frame { position: relative; overflow: hidden; }
+.studio-job-media > .safe-frame { width: 100%; height: 100%; }
+.msg-generated .safe-frame { border-radius: inherit; }
+/* The frame is the picture's size. A picture's column in a conversation is as
+   wide as its widest child -- usually the row of actions under it -- and the
+   frame used to stretch to that, so the glass, and the line in its middle, sat
+   to the right of a narrower picture: measured, 19px off centre on a portrait. */
+.msg-generated figure > .safe-frame { align-self: flex-start; max-width: 100%; }
+/* A block, so no line box adds a strip of glass under the picture. */
+.msg-generated .safe-frame > button { display: block; max-width: 100%; }
+
+.safe-frame img,
+.safe-frame video { transition: filter 180ms ease, transform 180ms ease; }
+.safe-frame.is-veiled img,
+.safe-frame.is-veiled video {
+  filter: blur(28px) saturate(0.6) brightness(0.85);
+  /* The blur's soft edge, pushed outside the frame so it does not glow. */
+  transform: scale(1.15);
+}
+.safe-frame.is-veiled video { pointer-events: none; }
+
+.safe-veil {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 12px;
+  text-align: center;
+  background: rgba(16, 16, 18, 0.28);
+  color: #fff;
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
+}
+.safe-veil-note { max-width: 24ch; word-break: keep-all; }
+/* The whole overlay, as one press. */
+.safe-veil.is-compact {
+  gap: 0;
+  padding: 0;
+  border: 0;
+  color: #fff;
+  font: inherit;
+  cursor: pointer;
+  background: rgba(16, 16, 18, 0.42);
+}
+.safe-veil.is-compact:hover { background: rgba(16, 16, 18, 0.3); }
+
+/* Specific enough to win over `.msg-generated button`, which styles every
+   button in a conversation's picture as the picture. */
+.safe-veil .safe-veil-show,
+.studio-progress-frame .safe-veil-show {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: auto;
+  height: auto;
+  min-height: 30px;
+  margin: 0;
+  padding: 5px 14px;
+  border: 1px solid rgba(255, 255, 255, 0.55);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  color: #fff;
+  font: inherit;
+  font-weight: 600;
+  text-shadow: none;
+  cursor: pointer;
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+}
+.safe-veil .safe-veil-show:hover,
+.studio-progress-frame .safe-veil-show:hover { background: rgba(255, 255, 255, 0.28); }
+.safe-veil.is-compact .safe-veil-show { min-height: 24px; padding: 2px 9px; font-size: 11.5px; }
+
+.safe-frame .safe-rehide {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 2;
+  width: 26px;
+  height: 26px;
+  min-height: 0;
+  margin: 0;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+  cursor: pointer;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.safe-frame:hover .safe-rehide,
+.safe-frame .safe-rehide:focus-visible { opacity: 1; }
+@media (hover: none) { .safe-frame .safe-rehide { opacity: 0.85; } }
+.safe-frame :focus-visible { outline: 2px solid #fff; outline-offset: 2px; }
+
+/* The half-drawn preview of a prompt that asked for something explicit. */
+.studio-progress-frame.is-veiled img { filter: blur(24px) saturate(0.6); transform: scale(1.15); }
+.studio-progress-frame .safe-veil-show.is-floating {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  z-index: 2;
+  transform: translate(-50%, -50%);
+}
+
+/* The viewer: the glass lies over the stage rather than around the picture,
+   because a fitted picture's box is the stage's to lay out. */
+.studio-lightbox-stage.is-veiled img { filter: blur(44px) saturate(0.6) brightness(0.8); cursor: default; }
+.studio-lightbox-stage .safe-veil { background: transparent; font-size: 14px; }
+
+@media (prefers-reduced-motion: reduce) {
+  .safe-frame img,
+  .safe-frame video,
+  .safe-frame .safe-rehide { transition: none; }
+}

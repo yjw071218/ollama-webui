@@ -2,6 +2,8 @@
 // a screenful. A folder is a named bucket that can also carry its own system
 // prompt, so "everything I ask about this project" shares a setup.
 
+import { stampSetting } from './settingsStore.js';
+
 const STORAGE_KEY = 'chatFolders';
 
 let counter = 0;
@@ -30,8 +32,30 @@ export const loadFolders = (userId) => {
   }
 };
 
+/**
+ * Write the folder list, and record when it changed.
+ *
+ * The stamp is not bookkeeping. The whole list travels to the account as one
+ * record, and the sync decides whether this device has anything to say by
+ * comparing that record's timestamp with the one it last sent -- so a list
+ * written without moving the stamp is a list the sync cannot see has changed.
+ *
+ * This was missing, and the effect was exact: the first save went up, because
+ * there was no previous timestamp to match, and nothing ever did again.
+ * Creating, renaming and deleting folders all worked perfectly on the machine
+ * doing them and reached no other device, permanently. Deleting was the one
+ * that showed: the folder stayed on the phone, and no amount of syncing or
+ * reloading removed it, because as far as the account was concerned nothing
+ * had happened.
+ *
+ * The key includes the scope (`chatFolders:srv-abc`), which is what
+ * `syncEngine.js` reads it under -- see `keysFor`.
+ */
 export const saveFolders = (userId, folders) => {
-  try { localStorage.setItem(folderStorageKey(userId), JSON.stringify(folders)); } catch (e) {}
+  try {
+    localStorage.setItem(folderStorageKey(userId), JSON.stringify(folders));
+    stampSetting(userId, folderStorageKey(userId));
+  } catch (e) { /* quota, or storage disabled */ }
 };
 
 export const renameFolder = (folders, id, name) => {

@@ -149,7 +149,18 @@ export const Popover = ({ open, onClose, children, className = '' }) => {
   useEffect(() => {
     if (!open) return undefined;
     const onDocClick = (e) => {
-      if (ref.current && !ref.current.contains(e.target)) onClose?.();
+      const node = ref.current;
+      if (!node) return;
+      if (node.contains(e.target)) return;
+      /* The button that opened it is not "outside".
+       *
+       * A popover is absolutely positioned inside a small wrapper that holds
+       * nothing but it and its trigger. Counting that trigger as outside meant
+       * pressing it while the menu was open ran both handlers in order --
+       * mousedown closed the menu, then the click toggled it straight back --
+       * so the button that opened the menu could not close it again. */
+      if (node.parentElement?.contains(e.target)) return;
+      onClose?.();
     };
     const onKey = (e) => { if (e.key === 'Escape') onClose?.(); };
     document.addEventListener('mousedown', onDocClick);
@@ -186,6 +197,78 @@ export const Transition = ({ open, duration = 200, as: Tag = 'div', children, ..
   const { mounted, state } = useTransitionState(open, duration);
   if (!mounted) return null;
   return <Tag data-state={state} {...rest}>{children}</Tag>;
+};
+
+/**
+ * Keep the keyboard inside an open dialog, and give it back afterwards.
+ *
+ * Every dialog in this app was a `<div>`. Nothing said it was a dialog, so a
+ * screen reader carried on announcing the conversation behind it; nothing held
+ * the keyboard, so Tab walked straight out into the chat list underneath while
+ * the overlay covered it; and nothing gave focus back on close, so after
+ * shutting Settings the next Tab started from the top of the document.
+ *
+ * All three are the same omission, and all three matter to the same people.
+ *
+ * Returns a ref to put on the dialog element. Used with `role="dialog"` and
+ * `aria-modal="true"`, which is what tells assistive technology to treat the
+ * rest of the page as inert.
+ */
+export const useDialog = (open) => {
+  const ref = useRef(null);
+  const restoreTo = useRef(null);
+
+  useEffect(() => {
+    if (!open) return undefined;
+
+    // Whoever opened it, so it can be handed back. Captured before focus
+    // moves, which is why this is here rather than in the cleanup.
+    restoreTo.current = document.activeElement;
+
+    const node = ref.current;
+    // The first thing worth landing on. Not the close button where there is
+    // anything else: opening a dialog focused on "cancel" is a small hostility.
+    const focusables = () => [...(node?.querySelectorAll(
+      'a[href], button:not([disabled]), input:not([disabled]):not([type="hidden"]),'
+      + ' select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])',
+    ) || [])].filter(el => el.offsetParent !== null || el === document.activeElement);
+
+    const first = focusables();
+    // A dialog with nothing focusable still needs the keyboard *somewhere*
+    // inside it, or Tab starts from the document again.
+    if (first.length > 0) first[0].focus();
+    else node?.focus?.();
+
+    const onKeyDown = (e) => {
+      if (e.key !== 'Tab') return;
+      const items = focusables();
+      if (items.length === 0) { e.preventDefault(); return; }
+      const firstItem = items[0];
+      const lastItem = items[items.length - 1];
+      // Wrapping is the whole of a focus trap: off the end goes to the start,
+      // and off the start goes to the end.
+      if (e.shiftKey && document.activeElement === firstItem) {
+        e.preventDefault();
+        lastItem.focus();
+      } else if (!e.shiftKey && document.activeElement === lastItem) {
+        e.preventDefault();
+        firstItem.focus();
+      }
+    };
+
+    node?.addEventListener('keydown', onKeyDown);
+    return () => {
+      node?.removeEventListener('keydown', onKeyDown);
+      // Back where it came from. `focus()` on a removed element throws in no
+      // browser, but the element may have gone with the dialog that opened it.
+      const target = restoreTo.current;
+      if (target && document.contains(target) && typeof target.focus === 'function') {
+        target.focus();
+      }
+    };
+  }, [open]);
+
+  return ref;
 };
 
 /**

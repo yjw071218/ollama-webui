@@ -137,7 +137,12 @@ export const EXTRACTION_PROMPT = [
  * Runs the extraction pass against Ollama. `format` pins the reply to the
  * schema, so no output parsing guesswork is needed.
  */
-export const extractMemories = async (transcript, model, { signal } = {}) => {
+/* `options` is passed in rather than invented here, and `num_ctx` inside it is
+   the reason. Ollama keeps one loaded instance per context size, so a side
+   call that omits it reloads the whole model at the model's own default
+   context -- 262k on a modern one, whose KV cache alone can be larger than the
+   card. See `helperOptions` in App.jsx for the measurements. */
+export const extractMemories = async (transcript, model, { signal, options = {} } = {}) => {
   const res = await fetch('/api/chat', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -148,7 +153,7 @@ export const extractMemories = async (transcript, model, { signal } = {}) => {
       think: false,
       format: EXTRACTION_SCHEMA,
       messages: [{ role: 'user', content: `${EXTRACTION_PROMPT}\n\n---\n${transcript}` }],
-      options: { temperature: 0.2, num_predict: 400 },
+      options: { temperature: 0.2, num_predict: 400, ...options },
     }),
   });
 

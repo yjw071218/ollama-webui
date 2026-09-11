@@ -62,4 +62,7 @@ const stripVariantFields = (variant) => ({
   metrics: variant.metrics,
   model: variant.model,
   variantId: variant.id,
+  // When that answer finished, so the time under it follows the pager. Only
+  // when known: a variant from before times were kept leaves the message's own.
+  ...(variant.at ? { at: variant.at } : {}),
 });

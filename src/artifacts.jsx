@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import hljs from 'highlight.js/lib/common';
-import { Play, RefreshCcw, Copy, Check, Trash2, TriangleAlert, Pencil, RotateCcw, TextWrap } from 'lucide-react';
+import { copyText } from './clipboard.js';
+import { Play, RefreshCcw, Copy, Check, Trash2, TriangleAlert, Pencil, RotateCcw, TextWrap, Square } from 'lucide-react';
 
 /* =========================================================================
    Fence parsing
@@ -425,6 +426,13 @@ export const ConsolePane = ({ entries, onClear }) => (
    Python runner (Pyodide)
    ========================================================================= */
 
+// Pinned, and in one place, because the runtime and the package catalogue are
+// the same download: a version is a Python version *and* a set of pre-built
+// packages. 0.25.0 was two years old and carried 260 of them; this one carries
+// 356, and the difference includes pygame.
+export const PYODIDE_VERSION = '314.0.6';
+const PYODIDE_BASE = `https://cdn.jsdelivr.net/pyodide/v${PYODIDE_VERSION}/full/`;
+
 const loadPyodideScript = () => new Promise((resolve) => {
   if (window.loadPyodide) return resolve(window.loadPyodide);
   const existing = document.getElementById('pyodide-script');
@@ -435,71 +443,408 @@ const loadPyodideScript = () => new Promise((resolve) => {
   }
   const script = document.createElement('script');
   script.id = 'pyodide-script';
-  script.src = 'https://cdn.jsdelivr.net/pyodide/v0.25.0/full/pyodide.js';
+  script.src = `${PYODIDE_BASE}pyodide.js`;
   script.onload = () => resolve(window.loadPyodide || null);
   script.onerror = () => resolve(null);
   document.body.appendChild(script);
 });
 
-// Modules Pyodide can install on demand, keyed by the import name.
-const KNOWN_PACKAGES = new Set([
-  'numpy', 'pandas', 'scipy', 'matplotlib', 'sympy', 'scikit-learn', 'sklearn',
-  'networkx', 'pillow', 'PIL', 'requests', 'beautifulsoup4', 'bs4', 'regex',
-  'pytz', 'dateutil', 'attrs', 'pyyaml', 'yaml', 'lxml', 'statsmodels',
-]);
+/* ------------------------------------------------- getting the imports in
+ *
+ * This used to be a hand-written list of twenty-two module names. Pyodide
+ * ships three hundred and fifty-six, and anything outside the list was simply
+ * not installed -- the code ran anyway and failed on the import, which is how
+ * `import pygame` produced a ModuleNotFoundError next to a Run button that had
+ * said nothing about needing to install anything.
+ *
+ * Nothing is listed by hand now. Three sources answer the question in turn,
+ * each of them authoritative about its own part:
+ *
+ *   1. `loadPackagesFromImports` is Pyodide's own -- it reads the code and
+ *      loads whatever it has built for it. Three hundred and fifty-six
+ *      packages, kept current by the people who build them.
+ *   2. Python itself says what is still missing, via `importlib.util.find_spec`
+ *      against `sys.stdlib_module_names`. No guessing about which names are
+ *      standard library and no list of them here to fall out of date.
+ *   3. `micropip` installs the rest from PyPI, which covers every pure-Python
+ *      package there is.
+ *
+ * What is left over after all three is genuinely unavailable, and the runner
+ * says so before running rather than after failing.
+ */
 
-const PACKAGE_FOR_IMPORT = { sklearn: 'scikit-learn', PIL: 'pillow', bs4: 'beautifulsoup4', yaml: 'pyyaml', dateutil: 'python-dateutil' };
+// Import names that differ from the name the package is published under.
+// Unavoidably a list, because the mapping is a fact about the packaging
+// ecosystem rather than something either side can be asked for -- but only the
+// exceptions, and only where the two genuinely differ.
+export const PACKAGE_FOR_IMPORT = {
+  sklearn: 'scikit-learn',
+  PIL: 'pillow',
+  bs4: 'beautifulsoup4',
+  yaml: 'pyyaml',
+  dateutil: 'python-dateutil',
+  cv2: 'opencv-python',
+  serial: 'pyserial',
+  OpenGL: 'pyopengl',
+  dotenv: 'python-dotenv',
+  git: 'gitpython',
+  // pygame-ce is the community fork, and the one Pyodide builds. It installs
+  // as `pygame`, so code written against pygame needs no changes.
+  pygame: 'pygame-ce',
+};
 
-const detectImports = (code) => {
-  const found = new Set();
-  const re = /^\s*(?:import\s+([\w.]+)|from\s+([\w.]+)\s+import)/gm;
-  let m;
-  while ((m = re.exec(code)) !== null) {
-    const root = (m[1] || m[2] || '').split('.')[0];
-    if (root && KNOWN_PACKAGES.has(root)) found.add(PACKAGE_FOR_IMPORT[root] || root);
+// Reading the imports with Python's own parser rather than a regular
+// expression: `import` inside a string, a comment or a docstring is not an
+// import, and a regex over source cannot tell the difference. `ast` is in the
+// standard library, so this costs nothing to load.
+export const FIND_MISSING_IMPORTS = `
+import ast, sys, importlib.util, json
+
+def _webui_missing(src):
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        # Let the real run report the syntax error, with its line number.
+        return []
+    roots = set()
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                roots.add(alias.name.split('.')[0])
+        elif isinstance(node, ast.ImportFrom):
+            # level > 0 is a relative import -- a sibling file, not a package.
+            if node.level == 0 and node.module:
+                roots.add(node.module.split('.')[0])
+    missing = [
+        name for name in sorted(roots)
+        if name not in sys.stdlib_module_names
+        and importlib.util.find_spec(name) is None
+    ]
+    return json.dumps(missing)
+`;
+
+/**
+ * Install whatever the code imports, before running it.
+ *
+ * Three passes, and the order matters: Pyodide's own builds are faster and
+ * better tested than anything from PyPI, so they are asked first; PyPI covers
+ * the long tail; and anything still missing is reported by name, before the
+ * run, instead of surfacing as a traceback at the first import.
+ *
+ * Nothing here throws on a package it cannot install. A script that imports
+ * one optional thing inside a `try` should still run, and the model does write
+ * those -- so a failure is a line of output and the run continues.
+ */
+const ensurePackages = async (pyodide, code, append) => {
+  // 1. Pyodide's own catalogue, via its own reader of the code.
+  try {
+    await pyodide.loadPackagesFromImports(code, {
+      messageCallback: () => {},
+      errorCallback: () => {},
+    });
+  } catch (err) {
+    // A package that fails to load is reported by the missing-import pass
+    // below, which is a better message than whatever this threw.
   }
-  return [...found];
+
+  // 2. Ask Python what is still not importable. `find_spec` against
+  //    `sys.stdlib_module_names` means no list of standard-library names here,
+  //    and no guessing about what step 1 already handled.
+  let missing = [];
+  try {
+    pyodide.runPython(FIND_MISSING_IMPORTS);
+    const findMissing = pyodide.globals.get('_webui_missing');
+    const raw = findMissing(code);
+    missing = JSON.parse(raw || '[]');
+    // Proxies to Python objects are not garbage collected by the JS engine;
+    // leaking one per run would keep the interpreter's copy alive too.
+    findMissing.destroy?.();
+  } catch (err) {
+    return;   // Cannot tell; let the run report whatever actually breaks.
+  }
+  if (missing.length === 0) return;
+
+  // 3. PyPI, for the pure-Python long tail.
+  append('system', `Installing from PyPI: ${missing.join(', ')}…`);
+  let micropip;
+  try {
+    await pyodide.loadPackage('micropip');
+    micropip = pyodide.pyimport('micropip');
+  } catch (err) {
+    append('err', `Could not load the installer: ${err.message || err}`);
+    return;
+  }
+
+  const failed = [];
+  for (const name of missing) {
+    const distribution = PACKAGE_FOR_IMPORT[name] || name;
+    try {
+      await micropip.install(distribution);
+    } catch (err) {
+      failed.push({ name, distribution, reason: String(err.message || err) });
+    }
+  }
+
+  for (const { name, distribution, reason } of failed) {
+    // The commonest cause by far, and the one worth explaining: the package
+    // has compiled C in it. Nothing can install those at runtime -- they have
+    // to be built for WebAssembly ahead of time, which is what Pyodide's own
+    // catalogue is. Saying "no matching wheel" to someone whose game will not
+    // start is technically true and no help at all.
+    const isBinary = /wheel|binary|abi|platform|not found|no match/i.test(reason);
+    append('err', isBinary
+      ? `${name} is not available in the browser. ${distribution} has compiled parts, and only packages built for WebAssembly ahead of time can be installed here.`
+      : `Could not install ${name}: ${reason}`);
+  }
+};
+
+/**
+ * A game loop that will lock the tab, spotted before it does.
+ *
+ * The page runs Python on the one thread it draws with, so `while True:` never
+ * gives it back. There is no stop button that can help: the click cannot be
+ * processed, because processing it is what the loop is preventing. The only
+ * way out is reloading the page, which takes the conversation's scroll
+ * position and the artifact panel with it.
+ *
+ * So the check happens before the code runs, and it is a warning rather than a
+ * refusal -- a deliberate busy loop is a legitimate thing to write, and the
+ * warning says what to change rather than standing in the way.
+ *
+ * Only the shape that actually hangs is flagged: a loop with an `await` in it
+ * yields to the browser on every pass and is exactly the fix being suggested.
+ */
+export const findsBlockingLoop = (code) => {
+  // `await` anywhere in the file clears it. Being precise about whether the
+  // await is inside *this* loop would need a parser, and staying quiet about a
+  // loop that does yield somewhere is the safe direction to be wrong in.
+  if (/\bawait\b/.test(code)) return false;
+
+  // `while True:` is the obvious shape and was the only one checked, which is
+  // why this kept letting real games through. The loop a model actually writes
+  // is the one from every pygame tutorial ever published:
+  //
+  //     running = True
+  //     while running:
+  //         for event in pygame.event.get():
+  //             if event.type == pygame.QUIT:
+  //                 running = False
+  //         ...
+  //         clock.tick(60)
+  //
+  // `running` is never set false in a browser, because the QUIT event comes
+  // from closing a window and there is no window to close. So it is `while
+  // True:` wearing a variable, and it hangs the tab exactly as hard.
+  const anyWhile = /^[ \t]*while\b[^\n:]*:/m.test(code);
+  if (!anyWhile) return false;
+
+  const literallyForever = /^[ \t]*while\s+(True|1)\s*:/m.test(code);
+  if (literallyForever) return true;
+
+  // A conditional loop is only a hazard when it is driving something that
+  // redraws. A `while queue:` that consumes a list finishes; a loop containing
+  // a frame clock or an event pump does not, because what would end it never
+  // arrives. These are the marks of a loop meant to run until a window closes.
+  const drivesAFrameLoop = /\bclock\.tick\s*\(|\bpygame\.(display|event|time)\b|\bturtle\.(update|mainloop|done)\b|\btime\.sleep\s*\(/.test(code);
+  return drivesAFrameLoop;
+};
+
+/* Whether this code wants to draw.
+ *
+ * SDL has to be handed a canvas before `pygame.display.set_mode()` is called.
+ * Without one it does not raise -- it *hangs*, reaching into an undefined
+ * context for `createImageData` and never returning, which takes the tab with
+ * it. So the canvas is prepared in advance, from the source, rather than
+ * created in response to the drawing that can no longer happen.
+ *
+ * A regex is enough here, unlike for installing: the cost of being wrong is an
+ * empty canvas nobody draws on, or none where one was wanted and the run says
+ * so. Neither is a hang.
+ */
+const GRAPHICS_MODULES = /^\s*(?:import|from)\s+(pygame|turtle)\b/m;
+
+/* Making a desktop game loop survivable in a browser.
+ *
+ * A loop written for a desktop never returns, and here the thread it never
+ * returns from is the one that draws the page. Refusing to run it is honest
+ * but useless -- the code is fine, it is the environment that is different --
+ * and explaining the fix asks somebody to edit code they did not write.
+ *
+ * The fix is always the same shape, so it is applied instead of described:
+ * hand control back to the browser once per pass, and check whether Stop has
+ * been pressed. Done with Python's own parser, because indentation is
+ * significant, loops nest, and "append a line to the end of the loop body" is
+ * not something a regular expression can locate.
+ *
+ * Two deliberate exemptions. A loop that already awaits is already
+ * cooperative. And a loop inside a `def` is left alone: `await` there would
+ * require the function to become `async def`, which changes how every caller
+ * has to invoke it -- a rewrite with consequences beyond the loop.
+ */
+export const ASYNCIFY_SOURCE = `
+import ast
+
+def _webui_asyncify(src):
+    try:
+        tree = ast.parse(src)
+    except SyntaxError:
+        return None
+
+    touched = False
+
+    class Yielder(ast.NodeTransformer):
+        def visit_While(self, node):
+            nonlocal touched
+            self.generic_visit(node)
+            if any(isinstance(n, ast.Await) for n in ast.walk(node)):
+                return node
+            touched = True
+            node.body.extend(ast.parse(
+                "await asyncio.sleep(0)\\n"
+                "if _webui_should_stop(): break\\n"
+            ).body)
+            return node
+
+        def visit_FunctionDef(self, node):
+            return node
+
+        def visit_AsyncFunctionDef(self, node):
+            return node
+
+    tree = Yielder().visit(tree)
+    if not touched:
+        return None
+    ast.fix_missing_locations(tree)
+    return "import asyncio\\n" + ast.unparse(tree)
+`;
+
+/**
+ * Rewrite `code` so its loops yield, or return null if there is nothing to do.
+ *
+ * Runs inside Pyodide because that is where a Python parser is. Any failure
+ * returns null and the caller falls back to refusing the run, which is the
+ * behaviour this replaces rather than something worse than it.
+ */
+const asyncifyLoops = async (pyodide, code) => {
+  try {
+    pyodide.runPython(ASYNCIFY_SOURCE);
+    const rewrite = pyodide.globals.get('_webui_asyncify');
+    const out = rewrite(code);
+    rewrite.destroy?.();
+    return out || null;
+  } catch (err) {
+    return null;
+  }
 };
 
 export const PythonRunner = ({ code, compact = false }) => {
   const [lines, setLines] = useState([]);
   const [status, setStatus] = useState('idle'); // idle | loading | running | done | error
   const [elapsed, setElapsed] = useState(null);
+  // Kept off screen until something is going to draw on it, so a script that
+  // prints numbers does not grow an empty grey box underneath it.
+  const [showCanvas, setShowCanvas] = useState(false);
+  const canvasRef = useRef(null);
   const mountedRef = useRef(true);
+  // Read by the rewritten loop through `_webui_should_stop`, once per pass.
+  // A ref rather than state: the Python side asks for it synchronously, and it
+  // must be the current value, not the one from the render that started the run.
+  const stopRef = useRef(false);
 
-  useEffect(() => () => { mountedRef.current = false; }, []);
+  // Set on the way in as well as cleared on the way out. Only clearing it is
+  // the obvious version and it is wrong under StrictMode, which mounts,
+  // unmounts and remounts every component in development: the cleanup ran, the
+  // flag went false, and nothing ever put it back — so `append` discarded
+  // every line for the life of the component. Python ran, drew, and printed
+  // into a void, with an empty output pane underneath saying nothing at all.
+  useEffect(() => {
+    mountedRef.current = true;
+    return () => { mountedRef.current = false; };
+  }, []);
 
   const append = useCallback((level, text) => {
     if (!mountedRef.current) return;
     setLines(prev => [...prev, { level, text }]);
   }, []);
 
-  const runCode = async () => {
-    setLines([]);
+  /**
+   * `force` is what the "run it anyway" button passes.
+   *
+   * A loop that never yields is not a thing this can survive: Python holds the
+   * one thread the page draws with, so the tab stops responding and even the
+   * Stop button cannot be clicked -- processing that click is precisely what
+   * the loop is preventing. The only way out is reloading the page, which
+   * takes the artifact panel, the scroll position and any unsent draft with
+   * it.
+   *
+   * A warning printed *next to* the run does not help, because by the time it
+   * is on screen the tab is already gone. So the run does not start: the
+   * warning takes the place of the output, with the fix in it and a button for
+   * people who meant it.
+   */
+  const runCode = async (force = false) => {
     setElapsed(null);
+
+    setLines([]);
     setStatus('loading');
+    stopRef.current = false;
     const started = performance.now();
 
     try {
       if (!window.pyodideInstance) {
-        append('system', 'Loading the Python runtime (first run downloads ~10 MB)…');
+        append('system', 'Loading the Python runtime — the first run downloads it, later runs reuse it…');
         const bootstrap = await loadPyodideScript();
         if (!bootstrap) throw new Error('Could not load Pyodide. A network connection is required the first time.');
-        window.pyodideInstance = await bootstrap({ indexURL: 'https://cdn.jsdelivr.net/pyodide/v0.25.0/full/' });
+        window.pyodideInstance = await bootstrap({ indexURL: PYODIDE_BASE });
       }
       const pyodide = window.pyodideInstance;
 
-      const packages = detectImports(code);
-      if (packages.length > 0) {
-        append('system', `Installing: ${packages.join(', ')}…`);
-        await pyodide.loadPackage(packages);
+      await ensurePackages(pyodide, code, append);
+
+      // Stop, in a form Python can act on. There is no way to interrupt a
+      // running Python from outside it here, so stopping is cooperative: the
+      // rewritten loop asks, once per pass, whether it should break.
+      pyodide.globals.set('_webui_should_stop', () => stopRef.current);
+
+      let source = code;
+      if (!force && findsBlockingLoop(code)) {
+        const rewritten = await asyncifyLoops(pyodide, code);
+        if (rewritten) {
+          source = rewritten;
+          append('system',
+            'This loop would never hand the page back, so it was given a pause on each '
+            + 'pass — the game runs, the browser stays responsive, and Stop works. '
+            + 'Your code is unchanged; only what was run is.');
+        } else {
+          // Could not rewrite it, so running it would hang the tab. Say so
+          // rather than doing it.
+          setStatus('blocked');
+          return;
+        }
       }
 
+      // Before the packages are used, and before anything can call set_mode.
+      if (GRAPHICS_MODULES.test(code)) {
+        setShowCanvas(true);
+        // Two frames: one to put the canvas in the document, one for the
+        // browser to lay it out. Registering an unlaid-out canvas hands SDL a
+        // context with no dimensions.
+        await new Promise(resolve => requestAnimationFrame(() => requestAnimationFrame(resolve)));
+        if (canvasRef.current && pyodide.canvas?.setCanvas2D) {
+          pyodide.canvas.setCanvas2D(canvasRef.current);
+        }
+      }
+
+
       setStatus('running');
+      // Let React paint the Stop button before handing the thread to Python.
+      // Without this the run begins in the same task as the state update and
+      // the button does not exist until the program has already finished.
+      await new Promise(resolve => requestAnimationFrame(resolve));
       pyodide.setStdout({ batched: (msg) => append('out', msg) });
       pyodide.setStderr({ batched: (msg) => append('err', msg) });
 
-      const result = await pyodide.runPythonAsync(code);
+      const result = await pyodide.runPythonAsync(source);
       if (result !== undefined && result !== null) append('out', String(result));
 
       if (mountedRef.current) {
@@ -520,17 +865,66 @@ export const PythonRunner = ({ code, compact = false }) => {
   return (
     <div className={compact ? 'py-runner compact' : 'py-runner'}>
       <div className="py-runner-bar">
-        <button className="btn pull-btn" onClick={runCode} disabled={busy}>
+        <button className="btn pull-btn" onClick={() => runCode()} disabled={busy}>
           {busy ? <RefreshCcw size={13} className="spin" /> : <Play size={13} />}
           {status === 'loading' ? 'Loading…' : status === 'running' ? 'Running…' : 'Run Python'}
         </button>
+        {/* Only while something is actually running, and only meaningful for
+            a loop that was rewritten to check the flag — which is exactly the
+            kind of program anyone needs to stop. */}
+        {status === 'running' && (
+          <button className="icon-btn" title="Stop" onClick={() => { stopRef.current = true; }}>
+            <Square size={12} fill="currentColor" stroke="none" />
+          </button>
+        )}
         {lines.length > 0 && (
-          <button className="icon-btn" title="Clear output" onClick={() => { setLines([]); setStatus('idle'); setElapsed(null); }}>
+          <button className="icon-btn" title="Clear output" onClick={() => { setLines([]); setStatus('idle'); setElapsed(null); setShowCanvas(false); }}>
             <Trash2 size={13} />
           </button>
         )}
         {elapsed !== null && <span className="py-runner-meta">{status === 'error' ? 'failed' : 'finished'} in {elapsed}s</span>}
       </div>
+
+      {status === 'blocked' && (
+        <div className="py-blocked">
+          <div className="py-blocked-head">
+            <TriangleAlert size={14} />
+            <strong>This would freeze the page</strong>
+          </div>
+          <p>
+            The code has a <code>while True:</code> loop with no <code>await</code> in it.
+            Python runs on the same single thread the page is drawn with, so a loop like
+            that never hands control back — the tab stops responding, and the Stop button
+            cannot help, because processing that click is exactly what the loop is
+            preventing. The only way out would be reloading the page.
+          </p>
+          <p>The same game, written so the browser gets a turn between frames:</p>
+          <pre>{[
+            'import asyncio, pygame',
+            '',
+            'async def main():',
+            '    while True:',
+            '        # ... handle events, update, draw ...',
+            '        pygame.display.flip()',
+            '        await asyncio.sleep(0)   # let the browser breathe',
+            '',
+            'asyncio.ensure_future(main())',
+          ].join('\n')}</pre>
+          <div className="py-blocked-actions">
+            <button className="btn pull-btn" onClick={() => runCode(true)}>Run it anyway</button>
+            <span>Asking the model to “rewrite this as an async loop for the browser” usually fixes it in one go.</span>
+          </div>
+        </div>
+      )}
+
+      {showCanvas && (
+        <div className="py-canvas-wrap">
+          {/* `id="canvas"` as well as the ref: Emscripten's SDL looks the
+              element up by that id when it has not been handed one, and a
+              build that takes that path would otherwise find nothing. */}
+          <canvas id="canvas" ref={canvasRef} className="py-canvas" width={320} height={240} />
+        </div>
+      )}
 
       {lines.length > 0 && (
         <div className="py-runner-output">
@@ -570,8 +964,10 @@ export const CodeView = ({ code, language, editable = false, onChange, onReset, 
 
   const lineCount = code.split('\n').length;
 
-  const copy = () => {
-    navigator.clipboard.writeText(code);
+  const copy = async () => {
+    // See src/clipboard.js: the modern API does not exist over plain HTTP,
+    // which is every address but the one the server itself is opened on.
+    if (!await copyText(code)) return;
     setCopied(true);
     setTimeout(() => setCopied(false), 1500);
   };

@@ -1,10 +1,17 @@
-// Data separation between profiles.
+// Data separation between accounts.
 //
-// The failure this covers was real: sync gathered every profile's chats on the
-// machine and restored all of them elsewhere, so signing in published the
-// guest's history and pulled other people's onto the next device. For anything
-// more than one person on one PC, that is the difference between a toy and
-// something usable.
+// The failures this covers were real, and there were two of them.
+//
+// Sync gathered every profile's chats on the machine and restored all of them
+// elsewhere, so signing in published the guest's history and pulled other
+// people's onto the next device.
+//
+// And the scope — the thing every store keys off — was derived from two
+// sources: a browser-local profile and a server account, whichever was present.
+// During boot the local one was available instantly and the server's took a
+// round trip, so the same browser produced two different answers seconds apart
+// and wrote into both. There is one source now, and a third state — 'we have
+// not asked yet' — that is represented rather than guessed at.
 import { rolldown } from 'rolldown';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -88,7 +95,7 @@ const populate = () => {
 
 // ------------------------------------------------- a scoped payload is one person's
 populate();
-const alice = await B.collectBackup({ scope: 'srv-alice', includeAccounts: false });
+const alice = await B.collectBackup({ scope: 'srv-alice' });
 
 eq('only the account chats are gathered', Object.keys(alice.sessions).length, 1);
 check('and they are the right ones', !!alice.sessions['ollama-sessions:srv-alice']);
@@ -104,18 +111,20 @@ check("another profile's folders do not", !('chatFolders:bob-local' in alice.set
 check("another profile's presets do not", !('samplingPresets:bob-local' in alice.settings));
 
 // The guest is a profile too and must be equally contained.
-const guest = await B.collectBackup({ scope: '', includeAccounts: false });
+const guest = await B.collectBackup({ scope: '' });
 check('a guest payload takes the guest chats', !!guest.sessions['ollama-sessions']);
 check('and not the account chats', !guest.sessions['ollama-sessions:srv-alice']);
 eq('and only the guest documents', Object.keys(guest.knowledge).join(), 'knowledge:guest');
 
 // A file backup with no scope is still the whole browser, which is the point of one.
-const whole = await B.collectBackup({ includeAccounts: false });
+const whole = await B.collectBackup({});
 eq('an unscoped backup keeps every profile', Object.keys(whole.sessions).length, 3);
 
 // -------------------------------------- restoring a scoped payload leaves others alone
 populate();
 await B.restoreBackup(alice, { mode: 'merge', primaryKey: 'ollama-sessions:srv-alice' });
+eq('the account bucket keeps its own chats',
+  storeFor('default').get('ollama-sessions:srv-alice')[0].title, 'Alice chat');
 eq('the guest chats are untouched', storeFor('default').get('ollama-sessions').length, 1);
 eq('and still the guest ones', storeFor('default').get('ollama-sessions')[0].title, 'Guest chat');
 eq("another profile's chats are untouched", storeFor('default').get('ollama-sessions:bob-local')[0].title, 'Bob chat');
@@ -128,7 +137,12 @@ reset();
 
 check('a setting is scoped', S.isScopedSetting('systemPrompt'));
 check('the chat store is not', !S.isScopedSetting('ollama-sessions'));
-check('the account list is not', !S.isScopedSetting('ollama-users'));
+check('the old account list is not', !S.isScopedSetting('ollama-users'));
+// These carry their own scope suffix. Without excluding them, a key like
+// `legacyImportOffered@srv-x` reads back as a setting named
+// `legacyImportOffered` belonging to srv-x, and then syncs to every device.
+check('the import bookkeeping is not', !S.isScopedSetting('legacyImportOffered'));
+check('nor the record of what was imported', !S.isScopedSetting('legacyImportedFrom'));
 check("another profile's folders are not", !S.isScopedSetting('chatFolders:srv-alice'));
 check('a machine-local path is not', !S.isScopedSetting('ttsRefAudio'));
 
@@ -145,40 +159,45 @@ S.setSetting('systemPrompt', 'alice prompt');
 eq('alice reads her own', S.getSetting('systemPrompt'), 'alice prompt');
 S.setActiveScope('');
 eq('the guest still reads theirs', S.getSetting('systemPrompt'), 'guest prompt');
-// Inheritance happens once, at first activation, and never again. As a
-// read-time fallback it meant every profile that had not overridden a setting
-// kept reading the guest's — so changing something as the guest changed it
-// everywhere, which is exactly what was reported.
+// A new account inherits nothing from whoever was on screen a moment ago.
+// Seeding one scope from another made an account's setup depend on which
+// machine first signed into it -- the same leak between identities as the rest
+// of this, wearing a friendlier hat.
 S.setActiveScope('');
 S.setActiveScope('srv-bob');
-eq('a new profile inherits the setup that was on screen', S.getSetting('systemPrompt'), 'guest prompt');
-check('and is marked as seeded', S.isSeeded('srv-bob'));
+eq('a new account starts from defaults, not from the guest', S.getSetting('systemPrompt'), null);
 
 // The guest now changes their mind. Bob must not follow.
 S.setActiveScope('');
 S.setSetting('systemPrompt', 'guest changed this later');
 eq('the guest sees their own change', S.getSetting('systemPrompt'), 'guest changed this later');
 S.setActiveScope('srv-bob');
-eq('a seeded profile does not follow the guest', S.getSetting('systemPrompt'), 'guest prompt');
+eq('and an account does not follow the guest', S.getSetting('systemPrompt'), null);
 
-// A setting the guest changes that bob never had is still not inherited.
 S.setActiveScope('');
 S.setSetting('chatFontSize', '20');
 S.setActiveScope('srv-bob');
-eq('nor does it pick up a setting added later', S.getSetting('chatFontSize'), null);
+eq('nor picks up a setting added later', S.getSetting('chatFontSize'), null);
 
 S.setSetting('systemPrompt', 'bob prompt');
 S.setActiveScope('srv-alice');
-eq("and once it writes, alice is unaffected", S.getSetting('systemPrompt'), 'alice prompt');
-eq('re-seeding an already seeded profile does nothing', S.seedScope('srv-bob', ''), 0);
+eq('and once it writes, alice is unaffected', S.getSetting('systemPrompt'), 'alice prompt');
 
-// Seeding must fill in around what a profile already has, not write over it:
-// those values may have just been restored from the account.
+// What a device restored from the account is the account's own, and activating
+// the scope must not disturb it.
 S.writeScopeSettings('srv-dave', { systemPrompt: 'from the account', theme: 'dark' });
 S.setActiveScope('');
 S.setActiveScope('srv-dave');
-eq('a synced value survives seeding', S.getSetting('systemPrompt'), 'from the account');
+eq('a synced value survives activation', S.getSetting('systemPrompt'), 'from the account');
 eq('and its own settings too', S.getSetting('theme'), 'dark');
+
+// Signing out on a shared computer should not leave the account's settings in
+// localStorage for the next person to read.
+eq('leaving clears the account cache', S.clearScopeSettings('srv-dave'), 2);
+S.setActiveScope('srv-dave');
+eq('so nothing of it is left', S.getSetting('systemPrompt'), null);
+S.setActiveScope('');
+eq('and the guest is untouched', S.getSetting('systemPrompt'), 'guest changed this later');
 S.setActiveScope('');
 
 const aliceSettings = S.readScopeSettings('srv-alice');
@@ -195,39 +214,56 @@ S.setActiveScope('srv-carol');
 eq('carol reads what was written for her', S.getSetting('systemPrompt'), 'carol');
 S.setActiveScope('');
 
-// ------------------------------------------------ which profile is in view
-// The bug this pins down: signing out left the server session attached, so the
-// scope still named the account. The guest was then reading, writing and
-// DELETING the account's chats, and the sync uploaded those deletions -- so
-// signing back in showed nothing.
+// ------------------------------------------------ whose data is in view
+// The bug this pins down: the scope was derived from two disagreeing sources,
+// so a signed-in person could be pointed at the guest's storage -- reading it,
+// writing to it, deleting from it -- and the sync then uploaded the result.
 const acct = { id: 'abc-123' };
-const localUser = { id: 'local-9' };
 
-eq('an account wins', P.deriveScope(acct, localUser), 'srv-abc-123');
-eq('the local profile is next', P.deriveScope(null, localUser), 'local-9');
-eq('neither is the guest', P.deriveScope(null, null), '');
-eq('an account with no id is not an account', P.deriveScope({}, localUser), 'local-9');
+eq('an account names its own scope', P.deriveScope(acct), 'srv-abc-123');
+eq('signed out is the guest', P.deriveScope(null), '');
+eq('an account with no id is not an account', P.deriveScope({}), '');
 
-const signedIn = P.deriveScope(acct, localUser);
-const afterSignOut = P.deriveScope(null, null);
-check('signing out leaves the account scope', P.scopeChanged(signedIn, afterSignOut));
+// The third state, and the reason this file exists. Before the session has been
+// resolved the answer is not 'guest' -- it is 'not known yet', and treating the
+// two as the same is exactly what pointed one person's writes at another's
+// storage for the first few hundred milliseconds of every load.
+eq('an unresolved session has no scope at all', P.deriveScope(acct, 'loading'), P.SCOPE_UNKNOWN);
+eq('and that is not the guest', P.deriveScope(acct, 'loading') === '', false);
+check('nothing may be read or written against it', !P.isResolved(P.deriveScope(acct, 'loading')));
+check('while a resolved scope may be', P.isResolved(P.deriveScope(acct)));
+check('including the guest, which is a real answer', P.isResolved(P.deriveScope(null)));
+
+const signedIn = P.deriveScope(acct);
+const afterSignOut = P.deriveScope(null);
+check('signing out changes the scope', P.scopeChanged(signedIn, afterSignOut));
 eq('and lands on the guest', afterSignOut, '');
 
-// The regression itself: keeping the session is what produced the data loss.
-eq('a kept session would still name the account', P.deriveScope(acct, null), 'srv-abc-123');
-check('which is exactly what must not survive a sign-out',
-  P.deriveScope(acct, null) !== afterSignOut);
+// The stamp on a payload is derived from the scope rather than tracked beside
+// it, so the two cannot drift apart -- and drift is what filed one account's
+// chats under another's name.
+eq('an account scope names its owner', P.ownerOfScope('srv-abc-123'), 'abc-123');
+eq('the guest owns nothing syncable', P.ownerOfScope(''), null);
+eq('nor does an unresolved scope', P.ownerOfScope(P.SCOPE_UNKNOWN), null);
 
-check('the guest may never keep a server session', !P.mayKeepServerSession(acct, null));
-check('nor may a sign-out with no account', !P.mayKeepServerSession(null, null));
+// The client-side half of the server's owner check. A payload for a different
+// account is discarded, never merged: by the time it is here, merging can only
+// put one person's chats into another person's list.
+check('an account may apply its own state', P.mayApplyState('srv-abc-123', 'abc-123'));
+check('but not another account\'s', !P.mayApplyState('srv-abc-123', 'def-456'));
+check('the guest may apply nothing', !P.mayApplyState('', 'abc-123'));
+check('and an unresolved scope may apply nothing',
+  !P.mayApplyState(P.SCOPE_UNKNOWN, 'abc-123'));
+// An older client cannot send a stamp; only a stamp naming somebody else lies.
+check('an unstamped payload is accepted', P.mayApplyState('srv-abc-123', null));
 
 // The stores really are separate buckets, so the two can never overlap.
 reset();
 storeFor('default').set('ollama-sessions', [{ id: 1, title: 'Guest', updatedAt: 1, messages: [] }]);
 storeFor('default').set('ollama-sessions:srv-abc-123', [{ id: 2, title: 'Account', updatedAt: 2, messages: [] }]);
 
-const guestPayload = await B.collectBackup({ scope: afterSignOut, includeAccounts: false });
-const acctPayload = await B.collectBackup({ scope: signedIn, includeAccounts: false });
+const guestPayload = await B.collectBackup({ scope: afterSignOut });
+const acctPayload = await B.collectBackup({ scope: signedIn });
 eq('the guest payload holds only guest chats',
   Object.keys(guestPayload.sessions).join(), 'ollama-sessions');
 eq('the account payload holds only account chats',

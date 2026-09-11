@@ -15,16 +15,44 @@ import {
   sortByRecency, withinHours, formatNews,
 } from '../src/newsFeed.js';
 import {
-  registerUser, verifyPassword, updateUser, createSession,
-  userForSession, destroySession, listUsers, findOrCreateSocialUser,
+  registerUser, verifyPassword, updateUser, changePassword, deleteAccount,
+  findUser, countUsers, findOrCreateSocialUser,
+  addCredential, findByCredentialId, touchCredential, listCredentials,
+  credentialIds, removeCredential,
 } from './accounts.js';
+import {
+  createSession, rotateSession, forkSession, readSession, destroySession,
+  destroyUserSessions, listUserSessions, sessionIdOf, liveTokens, pickSession,
+  sessionRequest, attachSessions, clearSessionCookies, csrfOk, isSecureRequest,
+  throttleState, recordFailedLogin, clearFailedLogins, clientIp,
+  MAX_SESSIONS, IDLE_TTL_MS,
+} from './session.js';
+import {
+  issueChallenge, consumeChallenge, verifyRegistration, verifyAssertion,
+  SUPPORTED_ALGORITHMS,
+} from './webauthn.js';
 import { verifyGoogleIdToken } from './social.js';
 import {
   issueState, consumeState, authorizeUrl, exchangeCode, fetchProfile,
   validAccessToken, readTokens, writeTokens, clearTokens,
   logout as kakaoLogout, unlink as kakaoUnlink,
 } from './kakao.js';
-import { readState, writeState, stateInfo, MAX_STATE_BYTES } from './state.js';
+import {
+  changesSince, applyChanges, accountStats, sweepTombstones,
+  OwnerMismatch, MAX_RECORD_BYTES, MAX_BATCH_RECORDS,
+} from './records.js';
+import {
+  createShare, readShare, listShares, revokeShare, revokeAllShares, MAX_SHARE_BYTES,
+} from './shares.js';
+import { addListener, publishRev, dropListeners } from './liveSync.js';
+import { normaliseOrigin } from './origin.js';
+import {
+  fetchWithTimeout, fetchPageResponse, blockReason,
+  htmlToText, decodeEntities, mainContent, readAsText, textOf,
+  marketFor, rankByRelevance,
+} from './webText.js';
+import { createLlamaRoutes, backendOf } from './llamacpp.js';
+import { createStudioRoutes } from './studio.js';
 
 
 // Previous CPU tick snapshot; usage is only meaningful as a delta.
@@ -78,53 +106,12 @@ const readGpuStats = () => new Promise((resolve) => {
    These used to go through api.allorigins.win from the browser purely to dodge
    CORS. That proxy is a single point of failure — when it returns 5xx every web
    feature dies at once, which is exactly what happened. The dev server has no
-   CORS restriction, so it does the fetching itself. */
+   CORS restriction, so it does the fetching itself.
 
-const BROWSER_UA =
-  'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36';
-
-const HTML_ENTITIES = {
-  amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'", '#x27': "'", '#x2F': '/',
-};
-
-const decodeEntities = (text) => text.replace(/&(#x?[0-9a-fA-F]+|[a-zA-Z]+);/g, (whole, name) => {
-  if (HTML_ENTITIES[name] !== undefined) return HTML_ENTITIES[name];
-  if (name[0] === '#') {
-    const code = name[1] === 'x' || name[1] === 'X'
-      ? parseInt(name.slice(2), 16)
-      : parseInt(name.slice(1), 10);
-    return Number.isFinite(code) ? String.fromCodePoint(code) : whole;
-  }
-  return whole;
-});
-
-/** Readable text from an HTML document, without pulling in a DOM library. */
-const htmlToText = (html) => decodeEntities(
-  html
-    .replace(/<(script|style|noscript|svg|head)[\s\S]*?<\/\1>/gi, ' ')
-    .replace(/<!--[\s\S]*?-->/g, ' ')
-    .replace(/<\/(p|div|section|article|li|tr|h[1-6]|br)>/gi, '\n')
-    .replace(/<br\s*\/?>/gi, '\n')
-    .replace(/<[^>]+>/g, ' ')
-)
-  .replace(/[ \t\u00a0]+/g, ' ')
-  .replace(/\n\s*\n\s*\n+/g, '\n\n')
-  .trim();
-
-const fetchWithTimeout = async (url, ms = 15000, headers = {}, init = {}) => {
-  const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), ms);
-  try {
-    return await fetch(url, {
-      redirect: 'follow',
-      signal: controller.signal,
-      ...init,
-      headers: { 'User-Agent': BROWSER_UA, 'Accept-Language': 'en-US,en;q=0.9', ...headers },
-    });
-  } finally {
-    clearTimeout(timer);
-  }
-};
+   Reading a page, deciding what encoding it is in, and deciding whether a
+   result is about the question are all in `webText.js`: they are pure, they
+   were all wrong in ways only a test would have caught, and nothing could
+   reach them while they sat in the middle of this file. */
 
 /* ---- Search providers ----
    Scraping a search engine is not a stable foundation: DuckDuckGo answers a
@@ -218,13 +205,22 @@ const unwrapBingUrl = (href) => {
 };
 
 const searchBing = async (query, limit) => {
+  // The market is chosen by the query's script rather than by the address this
+  // server happens to run from. Without it an English query typed in Korea is
+  // answered from the Korean index, which is where the dictionary entries and
+  // the furniture shop came from.
+  const market = marketFor(query);
   const res = await fetchWithTimeout(
-    `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${Math.max(limit, 10)}`,
+    `https://www.bing.com/search?q=${encodeURIComponent(query)}&count=${Math.max(limit, 10)}`
+      + `&mkt=${market.mkt}&setlang=${market.setlang}&cc=${market.cc}`,
     15000,
-    { Accept: 'text/html,application/xhtml+xml' }
+    {
+      Accept: 'text/html,application/xhtml+xml',
+      'Accept-Language': `${market.mkt},${market.setlang};q=0.9`,
+    }
   );
   if (!res.ok) throw new Error(`Bing HTTP ${res.status}`);
-  const html = await res.text();
+  const html = await textOf(res);
   if (/b_captcha|challenge-form/i.test(html)) throw new Error('Bing is challenging this address');
 
   const results = [];
@@ -269,11 +265,12 @@ const searchMarginalia = async (query, limit) => {
 
 /** Best-effort scrape. DuckDuckGo blocks quickly, hence the challenge check. */
 const searchDuckDuckGo = async (query, limit) => {
+  const market = marketFor(query);
   const res = await fetchWithTimeout('https://html.duckduckgo.com/html/', 15000, {
     'Content-Type': 'application/x-www-form-urlencoded',
-  }, { method: 'POST', body: new URLSearchParams({ q: query }).toString() });
+  }, { method: 'POST', body: new URLSearchParams({ q: query, kl: market.ddg }).toString() });
 
-  const html = await res.text();
+  const html = await textOf(res);
   // 202 plus an "anomaly" page is DuckDuckGo's rate-limit response.
   if (res.status === 202 || /anomaly-modal|challenge|captcha/i.test(html)) {
     throw new Error('DuckDuckGo is rate-limiting this address');
@@ -343,7 +340,7 @@ const searchGoogleNews = async (query, limit, uiLanguage) => {
   const res = await fetchWithTimeout(newsFeedUrl(topic, uiLanguage), 12000);
   if (!res.ok) throw new Error(`HTTP ${res.status}`);
 
-  let items = sortByRecency(parseNewsFeed(await res.text(), limit * 3));
+  let items = sortByRecency(parseNewsFeed(await textOf(res), limit * 3));
   // "What is the news" means today's; a subject search may legitimately turn up
   // the best coverage from a while back.
   if (!topic) items = withinHours(items, 48);
@@ -384,8 +381,16 @@ const searchWeb = async (query, limit = 5, env = {}, uiLanguage = 'en') => {
       continue;
     }
     try {
-      const results = await run();
-      if (results.length > 0) return { results, provider: name, attempts };
+      const found = await run();
+      // Off-topic results are not weak evidence, they are a different subject,
+      // and every one of them pushes a real source out of the read budget.
+      const results = rankByRelevance(query, found).slice(0, limit);
+      if (results.length > 0) {
+        if (found.length > results.length) {
+          attempts.push(`${name}: ${found.length} results, ${results.length} on topic`);
+        }
+        return { results, provider: name, attempts };
+      }
       attempts.push(`${name}: no results`);
     } catch (e) {
       attempts.push(`${name}: ${e.message}`);
@@ -533,18 +538,30 @@ export const createApiRoutes = (env = {}, options = {}) => {
           const { url, limit } = JSON.parse(body || '{}');
           if (!url || !/^https?:\/\//i.test(url)) return json({ success: false, error: 'A http(s) URL is required' }, 400);
 
-          const response = await fetchWithTimeout(url);
-          if (!response.ok) return json({ success: false, error: `HTTP ${response.status}` }, 400);
+          const response = await fetchPageResponse(url);
+          if (!response.ok) {
+            return json({ success: false, status: response.status, error: blockReason(response.status) }, 400);
+          }
 
           const type = response.headers.get('content-type') || '';
-          const raw = await response.text();
-          const text = /html/i.test(type) ? htmlToText(raw) : raw;
+          // Not a document. A PDF or an image decoded as text is a megabyte of
+          // noise, and a model handed noise treats it as evidence.
+          if (type && !/text\/|html|xml|json|javascript/i.test(type)) {
+            return json({ success: false, status: 415, error: `That link is ${type.split(';')[0]}, not a page.` }, 400);
+          }
+
+          const { text: raw, charset } = await readAsText(response);
+          const isMarkup = /html|xml/i.test(type) || /^\s*<(!doctype|html)/i.test(raw);
+          const text = isMarkup ? htmlToText(mainContent(raw)) : raw;
           const cap = Number(limit) > 0 ? Number(limit) : 8000;
 
           json({
             success: true,
             url: response.url || url,
             contentType: type,
+            // Which encoding this was read as. The first question when a page
+            // still comes out garbled, and it used to be unanswerable.
+            charset,
             truncated: text.length > cap,
             text: text.slice(0, cap),
           });
@@ -555,22 +572,33 @@ export const createApiRoutes = (env = {}, options = {}) => {
     });
 
     // ---- MCP: web search ----
-    // ---- Accounts that live on the server ----
-    //
-    // Browser storage is per origin, so a device-local account cannot carry
-    // settings to a phone. These can: the server knows who signed in, and
-    // hands back the same state to whatever device asks.
+    /* ------------------------------------------------ accounts on the server
 
-    const SESSION_COOKIE = 'webui_session';
-    const readCookie = (req, name) =>
-      (req.headers.cookie || '').match(new RegExp(`(?:^|;\\s*)${name}=([^;]*)`))?.[1] || '';
+       Browser storage is per origin, so a device-local account cannot carry a
+       history to a phone. These can: the server knows who signed in and hands
+       the same records back to whatever device asks.
 
-    const readBody = (req, limit = MAX_STATE_BYTES) => new Promise((resolve, reject) => {
+       Three things below are load-bearing and easy to get subtly wrong.
+
+       A browser holds a *set* of sessions, not one, because two tabs can be
+       two people. Anything that writes the cookie back writes the whole set —
+       replacing it with just this tab's is exactly the bug where signing out
+       of one tab signed out the rest.
+
+       Signing in always issues a fresh session id, so a cookie planted before
+       sign-in is worthless afterwards.
+
+       And CSRF is checked on every write. 401 means "no session, show the
+       sign-in screen"; 403 with `code: 'csrf'` means the session is fine but
+       the request did not prove it came from this app, which is a bug or an
+       attack and never something to retry quietly. */
+
+    const readBody = (req, limit = 1024 * 1024) => new Promise((resolve, reject) => {
       let body = '';
       req.on('data', chunk => {
         body += chunk;
         if (body.length > limit) {
-          reject(new Error('That payload is too large.'));
+          reject(new Error('That request body is too large.'));
           req.destroy();
         }
       });
@@ -585,104 +613,613 @@ export const createApiRoutes = (env = {}, options = {}) => {
       res.end(JSON.stringify(payload));
     };
 
-    const currentUser = (req) => userForSession(readCookie(req, SESSION_COOKIE));
+    /** One shape for every failure, so the code reaches the UI to be translated. */
+    const sendError = (res, e, status = 400) =>
+      sendJson(res, { success: false, error: e.message, code: e.code || '' }, status);
 
-    // No Secure flag: over plain HTTP on a LAN the browser would drop it and
-    // sign-in would loop. Put TLS in front to make it safe to add.
-    const setSessionCookie = (res, token) => {
-      res.setHeader('Set-Cookie',
-        `${SESSION_COOKIE}=${token}; Path=/; HttpOnly; SameSite=Lax; Max-Age=${30 * 86400}`);
+    const jsonBody = async (req, limit = 64 * 1024) => {
+      const raw = await readBody(req, limit);
+      try {
+        return raw ? JSON.parse(raw) : {};
+      } catch (e) {
+        throw new Error('That request body is not JSON.');
+      }
     };
 
-    route('/api/account/register', async (req, res) => {
-      if (req.method !== 'POST') return sendJson(res, { error: 'POST required' }, 405);
-      try {
-        const { name, email, password } = JSON.parse(await readBody(req, 64 * 1024) || '{}');
-        const user = await registerUser({ name, email, password });
-        setSessionCookie(res, createSession(user.id));
-        sendJson(res, { success: true, user });
-      } catch (e) {
-        sendJson(res, { success: false, error: e.message }, 400);
+    /**
+     * The session and the account behind this request, or nulls.
+     *
+     * `tokens` is every session the browser sent, not just the one in use. It
+     * is carried through because anything that writes the cookie back has to
+     * write the whole set.
+     */
+    const authenticate = (req) => {
+      const { tokens, token, session } = pickSession(req);
+      if (!session) return { tokens, token: '', session: null, user: null };
+      const user = findUser(session.userId);
+      // A session whose account was deleted is not a session.
+      if (!user) { destroySession(token); return { tokens, token: '', session: null, user: null }; }
+      return { tokens, token, session, user };
+    };
+
+    /** Everything a protected route needs, or a reply already sent. */
+    const guard = (req, res, { methods = null } = {}) => {
+      if (methods && !methods.includes(req.method)) {
+        sendJson(res, { success: false, error: `${methods.join(' or ')} required.` }, 405);
+        return null;
       }
-    });
-
-    route('/api/account/login', async (req, res) => {
-      if (req.method !== 'POST') return sendJson(res, { error: 'POST required' }, 405);
-      try {
-        const { email, password } = JSON.parse(await readBody(req, 64 * 1024) || '{}');
-        const user = await verifyPassword(email, password);
-        // One message for both causes: saying which was wrong tells an attacker
-        // whether the address is registered.
-        if (!user) return sendJson(res, { success: false, error: 'Wrong email or password.' }, 401);
-        setSessionCookie(res, createSession(user.id));
-        sendJson(res, { success: true, user });
-      } catch (e) {
-        sendJson(res, { success: false, error: e.message }, 400);
+      const auth = authenticate(req);
+      if (!auth.user) {
+        sendJson(res, { success: false, error: 'Not signed in.', code: 'unauthenticated' }, 401);
+        return null;
       }
-    });
+      if (!csrfOk(req, auth.session)) {
+        sendJson(res, { success: false, error: 'That request could not be verified.', code: 'csrf' }, 403);
+        return null;
+      }
+      return auth;
+    };
 
-    route('/api/account/logout', (req, res) => {
-      destroySession(readCookie(req, SESSION_COOKIE));
-      res.setHeader('Set-Cookie', `${SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Lax; Max-Age=0`);
-      sendJson(res, { success: true });
-    });
+    /** The account this request is acting as, or null. */
+    const currentUser = (req) => authenticate(req).user;
 
-    route('/api/account/me', (req, res) => {
-      const user = currentUser(req);
+    /* Who the browser could switch to, so a tab can offer the choice.
+
+       One entry per live *session*, not per account. Two tabs signed into
+       the same account are two sessions, and a browser that has hit the
+       cap has to report the cap -- otherwise there is no way to see from
+       outside that old sessions are being retired. */
+    const accountsOf = (tokens) => liveTokens(tokens).map((token) => {
+      const session = readSession(token);
+      const user = session && findUser(session.userId);
+      return user ? { user, sessionId: sessionIdOf(session.key) } : null;
+    }).filter(Boolean);
+
+    /**
+     * Sign in: always a fresh session id, never the one that arrived.
+     *
+     * What happens to the browser's other sessions depends on what this tab
+     * already was. A tab that was signed in is signing in *again*, so its
+     * session is replaced and the other tabs are untouched. A tab that was the
+     * guest is adding an account, so a new session joins the set.
+     */
+    const startSession = (req, res, user, { attach = true } = {}) => {
+      const auth = authenticate(req);
+      const { tokens } = auth;
+      // A tab that has not been given a session of its own yet has nothing to
+      // replace; `authenticate` would hand it one belonging to another tab.
+      const current = sessionRequest(req).fork ? '' : auth.token;
+      const set = liveTokens(tokens);
+
+      const meta = { userAgent: req.headers['user-agent'] || '', ip: clientIp(req) };
+      let token;
+      if (current) {
+        token = rotateSession(current, { userId: user.id, ...meta });
+        const at = set.indexOf(current);
+        if (at === -1) set.push(token); else set[at] = token;
+      } else {
+        token = createSession(user.id, meta);
+        set.push(token);
+      }
+
+      // The oldest goes if that would take the browser past the cap. Signing
+      // out of a tab nobody is looking at is the least surprising thing to lose.
+      while (set.length > MAX_SESSIONS) destroySession(set.shift());
+
+      const session = readSession(token);
+      if (attach) attachSessions(req, res, set, session?.csrf || '');
+      return {
+        tokens: set,
+        token,
+        sessionId: session ? sessionIdOf(session.key) : null,
+        csrfToken: session?.csrf || null,
+      };
+    };
+
+    route('/api/auth/session', (req, res) => {
+      const auth = authenticate(req);
+      const { tokens, user } = auth;
+      let session = auth.session;
+
+      // The one place the cookie is pruned. Expiry, a password change and a
+      // "sign out other devices" all kill sessions without the browser ever
+      // hearing, so the dead ids are dropped here -- where every tab arrives
+      // at boot and after any identity change anywhere.
+      const set = liveTokens(tokens);
+
+      /* A tab with no session of its own is given one, forked from whoever is
+         signed in on this browser. This is what makes two tabs two tabs.
+
+         A GET that creates a row is not something to do lightly, so it is
+         fenced: only a request that asks in the header, which is something only
+         this origin's own script can set. A navigation, a crawler and a
+         cross-site request all arrive without it and fork nothing. */
+      if (sessionRequest(req).fork && session && user) {
+        const forked = forkSession(auth.token, {
+          userAgent: req.headers['user-agent'] || '',
+          ip: clientIp(req),
+        });
+        if (forked) {
+          set.push(forked);
+          // Dropped from the server too: a session no browser can present is
+          // one nobody can revoke.
+          while (set.length > MAX_SESSIONS) destroySession(set.shift());
+          session = readSession(forked);
+        }
+      }
+
+      // Refreshed on every look, so an active browser's sessions slide forward
+      // rather than expiring on a fixed date.
+      attachSessions(req, res, set, session?.csrf || '');
+
+      const who = session ? findUser(session.userId) : null;
       sendJson(res, {
         success: true,
-        user: user || null,
-        anyAccounts: listUsers().length > 0,
-        state: user ? stateInfo(user.id) : null,
+        user: who || null,
+        // Which of the browser's sessions answered. A tab pins itself to this
+        // and sends it back, so it keeps its own identity no matter what the
+        // other tabs do.
+        sessionId: session ? sessionIdOf(session.key) : null,
+        csrfToken: session?.csrf || null,
+        state: who ? accountStats(who.id) : null,
+        anyAccounts: who ? true : countUsers() > 0,
+        accounts: accountsOf(set),
+        session: session ? {
+          createdAt: session.createdAt,
+          expiresAt: Math.min(session.absoluteExpiresAt, session.lastSeenAt + IDLE_TTL_MS),
+        } : null,
       });
     });
 
-    route('/api/account/profile', async (req, res) => {
-      const user = currentUser(req);
-      if (!user) return sendJson(res, { success: false, error: 'Not signed in.' }, 401);
+    route('/api/auth/register', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, { success: false, error: 'POST required.' }, 405);
       try {
-        const patch = JSON.parse(await readBody(req, 2 * 1024 * 1024) || '{}');
-        sendJson(res, { success: true, user: await updateUser(user.id, patch) });
+        const { name, email, password } = await jsonBody(req);
+        const user = await registerUser({ name, email, password });
+        const started = startSession(req, res, user);
+        sendJson(res, {
+          success: true, user, csrfToken: started.csrfToken,
+          sessionId: started.sessionId, accounts: accountsOf(started.tokens),
+          state: accountStats(user.id),
+        });
       } catch (e) {
-        sendJson(res, { success: false, error: e.message }, 400);
+        sendError(res, e);
       }
     });
 
-    // Signing in with Google is already proof of who you are, so it should also
-    // be the server account. Otherwise there are two notions of "your account"
-    // and only the obscure one makes settings follow you anywhere.
-    route('/api/account/social', async (req, res) => {
-      if (req.method !== 'POST') return sendJson(res, { error: 'POST required' }, 405);
+    route('/api/auth/login', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, { success: false, error: 'POST required.' }, 405);
       try {
-        const { credential } = JSON.parse(await readBody(req, 64 * 1024) || '{}');
+        const { email, password } = await jsonBody(req);
+        const ip = clientIp(req);
+
+        /* Guessing is slowed per address *and* per address-plus-account, so
+           one account being hammered does not lock out everybody else behind
+           the same NAT. */
+        const throttle = throttleState(ip, email);
+        if (throttle.blocked) {
+          res.setHeader('Retry-After', String(Math.ceil(throttle.retryAfterMs / 1000)));
+          return sendJson(res, {
+            success: false,
+            error: 'Too many attempts. Wait a minute and try again.',
+            code: 'throttled',
+            retryAfterMs: throttle.retryAfterMs,
+          }, 429);
+        }
+
+        const user = await verifyPassword(email, password);
+        if (!user) {
+          recordFailedLogin(ip, email);
+          // One message for a wrong password and an address nobody has
+          // registered: telling them apart is an account-enumeration oracle.
+          return sendJson(res, {
+            success: false, error: 'That email and password do not match.', code: 'bad-credentials',
+          }, 401);
+        }
+
+        clearFailedLogins(ip, email);
+        const started = startSession(req, res, user);
+        sendJson(res, {
+          success: true, user, csrfToken: started.csrfToken,
+          sessionId: started.sessionId, accounts: accountsOf(started.tokens),
+          state: accountStats(user.id),
+        });
+      } catch (e) {
+        sendError(res, e);
+      }
+    });
+
+    route('/api/auth/logout', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, { success: false, error: 'POST required.' }, 405);
+      const auth = authenticate(req);
+      // A tab that is already nobody can always sign out; only a real session
+      // has to prove the request came from this app.
+      if (auth.session && !csrfOk(req, auth.session)) {
+        return sendJson(res, { success: false, error: 'That request could not be verified.', code: 'csrf' }, 403);
+      }
+      if (auth.token) destroySession(auth.token);
+
+      // Only this tab's session goes. The others belong to other tabs.
+      const set = liveTokens(auth.tokens).filter(t => t !== auth.token);
+      if (set.length === 0) clearSessionCookies(req, res);
+      else attachSessions(req, res, set, '');
+
+      sendJson(res, { success: true, remaining: set.length, accounts: accountsOf(set) });
+    });
+
+    route('/api/auth/logout-others', (req, res) => {
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      const ended = destroyUserSessions(auth.user.id, { keepToken: auth.token });
+      const set = liveTokens(auth.tokens);
+      attachSessions(req, res, set, auth.session.csrf || '');
+      // Both spellings: the profile screen reads one and the tab tests the
+      // other, and renaming either would be a silent break.
+      sendJson(res, {
+        success: true, ended, endedSessions: ended, accounts: accountsOf(set),
+      });
+    });
+
+    route('/api/auth/sessions', (req, res) => {
+      const auth = guard(req, res, { methods: ['GET'] });
+      if (!auth) return;
+      sendJson(res, { success: true, sessions: listUserSessions(auth.user.id, auth.token) });
+    });
+
+    route('/api/auth/profile', async (req, res) => {
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      try {
+        // An avatar is a data URI, which is why this is not the 64 KB default.
+        const patch = await jsonBody(req, 2 * 1024 * 1024);
+        sendJson(res, { success: true, user: await updateUser(auth.user.id, patch) });
+      } catch (e) {
+        sendError(res, e);
+      }
+    });
+
+    route('/api/auth/password', async (req, res) => {
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      try {
+        const { currentPassword, newPassword } = await jsonBody(req);
+        await changePassword(auth.user.id, currentPassword, newPassword);
+        /* Every other device is signed out. A password is changed because it
+           might be known, and leaving the sessions it could have started alive
+           makes the change theatre. */
+        const ended = destroyUserSessions(auth.user.id, { keepToken: auth.token });
+        attachSessions(req, res, liveTokens(auth.tokens), auth.session.csrf || '');
+        sendJson(res, { success: true, endedSessions: ended });
+      } catch (e) {
+        sendError(res, e);
+      }
+    });
+
+    route('/api/auth/account', async (req, res) => {
+      const auth = guard(req, res, { methods: ['POST', 'DELETE'] });
+      if (!auth) return;
+      deleteAccount(auth.user.id);
+      // The foreign keys take the records, sessions and credentials with it.
+      const set = liveTokens(auth.tokens);
+      if (set.length === 0) clearSessionCookies(req, res);
+      else attachSessions(req, res, set, '');
+      sendJson(res, { success: true, accounts: accountsOf(set) });
+    });
+
+    /* Signing in with Google is already proof of who you are, so it is also the
+       server account. Otherwise there are two notions of "your account" and
+       only the obscure one makes a history follow you anywhere. */
+    route('/api/auth/google', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, { success: false, error: 'POST required.' }, 405);
+      try {
+        const { credential } = await jsonBody(req);
         const clientId = env.VITE_GOOGLE_CLIENT_ID || env.GOOGLE_CLIENT_ID || '';
         // Verified against Google, not taken on trust from the browser.
         const identity = await verifyGoogleIdToken(credential, clientId);
         const user = findOrCreateSocialUser(identity);
-        setSessionCookie(res, createSession(user.id));
-        sendJson(res, { success: true, user, state: stateInfo(user.id) });
+        const started = startSession(req, res, user);
+        sendJson(res, {
+          success: true, user, csrfToken: started.csrfToken,
+          sessionId: started.sessionId, accounts: accountsOf(started.tokens),
+          state: accountStats(user.id),
+        });
       } catch (e) {
-        sendJson(res, { success: false, error: e.message }, 401);
+        sendError(res, e, 401);
       }
     });
 
-    // The settings and history that follow the account.
-    route('/api/account/state', async (req, res) => {
-      const user = currentUser(req);
-      if (!user) return sendJson(res, { success: false, error: 'Not signed in.' }, 401);
+    /* ------------------------------------------------------------ passkeys
 
-      if (req.method === 'GET') {
-        return sendJson(res, { success: true, state: readState(user.id), info: stateInfo(user.id) });
-      }
-      if (req.method !== 'PUT' && req.method !== 'POST') {
-        return sendJson(res, { error: 'GET or PUT' }, 405);
-      }
+       The relying party is the host the browser is talking to, and the origin
+       it must have signed over is this exact origin. Both are derived from the
+       request rather than configured, because this server is reached on a
+       different address from every device that uses it. */
+
+    const rpIdOf = (req) => String(req.headers.host || 'localhost').split(':')[0];
+    const originsOf = (req) => {
+      const host = req.headers.host || 'localhost';
+      return [`http://${host}`, `https://${host}`];
+    };
+
+    route('/api/auth/passkey/register/options', (req, res) => {
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      const issued = issueChallenge('register', { userId: auth.user.id });
+      sendJson(res, {
+        success: true,
+        challengeId: issued.id,
+        publicKey: {
+          challenge: issued.challenge,
+          rp: { id: rpIdOf(req), name: 'Ollama WebUI' },
+          user: {
+            id: Buffer.from(auth.user.id).toString('base64url'),
+            name: auth.user.email || auth.user.name,
+            displayName: auth.user.name,
+          },
+          pubKeyCredParams: SUPPORTED_ALGORITHMS.map(alg => ({ type: 'public-key', alg })),
+          timeout: 120000,
+          attestation: 'none',
+          /* The full credential id, not a display prefix. A truncated one
+             decodes to different bytes, so the authenticator does not
+             recognise the key it already holds and quietly makes a second one
+             for the same account. */
+          excludeCredentials: credentialIds(auth.user.id).map(id => ({ type: 'public-key', id })),
+          authenticatorSelection: {
+            // Sign-in offers no username, so the key has to be discoverable.
+            residentKey: 'required',
+            requireResidentKey: true,
+            userVerification: 'preferred',
+          },
+        },
+      });
+    });
+
+    route('/api/auth/passkey/register/verify', async (req, res) => {
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
       try {
-        const state = JSON.parse(await readBody(req) || '{}');
-        sendJson(res, { success: true, ...writeState(user.id, state) });
+        const body = await jsonBody(req, 256 * 1024);
+        const pending = consumeChallenge(body.challengeId, 'register');
+        if (!pending || pending.meta?.userId !== auth.user.id) {
+          throw Object.assign(new Error('That registration has expired. Try again.'), { code: 'challenge' });
+        }
+        const verified = verifyRegistration({
+          challenge: pending.challenge,
+          // The browser sends these base64url-encoded; the verifier reads bytes.
+          attestationObject: Buffer.from(body.attestationObject || '', 'base64url'),
+          clientDataJSON: Buffer.from(body.clientDataJSON || '', 'base64url'),
+          rpId: rpIdOf(req),
+          origins: originsOf(req),
+        });
+        addCredential(auth.user.id, {
+          credentialId: body.credentialId || verified.credentialId,
+          publicKeyJwk: verified.publicKeyJwk,
+          algorithm: verified.algorithm,
+          signCount: verified.signCount,
+          label: body.label || 'Passkey',
+          aaguid: verified.aaguid || null,
+        });
+        sendJson(res, {
+          success: true,
+          user: findUser(auth.user.id),
+          passkeys: listCredentials(auth.user.id),
+        });
       } catch (e) {
-        sendJson(res, { success: false, error: e.message }, 400);
+        sendError(res, e);
       }
+    });
+
+    route('/api/auth/passkey/login/options', (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, { success: false, error: 'POST required.' }, 405);
+      const issued = issueChallenge('login');
+      sendJson(res, {
+        success: true,
+        challengeId: issued.id,
+        publicKey: {
+          challenge: issued.challenge,
+          rpId: rpIdOf(req),
+          timeout: 120000,
+          userVerification: 'preferred',
+          // Deliberately empty: naming credentials here would tell an
+          // unauthenticated caller which accounts exist.
+          allowCredentials: [],
+        },
+      });
+    });
+
+    route('/api/auth/passkey/login/verify', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, { success: false, error: 'POST required.' }, 405);
+      const refuse = () => sendJson(res, {
+        success: false, error: 'That passkey was not accepted.', code: 'passkey',
+      }, 401);
+      try {
+        const body = await jsonBody(req, 256 * 1024);
+        const pending = consumeChallenge(body.challengeId, 'login');
+        if (!pending) return refuse();
+
+        const held = findByCredentialId(body.credentialId);
+        // A passkey nobody registered names no account, and says so without
+        // revealing whether any account exists.
+        if (!held?.user) return refuse();
+
+        /* `verifyAssertion` throws on anything wrong -- the origin, the site,
+           the challenge, the signature, and a counter that did not move
+           forward, which means the credential has been cloned or the
+           assertion replayed. The catch below turns all of those into the
+           same refusal. */
+        const verified = verifyAssertion({
+          challenge: pending.challenge,
+          credential: held.credential,
+          authenticatorData: Buffer.from(body.authenticatorData || '', 'base64url'),
+          clientDataJSON: Buffer.from(body.clientDataJSON || '', 'base64url'),
+          signature: Buffer.from(body.signature || '', 'base64url'),
+          rpId: rpIdOf(req),
+          origins: originsOf(req),
+        });
+        touchCredential(held.user.id, held.credential.credentialId, { signCount: verified.signCount });
+
+        const user = held.user;
+        const started = startSession(req, res, user);
+        sendJson(res, {
+          success: true, user, csrfToken: started.csrfToken,
+          sessionId: started.sessionId, accounts: accountsOf(started.tokens),
+          state: accountStats(user.id),
+        });
+      } catch (e) {
+        refuse();
+      }
+    });
+
+    route('/api/auth/passkey/list', (req, res) => {
+      const auth = guard(req, res, { methods: ['GET'] });
+      if (!auth) return;
+      sendJson(res, { success: true, passkeys: listCredentials(auth.user.id) });
+    });
+
+    route('/api/auth/passkey/remove', async (req, res) => {
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      try {
+        const { id } = await jsonBody(req);
+        removeCredential(auth.user.id, id);
+        sendJson(res, {
+          success: true,
+          user: findUser(auth.user.id),
+          passkeys: listCredentials(auth.user.id),
+        });
+      } catch (e) {
+        sendError(res, e);
+      }
+    });
+
+    /* -------------------------------------------------------------- syncing
+
+       One record at a time rather than one blob per account. See
+       server/records.js for why: a blob cannot express a deletion, and two
+       devices pushing one loses data three different ways. */
+
+    route('/api/auth/sync', async (req, res) => {
+      const auth = req.method === 'GET'
+        ? (() => {
+          const a = authenticate(req);
+          if (!a.user) {
+            sendJson(res, { success: false, error: 'Not signed in.', code: 'unauthenticated' }, 401);
+            return null;
+          }
+          return a;
+        })()
+        : guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+
+      try {
+        if (req.method === 'GET') {
+          const since = Number(new URL(req.url, 'http://x').searchParams.get('since') || 0);
+          const page = changesSince(auth.user.id, since);
+          return sendJson(res, { success: true, ownerId: auth.user.id, ...page });
+        }
+
+        const body = await jsonBody(req, MAX_RECORD_BYTES * 4);
+        const result = applyChanges(auth.user.id, body);
+
+        /* Tombstones are swept occasionally rather than on a timer: this is
+           the only code that runs regularly, and a sweep on every write would
+           be a full table scan per sync. */
+        if (result.applied > 0 && Math.random() < 0.02) sweepTombstones(auth.user.id);
+        // Anything listening on this account is told there is something new.
+        // Labelled with the tab that rang it: a device hears its own bell
+        // too, and needs to know it was its own.
+        if (result.applied > 0) publishRev(auth.user.id, result.rev, sessionRequest(req).id || '');
+
+        sendJson(res, { success: true, ownerId: auth.user.id, ...result });
+      } catch (e) {
+        if (e instanceof OwnerMismatch) {
+          return sendJson(res, {
+            success: false, error: e.message, code: 'owner-mismatch',
+            expected: e.expected, claimed: e.claimed,
+          }, 409);
+        }
+        sendError(res, e);
+      }
+    });
+
+    /* A doorbell, not a delivery.
+     *
+     * The event carries a revision number and nothing else; the client then
+     * asks for the delta the ordinary way. Sending the records down this
+     * stream would mean two code paths that have to agree about merging, and
+     * the one that is harder to test would be the one nobody watches. */
+    route('/api/auth/events', (req, res) => {
+      const auth = authenticate(req);
+      /* Nobody signed in gets an empty answer rather than a refusal.
+         This stream is opened by an EventSource, and an EventSource
+         retries a failure for ever -- so answering 401 to the guest turns
+         a signed-out tab into a reconnect loop. 204 closes it and stays
+         closed. */
+      if (!auth.user) {
+        res.statusCode = 204;
+        res.end();
+        return;
+      }
+      addListener(auth.user.id, req, res);
+    });
+
+    route('/api/auth/stats', (req, res) => {
+      const auth = guard(req, res, { methods: ['GET'] });
+      if (!auth) return;
+      sendJson(res, { success: true, ownerId: auth.user.id, ...accountStats(auth.user.id) });
+    });
+
+    /* ------------------------------------------------------- share links */
+
+    /* Publish a conversation. What comes back is the only copy of the token:
+       the row holds a hash, so this response is the one chance to keep it. */
+    route('/api/share/create', async (req, res) => {
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      try {
+        // The default body limit is 64 KB, which is a setting or a password.
+        // A transcript is not, so this route is given the share cap plus room
+        // for the JSON around it -- and `createShare` still checks the real
+        // size, because the wrapper is not what is being stored.
+        const { chatId, title, snapshot, expiresInDays } =
+          await jsonBody(req, MAX_SHARE_BYTES + 64 * 1024);
+        const made = createShare(auth.user.id, { chatId, title, snapshot, expiresInDays });
+        sendJson(res, { success: true, ...made });
+      } catch (e) {
+        sendJson(res, { success: false, error: e.message, code: e.code || 'share' }, e.status || 400);
+      }
+    });
+
+    /* Read one, by its token, with no session at all.
+     *
+     * This is the only unauthenticated route here that returns something a
+     * person wrote, so it is worth being explicit: `readShare` builds its reply
+     * field by field and there is no path from a token to the account behind
+     * it. A wrong, revoked or expired token gets the same 404 as a made-up one
+     * -- telling them apart would tell a stranger that a guess had landed on
+     * something real. `no-store` because a shared link is meant to be
+     * revocable, and a copy sitting in a proxy is not. */
+    route('/api/share/view', (req, res) => {
+      if (req.method !== 'GET') return sendJson(res, { success: false, error: 'GET required.' }, 405);
+      const token = new URL(req.url, 'http://x').searchParams.get('token') || '';
+      const shared = readShare(token);
+      res.setHeader('Cache-Control', 'no-store');
+      if (!shared) return sendJson(res, { success: false, error: 'That link is not available.' }, 404);
+      sendJson(res, { success: true, share: shared });
+    });
+
+    route('/api/share/list', (req, res) => {
+      const auth = guard(req, res, { methods: ['GET'] });
+      if (!auth) return;
+      sendJson(res, { success: true, shares: listShares(auth.user.id) });
+    });
+
+    route('/api/share/revoke', async (req, res) => {
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      const { id, all } = await jsonBody(req).catch(() => ({}));
+      const removed = all ? revokeAllShares(auth.user.id) : (revokeShare(auth.user.id, id) ? 1 : 0);
+      sendJson(res, { success: true, removed });
     });
 
     // Public identity of the app, served at runtime rather than baked in at
@@ -698,6 +1235,26 @@ export const createApiRoutes = (env = {}, options = {}) => {
         kakaoRestKey: env.VITE_KAKAO_REST_KEY || env.KAKAO_REST_KEY || '',
         kakaoSecretConfigured: !!env.KAKAO_CLIENT_SECRET,
         accounts: true,
+        // So the sign-in screen offers the passkey button only where this
+        // server can actually verify one.
+        passkeys: true,
+        // Delta sync rather than whole-blob replacement. The client checks
+        // this so an older backend still gets something that works.
+        sync: 'records',
+        /* The address everything should be opened on, if whoever runs this
+           server named one. A browser keys its storage and its cookies to an
+           origin, so a phone on `http://<address>.nip.io:5173` and a desktop
+           on `http://localhost:5173` are two websites as far as the browser
+           is concerned: two caches, two logins. The client compares this
+           with the address it was loaded from and says so when they differ.
+           Empty means nobody named one and every address is equally fine. */
+        canonicalOrigin: normaliseOrigin(env.PUBLIC_ORIGIN, {
+          scheme: isSecureRequest(req) ? 'https' : 'http',
+          port: Number(env.PORT) || 5173,
+        }),
+        maxRecordBytes: MAX_RECORD_BYTES,
+        maxBatchRecords: MAX_BATCH_RECORDS,
+        secure: isSecureRequest(req),
       }));
     });
 
@@ -722,7 +1279,7 @@ export const createApiRoutes = (env = {}, options = {}) => {
           const res2 = await fetchWithTimeout(newsFeedUrl(subject, String(language || 'en')), 12000);
           if (!res2.ok) throw new Error(`HTTP ${res2.status}`);
 
-          let items = sortByRecency(parseNewsFeed(await res2.text(), count * 3));
+          let items = sortByRecency(parseNewsFeed(await textOf(res2), count * 3));
           if (!subject) items = withinHours(items, 48);
           items = items.slice(0, count);
 
@@ -883,7 +1440,10 @@ export const createApiRoutes = (env = {}, options = {}) => {
         const user = findOrCreateSocialUser(identity);
 
         writeTokens(user.id, tokens);
-        setSessionCookie(res, createSession(user.id));
+        // Arrives as a top-level redirect from Kakao, so this is the one
+        // sign-in that cannot carry a CSRF header; the `state` parameter
+        // checked above is what stands in for it.
+        startSession(req, res, user);
         res.writeHead(302, { Location: '/?kakao=ok' });
         res.end();
       } catch (e) {
@@ -1020,6 +1580,26 @@ export const createApiRoutes = (env = {}, options = {}) => {
         res.end(JSON.stringify({ success: false, error: e.message }));
       }
     });
+
+  /* The inference backend.
+   *
+   * Under Ollama nothing is registered here and `/api/*` falls through to the
+   * proxy it has always fallen through to. Under llama.cpp these handlers claim
+   * the same paths and translate — see server/llamacpp.js for why the client
+   * keeps speaking Ollama's dialect either way.
+   *
+   * Registered from inside `createApiRoutes` on purpose: it is the one thing
+   * both the dev middleware stack and the production server already call, so
+   * `npm run dev` and `npm start` cannot end up on different backends. */
+  if (backendOf(env) === 'llamacpp') {
+    for (const llamaRoute of createLlamaRoutes(env)) routes.push(llamaRoute);
+  }
+
+  /* Pictures and video. Always mounted: unlike the backend switch these do not
+   * take a path away from anything, and they answer with a legible "ComfyUI is
+   * not running" rather than a 404 when it is not — which is the difference
+   * between a feature that looks broken and one that says what to start. */
+  for (const studioRoute of createStudioRoutes(env)) routes.push(studioRoute);
 
   return allowLocalFs
     ? routes

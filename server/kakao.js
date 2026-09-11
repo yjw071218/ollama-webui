@@ -22,14 +22,11 @@
 //
 // Tokens live on the server, under server/data, and never reach the browser.
 
-import fs from 'node:fs';
-import path from 'node:path';
 import crypto from 'node:crypto';
-import { DATA_DIR } from './accounts.js';
+import { database } from './db.js';
 
 const AUTH_HOST = 'https://kauth.kakao.com';
 const API_HOST = 'https://kapi.kakao.com';
-const TOKEN_DIR = path.join(DATA_DIR, 'kakao');
 
 // Long enough for a slow consent screen, short enough to be worth little to
 // anyone who scrapes one.
@@ -48,59 +45,83 @@ const pendingStates = new Map();
 
 const sweepStates = () => {
   const now = Date.now();
-  for (const [value, expires] of pendingStates) {
-    if (expires <= now) pendingStates.delete(value);
+  for (const [value, entry] of pendingStates) {
+    if (entry.expires <= now) pendingStates.delete(value);
   }
 };
 
-export const issueState = () => {
+/**
+ * A state, and whatever the callback will need to know.
+ *
+ * `context` is carried rather than sent through the browser because the browser
+ * is what this value exists to distrust. It holds which of this browser's
+ * sessions started the sign-in, so the callback replaces that tab's session and
+ * not some other tab's.
+ */
+export const issueState = (context = {}) => {
   sweepStates();
   const value = crypto.randomBytes(24).toString('base64url');
-  pendingStates.set(value, Date.now() + STATE_TTL_MS);
+  pendingStates.set(value, { expires: Date.now() + STATE_TTL_MS, context });
   return value;
 };
 
 /**
- * Accept a state exactly once.
+ * Accept a state exactly once, and hand back what was stored with it.
  *
  * Single use on purpose: a replayed callback carrying a state that has already
- * been spent is precisely what this is meant to reject.
+ * been spent is precisely what this is meant to reject. Null is the refusal,
+ * and an object — possibly empty — is the acceptance.
  */
 export const consumeState = (value) => {
   sweepStates();
-  if (!value || !pendingStates.has(value)) return false;
+  if (!value || !pendingStates.has(value)) return null;
+  const { context } = pendingStates.get(value);
   pendingStates.delete(value);
-  return true;
+  return context || {};
 };
 
 // ---------------------------------------------------------------- tokens
-
-const tokenFile = (userId) => {
-  if (!/^[0-9a-f-]{36}$/i.test(String(userId || ''))) throw new Error('Bad account id.');
-  return path.join(TOKEN_DIR, `${userId}.json`);
-};
+//
+// These are a live credential for somebody's Kakao account, so they live beside
+// the account they belong to rather than in a file named after it — which means
+// deleting the account takes them with it, by foreign key, rather than by
+// somebody remembering to unlink first.
 
 export const readTokens = (userId) => {
-  try {
-    const file = tokenFile(userId);
-    if (!fs.existsSync(file)) return null;
-    return JSON.parse(fs.readFileSync(file, 'utf-8'));
-  } catch (e) {
-    return null;
-  }
+  const row = database().prepare('SELECT * FROM kakao_tokens WHERE user_id = ?').get(userId);
+  if (!row) return null;
+  return {
+    accessToken: row.access_token,
+    refreshToken: row.refresh_token,
+    accessTokenExpiresAt: row.access_token_expires_at,
+    refreshTokenExpiresAt: row.refresh_token_expires_at,
+    scope: row.scope || '',
+  };
 };
 
 export const writeTokens = (userId, tokens) => {
-  const file = tokenFile(userId);
-  fs.mkdirSync(TOKEN_DIR, { recursive: true });
-  const temp = `${file}.tmp`;
-  fs.writeFileSync(temp, JSON.stringify(tokens, null, 2));
-  fs.renameSync(temp, file);
+  database().prepare(`
+    INSERT INTO kakao_tokens
+      (user_id, access_token, refresh_token, access_token_expires_at, refresh_token_expires_at, scope)
+    VALUES (?,?,?,?,?,?)
+    ON CONFLICT (user_id) DO UPDATE SET
+      access_token = excluded.access_token,
+      refresh_token = excluded.refresh_token,
+      access_token_expires_at = excluded.access_token_expires_at,
+      refresh_token_expires_at = excluded.refresh_token_expires_at,
+      scope = excluded.scope
+  `).run(
+    userId,
+    tokens.accessToken || null,
+    tokens.refreshToken || null,
+    tokens.accessTokenExpiresAt || null,
+    tokens.refreshTokenExpiresAt || null,
+    tokens.scope || null,
+  );
 };
 
-export const clearTokens = (userId) => {
-  try { fs.rmSync(tokenFile(userId), { force: true }); } catch (e) { /* already gone */ }
-};
+export const clearTokens = (userId) =>
+  database().prepare('DELETE FROM kakao_tokens WHERE user_id = ?').run(userId).changes > 0;
 
 // Kakao returns lifetimes in seconds; storing an instant means the arithmetic
 // is not repeated at every call site.

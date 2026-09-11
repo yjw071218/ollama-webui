@@ -111,11 +111,20 @@ body {
   background-color: var(--hover-bg);
 }
 
+/* The square the mark sits in.
+   The accent rather than the text colour, so the sidebar and the browser tab
+   are recognisably the same product -- the favicon used to be a purple that
+   appeared nowhere else in the app. */
 .claude-logo-icon {
   width: 28px;
   height: 28px;
-  background: var(--text-primary);
-  border-radius: 6px;
+  background: var(--primary);
+  /* A fixed pair, not a themed one. The square is --primary, which is the
+     same terracotta in both themes, so the mark on it has to be constant
+     too -- var(--bg-main) turned the bars dark in the dark theme, which
+     matched nothing and least of all the favicon. */
+  color: #F7F5F0;
+  border-radius: 8px;
   display: flex;
   align-items: center;
   justify-content: center;
@@ -219,6 +228,22 @@ body {
   position: relative;
   background-color: var(--bg-main);
   height: 100vh;
+  /* The header's controls have to react to how much room *this column* has,
+     not to how wide the window is. Those are different numbers whenever the
+     artifact panel is open: a 1500px window with a 620px panel leaves the
+     header 540px, and a `@media (max-width: …)` rule still sees 1500 and sheds
+     nothing. The header then needed 802px in 540 and its contents overlapped —
+     which is what the system meters looked like when they were "broken".
+
+     `inline-size` contains the inline axis only, so the column's height is
+     still decided by its contents; and it brings layout containment, not paint
+     containment, so the model dropdown still opens past the header's edge. */
+  container-type: inline-size;
+  container-name: mainpane;
+  /* A flex item's floor is its content, so without this the column refuses to
+     shrink below whatever the header needs and pushes the artifact panel off
+     the screen instead. */
+  min-width: 0;
 }
 
 .main-header {
@@ -294,7 +319,10 @@ body {
 
 .messages-wrapper {
   width: 100%;
-  max-width: 768px;
+  /* Settings -> Appearance -> Reading width writes this. 768px stays the
+     value it falls back to, so nothing moves for anyone who never opens the
+     setting. */
+  max-width: var(--content-width, 768px);
   display: flex;
   flex-direction: column;
   gap: 2rem;
@@ -442,7 +470,9 @@ body {
 
 .input-container {
   width: 100%;
-  max-width: 768px;
+  /* The same variable as the conversation above it. A composer that is a
+     different width from the answers reads as a bug, not as a preference. */
+  max-width: var(--content-width, 768px);
   background-color: var(--input-bg);
   border: 1px solid var(--border-color);
   border-radius: var(--radius-lg);
@@ -524,6 +554,30 @@ body {
   font-size: 0.75rem;
   color: var(--text-secondary);
   text-align: center;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0 1rem;
+  flex-wrap: wrap;
+}
+
+/* The controls that sit under the composer: the token meter, the thinking
+   switch and the MCP switch.
+   `flex-wrap` is the load-bearing line. Three of these do not fit across a
+   phone -- their combined minimum is about 470px -- and none of them can
+   shrink, because each is an icon beside a word that must not be cut in half.
+   Without wrapping, the row simply grew past the screen: the browser then
+   shrank the whole page to fit (a 390px phone reported a 429px layout
+   viewport), the meter hung off the left edge at -30px and the MCP switch off
+   the right at 420. Wrapping is what keeps the page the width of the phone. */
+.composer-controls {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 1rem;
+  flex-wrap: wrap;
+  min-width: 0;
 }
 
 /* ==== SETTINGS OVERLAY ==== */

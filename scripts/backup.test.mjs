@@ -76,6 +76,9 @@ const seed = () => {
   storeFor('default').set('ollama-sessions:user-a', [{ id: 3, title: 'Theirs', updatedAt: 50, messages: [] }]);
   storeFor('knowledge').set('doc-1', { name: 'notes.pdf', chunks: [1, 2] });
   storeFor('memory').set('memories', [{ id: 'm1', text: 'prefers Korean' }]);
+  // The 'auth' store is what the browser-local account system used to keep:
+  // password hashes and passkey keys, in IndexedDB. It is seeded here to prove
+  // a backup no longer touches it.
   storeFor('auth').set('ollama-users', [{ id: 'user-a', name: 'A' }]);
 };
 
@@ -93,14 +96,24 @@ eq('the guest profile chats are captured', backup.sessions['ollama-sessions'].le
 eq('a second profile is captured too', backup.sessions['ollama-sessions:user-a'].length, 1);
 eq('knowledge is captured', Object.keys(backup.knowledge).length, 1);
 eq('memories are captured', backup.memory.memories.length, 1);
-eq('accounts are captured', backup.auth['ollama-users'].length, 1);
-check('accounts can be withheld', !(await B.collectBackup({ includeAccounts: false })).auth);
+// Credentials no longer travel in a backup, because there are no longer any
+// credentials in the browser to travel. A file people email to themselves used
+// to carry password hashes for every profile on the machine.
+check('a backup carries no credentials', backup.auth === undefined);
+check('and the old account store is untouched by collecting one',
+  storeFor('auth').get('ollama-users').length === 1);
+
+// A sync payload is stamped with the account it belongs to; a file backup is
+// not, because a file belongs to whoever is holding it.
+eq('a sync payload carries its owner', (await B.collectBackup({
+  scope: 'srv-abc', ownerId: 'abc',
+})).ownerId, 'abc');
+eq('a file backup has no owner', backup.ownerId, null);
 
 const summary = B.describeBackup(backup);
 eq('the summary counts every chat', summary.chats, 3);
 eq('and every profile', summary.profiles, 2);
 eq('and the documents', summary.documents, 1);
-eq('and the accounts', summary.accounts, 1);
 
 check('a real backup is recognised', B.isBackup(backup));
 check('a stray json file is not', !B.isBackup({ hello: 'world' }));
@@ -115,7 +128,10 @@ eq('the other profile lands too', storeFor('default').get('ollama-sessions:user-
 eq('settings land', localStorage.getItem('systemPrompt'), 'Be terse.');
 eq('knowledge lands', storeFor('knowledge').size, 1);
 eq('memories land', storeFor('memory').get('memories').length, 1);
-eq('accounts land', storeFor('auth').get('ollama-users').length, 1);
+// Restoring a version 2 backup must not put an old profile's password hashes
+// back on disk: nothing can authenticate against them, so they would be
+// material lying around for no purpose at all.
+check('a restore never writes credentials back', storeFor('auth').size === 0);
 eq('and it says what it did', restored.chats, 3);
 
 // -------------------------------------------------- restore: twice over
@@ -125,7 +141,6 @@ eq('restoring twice does not duplicate chats', storeFor('default').get('ollama-s
 // nothing, or the page reloads forever.
 eq('and reports no change the second time', restored.chats, 0);
 eq('nor memories', storeFor('memory').get('memories').length, 1);
-eq('nor accounts', storeFor('auth').get('ollama-users').length, 1);
 
 // ------------------------------------------- restore: onto existing data
 reset();

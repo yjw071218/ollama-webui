@@ -80,9 +80,18 @@ call npm run build
 if errorlevel 1 goto fail
 echo.
 
-rem Open the desktop browser on the local address. The server prints the ones a
-rem phone should use.
-start "" "http://localhost:%PORT%"
+rem ---- which address to open ----------------------------------------------
+rem A browser keeps chats, settings and the sign-in cookie per origin. Opening
+rem the desktop on http://localhost while telling the phone to use a hostname
+rem therefore hands one person two of everything: two logins, two local caches,
+rem and a sync that has to reconcile them. PUBLIC_ORIGIN in .env names the one
+rem address every device should use, and this opens that.
+rem
+rem With nothing configured it is localhost, exactly as before.
+set "OPEN_URL=http://localhost:%PORT%"
+for /f "usebackq delims=" %%o in (`node "server\setup-env.mjs" --print-origin`) do set "OPEN_URL=%%o"
+
+start "" "%OPEN_URL%"
 
 node "server\index.js"
 if errorlevel 1 goto fail

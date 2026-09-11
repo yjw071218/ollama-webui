@@ -1,0 +1,1151 @@
+/* ===========================================================================
+   The Studio
+
+   Two halves with two different jobs, and the design follows from that.
+
+   The left is an instrument panel. Most of it is set once and left alone, so
+   it is quiet: one sheet for the prompt, folded rows for the settings that
+   show what they are set to, and a footer that keeps Generate in reach.
+
+   The right is a light table. The pictures are the subject, and a picture is
+   judged against neutral grey, not against the warm surfaces the rest of the
+   app is built from — so the table is untinted, results sit on it without
+   card chrome, and before there is anything to show, it shows the canvas: the
+   outline of the picture about to be made, at the width and height typed.
+
+   This file owns all of it. It replaced a dozen override layers in
+   extras.css that had accumulated one fix at a time and had started to cancel
+   each other out. The progress overlay (.studio-progress*) still lives there,
+   because the conversation uses it too.
+   ======================================================================== */
+
+/* ---------------------------------------------------------------- tokens */
+
+:root {
+  /* Neutral on purpose: no warm cast, so the colours in a picture are the
+     colours in the picture. The dark value is lifted off the app's own
+     near-black; at #18181a the table and the panel read as one surface. */
+  --lt: #e5e5e7;
+  --lt-ink: #6d6d72;
+  --lt-frame: rgba(20, 20, 24, 0.22);
+  --lt-well: rgba(20, 20, 24, 0.06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --lt: #202023;
+    --lt-ink: #8f8f96;
+    --lt-frame: rgba(235, 235, 240, 0.24);
+    --lt-well: rgba(235, 235, 240, 0.035);
+  }
+}
+:root[data-theme="dark"] {
+  --lt: #202023;
+  --lt-ink: #8f8f96;
+  --lt-frame: rgba(235, 235, 240, 0.24);
+  --lt-well: rgba(235, 235, 240, 0.035);
+}
+
+/* ---------------------------------------------------------------- frame */
+
+/* Laid over the conversation rather than replacing it, so a half-written
+   message and a streaming reply are exactly where they were. */
+.studio-place {
+  position: absolute;
+  inset: 0;
+  top: var(--header-height, 56px);
+  z-index: 6;
+  overflow: hidden;
+  background: var(--lt);
+}
+.studio-place[hidden] { display: none; }
+
+.studio {
+  height: 100%;
+  display: grid;
+  grid-template-columns: minmax(380px, 460px) minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
+}
+.studio-offline {
+  grid-column: 1 / -1;
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--hairline);
+  background: var(--surface);
+  color: #D97757;
+  font-size: var(--step-0);
+}
+.studio-offline-title { font-weight: 600; }
+.studio-offline-detail { color: var(--text-secondary); font-size: var(--label); margin-top: 2px; }
+
+/* The loading state, before any of the above exists. */
+.studio-place > .studio-empty,
+.studio-empty {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  height: 100%;
+  color: var(--lt-ink);
+  text-align: center;
+}
+
+/* ---------------------------------------------------- the instrument panel */
+
+.studio-form {
+  grid-row: 1 / -1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  background: var(--surface);
+  border-right: 1px solid var(--hairline);
+}
+.studio-offline ~ .studio-form { grid-row: 2; }
+.studio-form-body {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  padding: 18px 18px 6px;
+}
+
+/* One track with the workflows on it, rather than three pills. Choosing one
+   is choosing a mode for everything below, which a segmented control says and
+   a row of equal buttons does not. */
+.studio-models {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  background: var(--surface-sunken);
+}
+.studio-model {
+  flex: 1 1 0;
+  min-width: 0;
+  height: 32px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--step-0);
+  font-weight: 500;
+  cursor: pointer;
+  transition: background 120ms ease, color 120ms ease;
+}
+.studio-model span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-model svg { flex: none; opacity: 0.8; }
+.studio-model:hover { color: var(--text-primary); }
+.studio-model.is-on {
+  background: var(--surface-raised);
+  color: var(--text-primary);
+  box-shadow: inset 0 0 0 1px var(--hairline-strong), 0 1px 2px rgba(0, 0, 0, 0.16);
+}
+
+.studio-note {
+  margin: -4px 2px 0;
+  font-size: var(--label);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.studio-dropped,
+.studio-licence {
+  padding: 8px 10px;
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  font-size: var(--label);
+  line-height: 1.5;
+  color: var(--text-secondary);
+}
+
+/* ---- the prompt, as one sheet ----
+
+   Four rows of one surface, divided by hairlines, joined top to bottom when
+   sent. The subject row is raised and roomy; the others are single lines that
+   grow with their text. */
+
+.studio-sheet {
+  border: 1px solid var(--hairline-strong);
+  border-radius: 12px;
+  background: var(--surface-sunken);
+  transition: border-color 120ms ease;
+}
+.studio-sheet:focus-within { border-color: rgba(var(--primary-rgb), 0.5); }
+
+.studio-prompt-part {
+  display: block;
+  position: relative;
+  padding: 8px 12px 7px;
+  cursor: text;
+}
+.studio-prompt-part + .studio-prompt-part { border-top: 1px solid var(--hairline); }
+.studio-prompt-part:first-child { border-radius: 11px 11px 0 0; }
+.studio-prompt-part:last-child { border-radius: 0 0 11px 11px; }
+.studio-prompt-part:only-child { border-radius: 11px; }
+
+.studio-sheet-label {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  margin-bottom: 3px;
+  font-size: var(--label);
+  font-weight: 500;
+  color: var(--text-muted);
+  transition: color 120ms ease;
+}
+.studio-sheet-label em { font-style: normal; font-weight: 400; opacity: 0.75; }
+.studio-prompt-part:focus-within .studio-sheet-label { color: var(--text-primary); }
+
+.studio-prompt {
+  display: block;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  outline: none;
+  resize: none;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--step-0);
+  line-height: 1.55;
+}
+.studio-prompt::placeholder { color: var(--text-muted); opacity: 0.7; }
+/* A single line that grows with what is typed, where the browser can. */
+.studio-prompt.is-small {
+  min-height: 1.55em;
+  max-height: 9.3em;
+  field-sizing: content;
+  overflow-y: auto;
+}
+.studio-negative-box { min-height: 3.1em; }
+
+.studio-prompt-part.is-main {
+  background: var(--surface-raised);
+  padding: 10px 12px 8px;
+}
+.studio-prompt-part.is-main .studio-prompt {
+  min-height: 9.6em;
+  font-size: var(--step-1);
+  line-height: 1.6;
+}
+.tag-prompt { position: relative; }
+.tag-prompt .studio-prompt { width: 100%; }
+
+.studio-absent-prompt {
+  margin: 0 2px;
+  font-size: var(--label);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+/* ---- the settings, folded ---- */
+
+.studio-groups { border-top: 1px solid var(--hairline); }
+.studio-group { border-bottom: 1px solid var(--hairline); }
+.studio-group > summary {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 12px;
+  padding: 11px 2px;
+  list-style: none;
+  cursor: pointer;
+  border-radius: 6px;
+}
+.studio-group > summary::-webkit-details-marker { display: none; }
+.studio-group-label {
+  font-size: var(--step-0);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+/* What the group is set to, while it is folded. */
+.studio-group-summary {
+  display: flex;
+  justify-content: flex-end;
+  gap: 12px;
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  /* Tabular digits rather than the monospace face: a summary is as often
+     "워크플로 그대로" as "1024 × 1360", and a monospace font sets each Hangul
+     syllable in its own wide cell. The digits still line up. */
+  font-variant-numeric: tabular-nums;
+  font-size: var(--label);
+  color: var(--text-muted);
+}
+.studio-group-summary span { overflow: hidden; text-overflow: ellipsis; }
+.studio-group[open] .studio-group-summary { visibility: hidden; }
+.studio-group-chevron { color: var(--text-muted); transition: transform 150ms ease; }
+.studio-group[open] .studio-group-chevron { transform: rotate(180deg); }
+
+.studio-group-body {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 14px 14px;
+  padding: 2px 2px 18px;
+}
+.studio-group-body > .is-wide,
+.studio-group-body > .studio-loras,
+.studio-group-body > .studio-field.is-absent { grid-column: 1 / -1; }
+
+.studio-field,
+.studio-range {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  min-width: 0;
+}
+.studio-field > span,
+.studio-range-label {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  font-size: var(--label);
+  font-weight: 500;
+  color: var(--text-muted);
+}
+.studio-range-label b {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--step-0);
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.studio-range input[type="range"] {
+  width: 100%;
+  height: 20px;
+  margin: 0;
+  /* Neutral: the accent is kept for the one thing that starts a picture. */
+  accent-color: var(--text-secondary);
+}
+
+.studio-form .settings-input {
+  width: 100%;
+  min-width: 0;
+  height: 34px;
+  padding: 0 10px;
+  line-height: 32px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  font-size: var(--step-0);
+}
+.studio-form select.settings-input { text-overflow: ellipsis; }
+.studio-form .settings-input:focus {
+  border-color: rgba(var(--primary-rgb), 0.55);
+  outline: none;
+}
+
+.studio-size-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto minmax(0, 1fr) 34px;
+  align-items: center;
+  gap: 6px;
+}
+.studio-size-row input {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.studio-size-row em { font-style: normal; color: var(--text-muted); }
+.studio-size-row .icon-btn { width: 34px; height: 34px; justify-content: center; }
+
+.studio-field.is-absent {
+  flex-direction: row;
+  align-items: baseline;
+  gap: 10px;
+}
+.studio-field.is-absent > span { flex: none; opacity: 0.7; }
+.studio-absent { font-size: var(--label); line-height: 1.5; color: var(--text-muted); }
+
+/* ---- LoRAs ---- */
+
+.studio-loras { display: flex; flex-direction: column; gap: 8px; }
+/* The group already says "LoRA" and how many; this would say it twice. */
+.studio-loras-label { display: none; }
+.studio-lora-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 72px 30px;
+  align-items: center;
+  gap: 6px;
+}
+.studio-lora-weight {
+  text-align: center;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.studio-lora-add,
+.studio-upload {
+  justify-self: start;
+  align-self: flex-start;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  padding: 0 11px;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: 8px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--label);
+  cursor: pointer;
+  transition: color 120ms ease, border-color 120ms ease;
+}
+.studio-lora-add:hover:not(:disabled),
+.studio-upload:hover { color: var(--text-primary); border-color: var(--text-muted); }
+.studio-lora-add:disabled { opacity: 0.4; cursor: not-allowed; }
+
+.studio-search { position: relative; min-width: 0; }
+.studio-search-value {
+  width: 100%;
+  height: 34px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 0 10px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--step-0);
+  text-align: left;
+  cursor: pointer;
+}
+.studio-search-value span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-search-value.is-empty span { color: var(--text-muted); }
+.studio-search-value em,
+.studio-search-hit em {
+  margin-left: auto;
+  max-width: 45%;
+  flex: none;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-style: normal;
+  font-size: var(--label);
+  color: var(--text-muted);
+}
+.studio-search-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  padding: 6px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 10px;
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-overlay);
+}
+.studio-search-input {
+  width: 100%;
+  height: 32px;
+  margin-bottom: 4px;
+  padding: 0 10px;
+  border: 1px solid var(--hairline);
+  border-radius: 7px;
+  outline: none;
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--step-0);
+}
+.studio-search-list { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; }
+.studio-search-hit {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  min-width: 0;
+  padding: 6px 8px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--step-0);
+  text-align: left;
+  cursor: pointer;
+}
+.studio-search-hit span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-search-hit.is-on { background: var(--hover-bg); }
+.studio-search-hit.is-chosen span { font-weight: 600; }
+.studio-search-hit.is-clear { color: var(--text-muted); }
+.studio-search-none { padding: 8px; font-size: var(--label); color: var(--text-muted); }
+
+/* ---- a reference picture ---- */
+
+.studio-reference { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.studio-reference-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  max-width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-size: var(--label);
+  color: var(--text-secondary);
+}
+
+/* ---- the footer ---- */
+
+.studio-footer {
+  position: sticky;
+  bottom: 0;
+  z-index: 2;
+  margin-top: auto;
+  display: grid;
+  grid-template-columns: 158px minmax(0, 1fr);
+  gap: 8px;
+  padding: 12px 18px 16px;
+  border-top: 1px solid var(--hairline);
+  background: var(--surface);
+}
+.studio-seed-row {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 36px;
+  gap: 4px;
+  height: 40px;
+}
+.studio-seed-row .settings-input {
+  height: 40px;
+  line-height: 38px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.studio-seed-row .icon-btn { height: 40px; width: 36px; justify-content: center; }
+
+/* The one place the accent is spent. */
+.studio-go {
+  height: 40px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--primary);
+  color: #fff;
+  font: inherit;
+  font-size: var(--step-1);
+  font-weight: 600;
+  cursor: pointer;
+  transition: filter 120ms ease;
+}
+.studio-go:hover:not(:disabled) { filter: brightness(1.07); }
+.studio-go:disabled {
+  background: var(--hairline-strong);
+  color: var(--text-muted);
+  cursor: not-allowed;
+}
+
+.studio-form :focus-visible,
+.studio-go:focus-visible {
+  outline: 2px solid rgba(var(--primary-rgb), 0.7);
+  outline-offset: 2px;
+}
+.studio-prompt:focus-visible,
+.studio-form .settings-input:focus-visible { outline: none; }
+
+.studio-visually-hidden {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+  white-space: nowrap;
+}
+
+/* ------------------------------------------------------- the light table */
+
+.studio-table {
+  grid-column: 2;
+  grid-row: 1 / -1;
+  min-width: 0;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 26px 28px 40px;
+  background: var(--lt);
+}
+.studio-offline ~ .studio-table { grid-row: 2; }
+
+/* Before anything is made: the canvas, at the size typed. */
+.studio-canvas {
+  display: grid;
+  place-items: center;
+  border: 1.5px dashed var(--lt-frame);
+  border-radius: 4px;
+  background: var(--lt-well);
+  transition: width 220ms ease, height 220ms ease;
+}
+.studio-canvas-size {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--step-1);
+  letter-spacing: 0.02em;
+  color: var(--lt-ink);
+}
+.studio-empty-hint {
+  max-width: 40ch;
+  margin: 0;
+  /* Break between words, not inside them: CJK text otherwise wraps at any
+     character, which split "그려집니다" across two lines. */
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+  font-size: var(--step-0);
+  line-height: 1.55;
+}
+
+.studio-gallery {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(240px, 1fr));
+  align-items: start;
+  gap: 26px 20px;
+}
+
+/* A picture on the table, not a card around a picture. */
+.studio-job { position: relative; display: flex; flex-direction: column; gap: 9px; min-width: 0; }
+.studio-job-media {
+  position: relative;
+  overflow: hidden;
+  border-radius: 4px;
+  background: var(--lt-well);
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.22), 0 10px 26px -14px rgba(0, 0, 0, 0.45);
+}
+.studio-job-media img,
+.studio-job-media video {
+  display: block;
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+/* The last preview frame, standing in until the finished file decodes. */
+.studio-job-media[style*="background-image"] {
+  background-size: cover;
+  background-position: center;
+}
+.studio-job-media[style*="background-image"] img { animation: studio-develop 320ms ease both; }
+@keyframes studio-develop { from { opacity: 0; } to { opacity: 1; } }
+
+.studio-job.is-failed .studio-job-media { box-shadow: inset 0 0 0 1px rgba(217, 119, 87, 0.55); }
+.studio-job-failed {
+  position: absolute;
+  inset: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 16px;
+  text-align: center;
+  overflow-wrap: anywhere;
+  font-size: var(--label);
+  line-height: 1.5;
+  color: #D97757;
+}
+
+.studio-job-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 3px;
+  padding: 0 2px;
+}
+.studio-job-prompt {
+  grid-column: 1;
+  margin: 0;
+  font-size: var(--label);
+  line-height: 1.45;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.studio-job-meta {
+  grid-column: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 10.5px;
+  color: var(--lt-ink);
+}
+/* The picture you are looking at is the one whose actions show — over its
+   corner rather than beside the caption. Beside the caption they reserved a
+   column five buttons wide whether they were visible or not, which on a phone
+   card left the caption a sliver and pushed the prompt out entirely. */
+.studio-job-actions {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+  display: flex;
+  gap: 1px;
+  padding: 3px;
+  border-radius: 9px;
+  background: rgba(18, 18, 20, 0.62);
+  backdrop-filter: blur(8px);
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+.studio-job:hover .studio-job-actions,
+.studio-job:focus-within .studio-job-actions { opacity: 1; }
+.studio-job-actions .icon-btn { width: 28px; height: 28px; color: #fff; justify-content: center; }
+.studio-job-actions .icon-btn:hover { background: rgba(255, 255, 255, 0.16); }
+.studio-job-actions a.icon-btn { display: inline-flex; align-items: center; }
+/* While it is still being made, that corner belongs to the progress card's
+   stop button. */
+.studio-job.is-starting .studio-job-actions,
+.studio-job.is-queued .studio-job-actions,
+.studio-job.is-running .studio-job-actions { display: none; }
+/* No hover on a touch screen: the actions are a row of their own under the
+   caption, always there, instead of an overlay nobody can summon.
+
+   The width condition is not redundant. Some phones report that they *can*
+   hover — pen devices, some Android builds — and on those a hover-only
+   overlay would leave no way to save or delete a picture. Anything at phone
+   width gets the row, whatever it claims about its pointer. */
+@media (hover: none), (max-width: 939px) {
+  .studio-job-actions {
+    position: static;
+    opacity: 1;
+    margin: 2px 0 0 -6px;
+    padding: 0;
+    background: none;
+    backdrop-filter: none;
+  }
+  .studio-job-actions .icon-btn { width: 32px; height: 32px; color: var(--text-secondary); }
+}
+
+/* ------------------------------------------------------------- narrow */
+
+@media (max-width: 939px) {
+  .studio-place { overflow-y: auto; }
+  .studio { display: block; height: auto; }
+  .studio-form { overflow: visible; border-right: 0; }
+  .studio-table { overflow: visible; padding: 18px 16px 28px; }
+  .studio-empty { min-height: 360px; }
+  .studio-gallery { grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 18px 12px; }
+  /* 16px or iOS zooms the page on focus. */
+  .studio-form .settings-input,
+  .studio-prompt,
+  .studio-search-input { font-size: 16px; }
+  .studio-model { font-size: var(--label); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-canvas,
+  .studio-group-chevron,
+  .studio-model,
+  .studio-job-actions { transition: none; }
+  .studio-job-media[style*="background-image"] img { animation: none; }
+}
+
+/* ------------------------------------------------------------ the viewer
+
+   Dark whatever the theme: this is for judging a picture, and a picture is
+   judged against something that does not compete with it. */
+
+.studio-job-open {
+  display: block;
+  width: 100%;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  background: none;
+  cursor: zoom-in;
+}
+.studio-job-open img { display: block; width: 100%; height: 100%; object-fit: cover; }
+
+.studio-lightbox {
+  position: fixed;
+  inset: 0;
+  /* Over the toasts (300) and the command palette (200): a notice parked on
+     the corner of the picture is exactly what the viewer is for getting away
+     from. Under menus anchored to something (1200). */
+  z-index: 400;
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr) auto;
+  background: rgba(12, 12, 14, 0.95);
+  color: #f2f2f4;
+  outline: none;
+  animation: studio-lightbox-in 160ms ease both;
+}
+@keyframes studio-lightbox-in { from { opacity: 0; } to { opacity: 1; } }
+
+.studio-lightbox-bar {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  padding: 10px 14px;
+  font-size: var(--label);
+  color: rgba(242, 242, 244, 0.66);
+}
+.studio-lightbox-count,
+.studio-lightbox-size { font-family: var(--font-mono); font-variant-numeric: tabular-nums; }
+.studio-lightbox-tools { display: flex; gap: 4px; margin-left: auto; }
+
+.studio-lightbox-btn {
+  width: 36px;
+  height: 36px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 9px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #f2f2f4;
+  cursor: pointer;
+  text-decoration: none;
+  transition: background 120ms ease;
+}
+.studio-lightbox-btn:hover { background: rgba(255, 255, 255, 0.15); }
+
+.studio-lightbox-stage {
+  position: relative;
+  min-height: 0;
+  overflow: hidden;
+}
+/* Laid out against the stage rather than inside it.
+ *
+ * As an ordinary grid item its `max-height: 100%` resolved to nothing — a
+ * percentage needs a containing block with a definite height, and a `1fr` row
+ * is not one until after the item has been sized. So a 2520×3676 picture was
+ * only ever constrained by the width: it came out 1902px tall in an 862px
+ * stage and the rest was cropped away, which is what made "fitted to the
+ * screen" show a fragment of the picture.
+ *
+ * Positioned against the stage's own box, both percentages resolve, and
+ * `inset: 0` with `margin: auto` centres what is left. The element ends up
+ * exactly the size of the picture, so the space around it is still the
+ * backdrop and still closes the viewer.
+ */
+.studio-lightbox-stage img {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  display: block;
+  /* Room for the arrows on either side. */
+  max-width: calc(100% - 136px);
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  border-radius: 3px;
+  cursor: zoom-in;
+  user-select: none;
+  -webkit-user-drag: none;
+  transition: max-width 180ms ease, max-height 180ms ease;
+}
+
+/* Filling the screen.
+
+   The picture is given the whole window: the padding goes, and the bar and
+   the caption stop taking rows of their own and lie over the top and bottom
+   instead, on a gradient dark enough to read against any picture. Nothing
+   scrolls and nothing is cropped -- the picture is simply as large as it can
+   be while still being all there. */
+.studio-lightbox.is-full { grid-template-rows: minmax(0, 1fr); }
+.studio-lightbox.is-full .studio-lightbox-bar,
+.studio-lightbox.is-full .studio-lightbox-caption {
+  position: absolute;
+  left: 0;
+  right: 0;
+  z-index: 2;
+  pointer-events: none;
+}
+.studio-lightbox.is-full .studio-lightbox-bar {
+  top: 0;
+  background: linear-gradient(rgba(0, 0, 0, 0.62), rgba(0, 0, 0, 0));
+  padding-bottom: 28px;
+}
+.studio-lightbox.is-full .studio-lightbox-caption {
+  bottom: 0;
+  justify-self: center;
+  background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.62));
+  padding-top: 30px;
+  opacity: 0;
+  transition: opacity 140ms ease;
+}
+/* The prompt is what the framed view is for; here it is out of the way until
+   it is wanted. */
+.studio-lightbox.is-full:hover .studio-lightbox-caption,
+.studio-lightbox.is-full:focus-within .studio-lightbox-caption { opacity: 1; }
+.studio-lightbox.is-full .studio-lightbox-btn,
+.studio-lightbox.is-full .studio-lightbox-caption p,
+.studio-lightbox.is-full .studio-lightbox-caption .studio-lightbox-meta { pointer-events: auto; }
+/* The last of the screen: the arrows' margins go too, and the picture is
+   bounded only by the window. */
+.studio-lightbox.is-full .studio-lightbox-stage img {
+  max-width: 100%;
+  border-radius: 0;
+  cursor: zoom-out;
+}
+
+.studio-lightbox-nav {
+  position: absolute;
+  top: 50%;
+  transform: translateY(-50%);
+  width: 44px;
+  height: 64px;
+  display: grid;
+  place-items: center;
+  border: 0;
+  border-radius: 12px;
+  background: rgba(255, 255, 255, 0.07);
+  color: #f2f2f4;
+  cursor: pointer;
+  transition: background 120ms ease;
+}
+.studio-lightbox-nav:hover { background: rgba(255, 255, 255, 0.16); }
+.studio-lightbox-nav.is-prev { left: 12px; }
+.studio-lightbox-nav.is-next { right: 12px; }
+
+.studio-lightbox-caption {
+  justify-self: center;
+  width: 100%;
+  max-width: 900px;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 4px 12px;
+  padding: 10px 16px 16px;
+}
+.studio-lightbox-caption p {
+  margin: 0;
+  max-height: 4.6em;
+  overflow-y: auto;
+  font-size: var(--step-0);
+  line-height: 1.5;
+  color: rgba(242, 242, 244, 0.86);
+  user-select: text;
+}
+.studio-lightbox-meta {
+  grid-column: 1;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 2px 12px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: rgba(242, 242, 244, 0.52);
+}
+.studio-lightbox-caption .studio-lightbox-btn { grid-column: 2; grid-row: 1 / span 2; }
+.studio-lightbox :focus-visible { outline: 2px solid rgba(255, 255, 255, 0.85); outline-offset: 2px; }
+
+@media (max-width: 700px) {
+  /* The arrows sit over the picture on a phone rather than beside it: there is
+     no width to spare, and a picture inset far enough to clear them would be
+     smaller than the gallery card it was opened from. */
+  .studio-lightbox-stage img { max-width: 100%; }
+  /* A phone screen is already the whole screen: the only thing left to give
+     the picture is the caption's rows, and hiding the prompt behind a hover
+     nobody has is worse than the eighty pixels it costs. */
+  .studio-lightbox.is-full .studio-lightbox-caption { opacity: 1; }
+  .studio-lightbox-nav { width: 36px; height: 52px; background: rgba(0, 0, 0, 0.4); }
+  .studio-lightbox-nav.is-prev { left: 6px; }
+  .studio-lightbox-nav.is-next { right: 6px; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .studio-lightbox { animation: none; }
+  .studio-lightbox-stage img,
+  .studio-lightbox.is-full .studio-lightbox-caption { transition: none; }
+}
+
+/* ------------------------------------------------------------ batches
+
+   How many, beside the button that makes them. */
+.studio-footer { grid-template-columns: 150px 64px minmax(0, 1fr); }
+.studio-batch .settings-input {
+  width: 100%;
+  height: 40px;
+  padding: 0 4px;
+  text-align: center;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ------------------------------------------------- under the prompt sheet
+
+   The PNG import, and the two shortcuts nobody would guess were there. */
+.studio-prompt-tools {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 4px 12px;
+  margin-top: -6px;
+}
+.studio-link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 2px;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: var(--label);
+  cursor: pointer;
+}
+.studio-link:hover { color: var(--text-primary); }
+.studio-keys { font-size: 11px; color: var(--text-secondary); opacity: 0.75; }
+
+.studio-imported,
+.studio-import-error {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 6px 10px;
+  padding: 8px 10px;
+  border-radius: 9px;
+  font-size: var(--label);
+  line-height: 1.45;
+  color: var(--text-primary);
+}
+.studio-imported { background: rgba(var(--primary-rgb), 0.09); }
+.studio-imported > span { flex: 1 1 200px; min-width: 0; }
+.studio-imported .icon-btn { width: 24px; height: 24px; justify-content: center; }
+.studio-import-error { background: rgba(217, 119, 87, 0.12); }
+
+/* A PNG held over the form. Placed in the Studio's grid over the form's
+   column rather than inside the form, which scrolls. */
+.studio-drop {
+  grid-column: 1;
+  grid-row: 1 / -1;
+  z-index: 5;
+  margin: 10px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  padding: 24px;
+  border: 2px dashed rgba(var(--primary-rgb), 0.7);
+  border-radius: 14px;
+  background: color-mix(in srgb, var(--surface) 90%, transparent);
+  color: var(--text-primary);
+  font-size: var(--step-0);
+  text-align: center;
+  word-break: keep-all;
+  pointer-events: none;
+}
+
+.studio-reference-thumb {
+  flex: none;
+  width: 56px;
+  height: 56px;
+  border-radius: 8px;
+  background: var(--surface-2, var(--hairline));
+}
+.studio-reference-thumb img { display: block; width: 100%; height: 100%; object-fit: cover; }
+
+/* ------------------------------------------------------- the gallery's tools
+
+   Finding a picture again, and deciding what is shown while doing it. Sticky,
+   because the gallery is the part that grows. */
+.studio-tools {
+  position: sticky;
+  top: 0;
+  z-index: 3;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: -8px -8px 18px;
+  padding: 8px;
+  border-radius: 12px;
+  background: var(--lt);
+}
+.studio-find {
+  flex: 1 1 220px;
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--lt-frame);
+  border-radius: 9px;
+  background: var(--lt-well);
+  color: var(--text-secondary);
+}
+.studio-find input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 13px;
+}
+.studio-find:focus-within { border-color: rgba(var(--primary-rgb), 0.6); }
+.studio-tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--lt-frame);
+  border-radius: 9px;
+  background: var(--lt-well);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 13px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.studio-tool:hover { color: var(--text-primary); }
+.studio-tool.is-on { color: #c28a0e; border-color: currentColor; }
+.studio-safe-level select {
+  border: 0;
+  outline: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+}
+.studio-none { margin: 64px auto; text-align: center; color: var(--text-secondary); }
+
+/* Starred: a mark that stays on the caption, and the button that set it. */
+.studio-job-fav { flex: none; align-self: center; color: #d19b12; }
+.studio-job-actions { flex-wrap: wrap; justify-content: flex-end; max-width: calc(100% - 16px); }
+.studio-reference-thumb .safe-rehide { left: 2px; top: 2px; width: 20px; height: 20px; }
+.studio-job-actions .icon-btn.is-fav { color: #f2c037; }
+.studio-job-actions .icon-btn:disabled { opacity: 0.6; cursor: progress; }
+
+@media (max-width: 939px) {
+  .studio-footer { grid-template-columns: minmax(0, 1fr) 60px minmax(0, 1.25fr); }
+  .studio-drop { grid-column: 1 / -1; }
+  /* Six actions, on a card 175px wide. Wrapped they became three rows of
+     buttons taller than the caption they belong to, so they stay on one line
+     and give back the width instead. */
+  .studio-job-actions { flex-wrap: nowrap; gap: 0; }
+  .studio-job-actions .icon-btn { width: 26px; height: 26px; }
+  .studio-job-actions .icon-btn svg { width: 12px; height: 12px; }
+}
+
+/* Stop. Not an accent — a warning that something is being taken away. */
+.studio-tool.is-stop {
+  color: #c2410c;
+  border-color: rgba(194, 65, 12, 0.45);
+  background: rgba(194, 65, 12, 0.08);
+}
+.studio-tool.is-stop:hover { color: #9a3412; background: rgba(194, 65, 12, 0.16); }
+.studio-tool.is-stop:disabled { opacity: 0.6; cursor: progress; }

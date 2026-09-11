@@ -3,7 +3,38 @@
   <head>
     <meta charset="UTF-8" />
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- viewport-fit=cover is what makes env(safe-area-inset-*) a real number.
+         Without it every one of those insets computes to zero, so the padding
+         the stylesheet spends on notches and home indicators does nothing and
+         the composer sits under the gesture bar.
+
+         interactive-widget=resizes-content is what makes the composer follow
+         the on-screen keyboard. The default, resizes-visual, leaves the layout
+         viewport at its full height and simply slides the visible part of it
+         up: `100dvh` does not change, so the app still believes it is as tall
+         as the whole screen and the composer stays down at the bottom of it,
+         underneath the keyboard. resizes-content shrinks the layout viewport
+         instead, so dvh shrinks with it and the bottom of the app is the top
+         of the keyboard. (Safari ignores this key; src/viewport.js covers it.) -->
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover, interactive-widget=resizes-content" />
+    <!-- The browser paints its own chrome behind the status bar; unset, it
+         picks white and a dark app gets a bright band above it. -->
+    <meta name="theme-color" content="#F2F0E9" media="(prefers-color-scheme: light)" />
+    <meta name="theme-color" content="#1A1916" media="(prefers-color-scheme: dark)" />
+    <!-- Installable on a phone's home screen and on a desktop. The manifest is
+         what turns the tab into an app: its own icon, its own window with no
+         address bar, and a launcher entry. See public/manifest.webmanifest. -->
+    <link rel="manifest" href="/manifest.webmanifest" />
+    <!-- iOS reads none of the manifest for this. Safari has its own, older
+         keys, and without them an app added to the home screen opens in a
+         browser view with the chrome still on it. -->
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="mobile-web-app-capable" content="yes" />
+    <!-- black-translucent is the one that lets the page paint under the status
+         bar, which is what the safe-area insets in extras.css are for. -->
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
+    <meta name="apple-mobile-web-app-title" content="Ollama" />
+    <link rel="apple-touch-icon" href="/icon-maskable.svg" />
     <title>ollama-webui</title>
   </head>
   <body>

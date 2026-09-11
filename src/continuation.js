@@ -26,6 +26,8 @@ export const CONTINUE_PROMPT = [
 
 // How far back to look for a repeat. Long enough to catch a restated sentence,
 // short enough that scanning it costs nothing.
+import { safeTail, safeSlice, safeHead } from './textCut.js';
+
 const OVERLAP_WINDOW = 400;
 const MIN_OVERLAP = 12;
 
@@ -33,10 +35,16 @@ const MIN_OVERLAP = 12;
 // already have that the continuation opens with.
 export const trimOverlap = (previous, next) => {
   if (!previous || !next) return next || '';
-  const tail = previous.slice(-OVERLAP_WINDOW);
+  /* Cut on character boundaries, not code-unit ones.
+     An emoji is two UTF-16 code units, and a window that begins or ends
+     between them leaves half a character. Half a character is not an error
+     anywhere until the string is encoded -- and then it is U+FFFD, in the
+     middle of a joined answer, which is exactly the kind of corruption that
+     shows up "sometimes" and has nothing in the log. See src/textCut.js. */
+  const tail = safeTail(previous, OVERLAP_WINDOW);
   const limit = Math.min(tail.length, next.length);
   for (let size = limit; size >= MIN_OVERLAP; size--) {
-    if (next.startsWith(tail.slice(tail.length - size))) return next.slice(size);
+    if (next.startsWith(safeTail(tail, size))) return safeSlice(next, size);
   }
   return next;
 };
@@ -74,7 +82,7 @@ export const joinInstructed = (previous, next) => {
 
   const head = previous.replace(/\s+$/, '');
   const body = addition.replace(/^\s+/, '');
-  const seam = previous.slice(head.length) + addition.slice(0, addition.length - body.length);
+  const seam = safeSlice(previous, head.length) + safeHead(addition, addition.length - body.length);
 
   if (!seam) return head + ' ' + body;
 

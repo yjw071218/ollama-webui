@@ -1,18 +1,10 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Sparkles, Mail, Lock, User, TriangleAlert, RefreshCcw, KeyRound } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
-import {
-  registerWithPassword,
-  signInWithPassword,
-  signInWithGoogle,
-  signInWithKakao,
-  socialConfig,
-  registerPasskey,
-  signInWithPasskey,
-  isPasskeySupported,
-  hasPlatformAuthenticator,
-  renderGoogleButton,
-} from './auth.jsx';
+import { socialConfig, renderGoogleButton, signInWithKakao } from './auth.jsx';
+import { registerAccount, loginWithPassword, loginWithGoogle } from './session.jsx';
+import { signInWithPasskey, isPasskeySupported, supportsAutofill } from './passkey.js';
+import { ProfileAvatar } from './ProfileDialog.jsx';
 
 const GoogleMark = () => (
   <svg width="16" height="16" viewBox="0 0 48 48" aria-hidden="true">
@@ -29,7 +21,22 @@ const KakaoMark = () => (
   </svg>
 );
 
-export const AuthScreen = ({ onAuthenticated, onGuest }) => {
+// The server sends a code alongside the English message. Translating the code
+// is what lets a Korean user read a Korean error; the message is the fallback
+// for anything that has not been given a code yet.
+const SERVER_ERRORS = {
+  'bad-credentials': 'auth.invalidCredentials',
+  'email-taken': 'auth.emailTaken',
+  'weak-password': 'auth.passwordShort',
+  'invalid-email': 'auth.invalidEmail',
+  'name-required': 'auth.nameRequired',
+  'wrong-password': 'auth.wrongCurrentPassword',
+  throttled: 'auth.throttled',
+  offline: 'auth.serverUnreachable',
+  csrf: 'auth.staleRequest',
+};
+
+export const AuthScreen = ({ onSignedIn, onGuest, accounts = [], onUse }) => {
   const { t, lang } = useI18n();
   const [mode, setMode] = useState('signin'); // signin | signup
   const [email, setEmail] = useState('');
@@ -37,118 +44,137 @@ export const AuthScreen = ({ onAuthenticated, onGuest }) => {
   const [confirm, setConfirm] = useState('');
   const [name, setName] = useState('');
   const [error, setError] = useState('');
-  const [busy, setBusy] = useState(false);
+  const [busy, setBusy] = useState('');
 
   const { googleClientId, kakaoRestKey } = socialConfig();
 
   const [passkeyReady, setPasskeyReady] = useState(false);
   const googleBtnRef = useRef(null);
+  // Holds the pending conditional (autofill) passkey request, which has to be
+  // abandoned before any other sign-in opens its own prompt.
+  const abortRef = useRef(null);
+
+  /** Server failures speak in codes; everything else already speaks in keys. */
+  const report = (e) => {
+    const key = SERVER_ERRORS[e?.code];
+    setError(key ? t(key) : (e?.message || String(e)));
+  };
 
   // Google's own button is the dependable entry point; One Tap is frequently
   // suppressed by cookie policy and used to surface as a bogus credential error.
   useEffect(() => {
-    if (!googleClientId || !googleBtnRef.current) return;
+    if (!googleClientId || !googleBtnRef.current) return undefined;
     let cancelled = false;
+
     renderGoogleButton(googleBtnRef.current, {
       locale: lang,
-      onResult: (result) => {
+      onError: (result) => { if (!cancelled) setError(t(result.error)); },
+      onCredential: async (credential) => {
         if (cancelled) return;
-        if (result?.error) {
-          setError(result.detail ? `${t(result.error)} (${result.detail})` : t(result.error));
-          return;
+        setBusy('google');
+        try {
+          // The token is verified by the server against Google. Nothing here
+          // reads it, because nothing here could tell a real one from a forgery.
+          onSignedIn(await loginWithGoogle(credential));
+        } catch (e) {
+          report(e);
+        } finally {
+          if (!cancelled) setBusy('');
         }
-        if (result?.user) onAuthenticated(result.user);
       },
     }).then(outcome => {
       if (!cancelled && outcome?.error) setError(t(outcome.error));
     });
+
     return () => { cancelled = true; };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [lang]);
+  }, [lang, googleClientId]);
 
-  // Only offer the passkey button where the device can actually make one.
+  // Only offer the passkey button where the browser can actually use one.
   useEffect(() => {
     let cancelled = false;
-    hasPlatformAuthenticator().then(available => {
-      if (!cancelled) setPasskeyReady(isPasskeySupported() && available);
-    });
-    return () => { cancelled = true; };
+    (async () => {
+      const ready = isPasskeySupported();
+      if (!cancelled) setPasskeyReady(ready);
+      if (!ready) return;
+
+      // Conditional mediation: the browser offers the passkey from the email
+      // field itself, the way it offers a saved password, so there is nothing
+      // to find and click. It is abandoned the moment another method is used.
+      if (!(await supportsAutofill())) return;
+      const controller = new AbortController();
+      abortRef.current = controller;
+      const result = await signInWithPasskey({ conditional: true, signal: controller.signal });
+      if (cancelled || result.aborted) return;
+      if (result.session) onSignedIn(result.session);
+    })();
+    return () => { cancelled = true; abortRef.current?.abort(); };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
+
+  // A pending autofill prompt has to go before another method opens its own,
+  // or the browser refuses the second request outright.
+  const stopAutofill = () => { abortRef.current?.abort(); abortRef.current = null; };
 
   const submit = async (e) => {
     e.preventDefault();
     setError('');
-    setBusy(true);
+    stopAutofill();
+    setBusy('password');
     try {
       if (mode === 'signup') {
         if (password !== confirm) { setError(t('auth.passwordMismatch')); return; }
-        const result = await registerWithPassword({ email, password, name });
-        if (result.error) { setError(t(result.error)); return; }
-        onAuthenticated(result.user, { created: true });
+        onSignedIn(await registerAccount(name, email, password), { created: true });
       } else {
-        const result = await signInWithPassword({ email, password });
-        if (result.error) { setError(t(result.error)); return; }
-        onAuthenticated(result.user);
+        onSignedIn(await loginWithPassword(email, password));
       }
     } catch (err) {
-      setError(err.message || String(err));
+      report(err);
     } finally {
-      setBusy(false);
+      setBusy('');
     }
   };
 
   const passkey = async () => {
     setError('');
-    setBusy(true);
+    stopAutofill();
+    setBusy('passkey');
     try {
-      // Signing up creates the credential; signing in offers the ones already here.
-      const result = mode === 'signup'
-        ? await registerPasskey({ name })
-        : await signInWithPasskey();
-
+      const result = await signInWithPasskey();
+      if (result.aborted) return;
       if (result.error) {
-        // "no passkey yet" on the sign-in tab is a nudge, not a dead end.
-        if (result.error === 'auth.passkeyNone') {
-          setMode('signup');
-          setError(t('auth.passkeyNone'));
-          return;
-        }
-        setError(result.detail ? `${t(result.error)} (${result.detail})` : t(result.error));
+        setError(result.detail ? `${t(result.error)} — ${result.detail}` : t(result.error));
         return;
       }
-      onAuthenticated(result.user, { created: mode === 'signup' });
-    } catch (err) {
-      setError(err.message || String(err));
+      onSignedIn(result.session);
     } finally {
-      setBusy(false);
+      setBusy('');
     }
   };
 
-  const social = async (provider) => {
+  const kakao = async () => {
     setError('');
-    setBusy(true);
+    stopAutofill();
+    setBusy('kakao');
     try {
-      const result = provider === 'google' ? await signInWithGoogle() : await signInWithKakao();
+      const result = await signInWithKakao();
       if (result.error) {
-        // Some messages interpolate the detail themselves; otherwise append it,
-        // because the provider's own text is what actually identifies the fault.
         const base = t(result.error, { uri: result.detail || '' });
         const detail = typeof result.detail === 'string' ? result.detail : '';
         setError(detail && !base.includes(detail) ? `${base} — ${detail}` : base);
-        console.error(`[${provider}]`, result.error, result.detail);
         return;
       }
       // Kakao leaves for its consent screen and the page that returns is
-      // already signed in, so there is no user to hand over here — and the
+      // already signed in, so there is no session to hand over here — and the
       // spinner should stay up until the navigation happens.
-      if (result.redirecting) return;
-      onAuthenticated(result.user);
     } catch (err) {
       setError(err.message || String(err));
     } finally {
-      setBusy(false);
+      if (!window.location.href.includes('kauth.kakao.com')) setBusy('');
     }
   };
+
+  const working = !!busy;
 
   return (
     <div className="auth-screen">
@@ -161,16 +187,44 @@ export const AuthScreen = ({ onAuthenticated, onGuest }) => {
         <h1>{mode === 'signin' ? t('auth.welcome') : t('auth.createAccount')}</h1>
         <p className="auth-subtitle">{t('auth.subtitle')}</p>
 
+        {/* Accounts already signed in on this browser.
+            This screen is reached by choosing to add an account, and the way
+            back has to be here: while it is up, the profile menu — the other
+            place a tab switches accounts — is not on screen. Picking one costs
+            no sign-in, because the session never ended. */}
+        {accounts.length > 0 && onUse && (
+          <div className="auth-accounts">
+            <div className="auth-accounts-label">{t('auth.otherAccounts')}</div>
+            {accounts.map(account => (
+              <button
+                key={account.sessionId}
+                type="button"
+                className="auth-account"
+                onClick={() => onUse(account.sessionId)}
+                disabled={working}
+              >
+                <ProfileAvatar user={account.user} size={28} />
+                <span className="auth-account-meta">
+                  <span className="auth-account-name">{account.user.name}</span>
+                  {account.user.email && <span className="auth-account-email">{account.user.email}</span>}
+                </span>
+              </button>
+            ))}
+            <div className="auth-hint">{t('auth.tabScoped')}</div>
+          </div>
+        )}
+
         <div className="auth-social">
-          {passkeyReady && (
+          {passkeyReady && mode === 'signin' && (
             <>
               <button
                 type="button"
                 className="auth-social-btn passkey"
                 onClick={passkey}
-                disabled={busy}
+                disabled={working}
               >
-                <KeyRound size={16} /> {mode === 'signup' ? t('auth.passkeyCreate') : t('auth.passkey')}
+                {busy === 'passkey' ? <RefreshCcw size={16} className="spin" /> : <KeyRound size={16} />}
+                {t('auth.passkey')}
               </button>
               <div className="auth-hint passkey-pitch">{t('auth.passkeyPitch')}</div>
             </>
@@ -179,24 +233,22 @@ export const AuthScreen = ({ onAuthenticated, onGuest }) => {
           {googleClientId ? (
             <div className="google-btn-host" ref={googleBtnRef} />
           ) : (
-            <button
-              type="button"
-              className="auth-social-btn"
-              disabled
-              title={t('auth.notConfigured')}
-            >
+            <button type="button" className="auth-social-btn" disabled title={t('auth.notConfigured')}>
               <GoogleMark /> {t('auth.google')}
             </button>
           )}
+
           <button
             type="button"
             className="auth-social-btn kakao"
-            onClick={() => social('kakao')}
-            disabled={busy || !kakaoRestKey}
+            onClick={kakao}
+            disabled={working || !kakaoRestKey}
             title={kakaoRestKey ? undefined : t('auth.notConfigured')}
           >
-            <KakaoMark /> {t('auth.kakao')}
+            {busy === 'kakao' ? <RefreshCcw size={16} className="spin" /> : <KakaoMark />}
+            {t('auth.kakao')}
           </button>
+
           {(!googleClientId || !kakaoRestKey) && (
             <div className="auth-hint">{t('auth.notConfigured')}</div>
           )}
@@ -213,7 +265,8 @@ export const AuthScreen = ({ onAuthenticated, onGuest }) => {
                 value={name}
                 onChange={e => setName(e.target.value)}
                 placeholder={t('auth.name')}
-                autoComplete="nickname"
+                autoComplete="name"
+                required
               />
             </label>
           )}
@@ -225,7 +278,9 @@ export const AuthScreen = ({ onAuthenticated, onGuest }) => {
               value={email}
               onChange={e => setEmail(e.target.value)}
               placeholder={t('auth.email')}
-              autoComplete="username"
+              // `webauthn` is what lets the browser offer a passkey from this
+              // field alongside saved passwords.
+              autoComplete={mode === 'signup' ? 'username' : 'username webauthn'}
               required
             />
           </label>
@@ -271,8 +326,8 @@ export const AuthScreen = ({ onAuthenticated, onGuest }) => {
             </div>
           )}
 
-          <button type="submit" className="auth-submit" disabled={busy}>
-            {busy && <RefreshCcw size={14} className="spin" />}
+          <button type="submit" className="auth-submit" disabled={working}>
+            {busy === 'password' && <RefreshCcw size={14} className="spin" />}
             {mode === 'signin' ? t('auth.signIn') : t('auth.signUp')}
           </button>
         </form>
@@ -284,11 +339,11 @@ export const AuthScreen = ({ onAuthenticated, onGuest }) => {
           </button>
         </div>
 
-        <button type="button" className="auth-guest" onClick={onGuest}>
+        <button type="button" className="auth-guest" onClick={onGuest} disabled={working}>
           {t('auth.guest')}
         </button>
 
-        <p className="auth-note">{t('auth.localNote')}</p>
+        <p className="auth-note">{t('auth.serverNote')}</p>
       </div>
     </div>
   );

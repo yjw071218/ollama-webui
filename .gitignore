@@ -50,3 +50,6 @@ dist-ssr
 node_modules/.*-test*.mjs
 data/
 server/data/
+
+# Copied from node_modules by scripts/pdf-assets.mjs, not authored here.
+public/pdfjs

@@ -184,6 +184,21 @@
 }
 .cmd-item:hover, .cmd-item.active { background: var(--hover-bg); }
 .cmd-item .cmd-label { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+/* Two lines in one menu row: an account's name over the address that tells two
+   accounts with the same name apart. */
+.cmd-item .cmd-label.stacked {
+  display: flex;
+  flex-direction: column;
+  line-height: 1.25;
+  white-space: normal;
+}
+.cmd-item .cmd-sub {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .cmd-item .cmd-shortcut {
   font-size: 0.7rem;
   color: var(--text-muted);
@@ -238,26 +253,6 @@
 
 /* ==== Composer extras ==== */
 .input-area-wrapper { position: relative; }
-
-.scroll-bottom-btn {
-  position: absolute;
-  top: -3rem;
-  left: 50%;
-  transform: translateX(-50%);
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  width: 34px;
-  height: 34px;
-  border-radius: 50%;
-  background: var(--bg-primary);
-  border: 1px solid var(--border-color);
-  color: var(--text-primary);
-  cursor: pointer;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
-  z-index: 10;
-}
-.scroll-bottom-btn:hover { background: var(--hover-bg); }
 
 .ctx-meter {
   display: flex;
@@ -483,10 +478,27 @@
 /* The header now carries three more controls. No overflow:auto here --
    it would clip the absolutely positioned model dropdowns. */
 .main-header { gap: 0.6rem; }
-.main-header > div:last-of-type { margin-left: auto; min-width: 0; }
+
+/* Everything in the header except the drawer toggle.
+   These used to be inline styles on an anonymous div, which meant the phone
+   layout could not touch the gap or the wrapping -- inline wins -- and the
+   model picker had no way to claim room. */
+.header-tools {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-left: auto;
+  min-width: 0;
+}
+
+.header-search { background: var(--bg-main); border: 1px solid var(--border-color); width: 260px; }
+
+/* The button that opens the search row. It exists only where the field cannot
+   fit beside the model picker. */
+.header-compact-only { display: none; }
 
 @media (max-width: 900px) {
-  .main-header .sidebar-search-inner { width: 130px !important; }
+  .main-header .header-search { width: 130px; }
 }
 
 /* ==== Toasts ==== */
@@ -1233,6 +1245,49 @@ mark.chat-hit.current {
 .auth-card h1 { font-size: 1.4rem; font-weight: 600; margin-bottom: 0.35rem; }
 .auth-subtitle { font-size: 0.85rem; color: var(--text-muted); line-height: 1.45; margin-bottom: 1.25rem; }
 
+/* Accounts already signed in on this browser, offered on the sign-in screen so
+   that adding one is not a one-way door. */
+.auth-accounts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 1.25rem;
+  padding-bottom: 1rem;
+  border-bottom: 1px solid var(--border-color);
+}
+.auth-accounts-label {
+  font-size: 0.7rem;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  color: var(--text-muted);
+  font-weight: 600;
+}
+.auth-account {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-primary);
+  cursor: pointer;
+  text-align: left;
+  font-family: inherit;
+}
+.auth-account:hover:not(:disabled) { background: var(--hover-bg); border-color: var(--text-muted); }
+.auth-account:disabled { opacity: 0.45; cursor: not-allowed; }
+.auth-account-meta { display: flex; flex-direction: column; min-width: 0; line-height: 1.3; }
+.auth-account-name { font-size: 0.87rem; font-weight: 600; }
+.auth-account-email {
+  font-size: 0.73rem;
+  color: var(--text-muted);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .auth-social { display: flex; flex-direction: column; gap: 0.5rem; }
 
 .auth-social-btn {
@@ -1949,7 +2004,7 @@ img.user-avatar { object-fit: cover; padding: 0; }
 .attachments-preview { animation: grow-in var(--dur) var(--ease-out); }
 .attachment-item { animation: grow-in var(--dur) var(--ease-out); }
 .preview-split-console { animation: grow-in var(--dur) var(--ease-out); }
-.scroll-bottom-btn { animation: grow-in var(--dur) var(--ease-out); }
+.scroll-nudge { animation: grow-in var(--dur) var(--ease-out); }
 .search-nav { animation: grow-in var(--dur-fast) var(--ease-out); }
 
 /* The artifact panel already slides in; make its tabs cross-fade too. */
@@ -2225,19 +2280,30 @@ img.user-avatar { object-fit: cover; padding: 0; }
 .sys-strip.in-header .sys-chip-track { width: 26px; }
 .sys-strip.in-header .sys-chip { gap: 0.3rem; }
 
-/* The generic breakpoints are for the footer; the header needs its own. */
-@media (max-width: 1400px) {
+/* The generic breakpoints are for the footer; the header needs its own -- and
+   they are container queries, not media queries, because what the header has
+   to fit into is the conversation column, not the window. Opening the artifact
+   panel takes several hundred pixels out of that column without changing the
+   window at all, so a media query sheds nothing and four meters, a model name,
+   a search field and six buttons are asked to share half the room they had.
+   The numbers below are the column's width; they are lower than the old
+   window-width ones by roughly the width of a sidebar. */
+@container mainpane (max-width: 1250px) {
   .sys-strip.in-header .sys-chip:nth-child(n+4) { display: none; }
 }
-@media (max-width: 1240px) {
+@container mainpane (max-width: 1120px) {
   .sys-strip.in-header .sys-chip:nth-child(n+3) { display: none; }
 }
-@media (max-width: 1080px) {
+@container mainpane (max-width: 1000px) {
   .sys-strip.in-header .sys-chip-value { display: none; }
 }
-@media (max-width: 960px) {
+@container mainpane (max-width: 900px) {
   .sys-strip.in-header { display: none; }
 }
+
+/* Whatever room is left, the meters are not what should be taking it: a
+   squeezed strip renders as overlapping text rather than as a smaller strip. */
+.sys-strip.in-header { flex: 0 0 auto; }
 
 /* =========================================================
    Switch
@@ -2661,14 +2727,14 @@ img.user-avatar { object-fit: cover; padding: 0; }
   cursor: pointer;
   transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
-.variant-btn:hover:not(:disabled) { background: var(--bg-hover); color: var(--text-primary); }
+.variant-btn:hover:not(:disabled) { background: var(--hover-bg); color: var(--text-primary); }
 .variant-btn:disabled { opacity: 0.35; cursor: default; }
 .variant-count { font-variant-numeric: tabular-nums; min-width: 2.4em; text-align: center; }
 .variant-model {
   margin-inline-start: 0.2rem;
   padding: 0.05rem 0.35rem;
   border-radius: 999px;
-  background: var(--bg-hover);
+  background: var(--hover-bg);
   font-size: 0.66rem;
   max-width: 14rem;
   overflow: hidden;
@@ -2716,7 +2782,7 @@ img.user-avatar { object-fit: cover; padding: 0; }
   color: var(--text-muted);
   cursor: pointer;
 }
-.folder-add:hover { background: var(--bg-hover); color: var(--text-primary); }
+.folder-add:hover { background: var(--hover-bg); color: var(--text-primary); }
 .folder-empty-hint {
   padding: 0 1rem 0.5rem;
   font-size: 0.72rem;
@@ -2733,7 +2799,7 @@ img.user-avatar { object-fit: cover; padding: 0; }
   cursor: pointer;
   user-select: none;
 }
-.folder-head:hover { background: var(--bg-hover); }
+.folder-head:hover { background: var(--hover-bg); }
 .folder-head:hover .folder-edit { opacity: 1; }
 .folder-caret {
   flex-shrink: 0;
@@ -2943,11 +3009,38 @@ img.user-avatar { object-fit: cover; padding: 0; }
    composer sits under the chrome. */
 @media (max-width: 860px) {
   .claude-app {
-    height: 100dvh;
+    /* `--kb-inset` is what src/viewport.js measures: the slice of the layout
+       viewport hidden behind the on-screen keyboard. It is 0px everywhere
+       that has no keyboard up, and 0px on the browsers that shrink the layout
+       viewport themselves, so this reads as plain `100dvh` almost always. */
+    height: calc(100dvh - var(--kb-inset, 0px));
     /* Notched phones: keep content out from under the rounded corners. */
     padding-left: env(safe-area-inset-left);
     padding-right: env(safe-area-inset-right);
   }
+
+  /* `.claude-main` carried `height: 100vh` from the desktop layout, and that
+     is not the same number as its parent's: `vh` counts the address bar and
+     `dvh` does not, so the column was taller than the app around it and the
+     composer -- the last thing in the column -- sat below the fold. It gets
+     the height it is given now, keyboard subtraction and all. */
+  .claude-main { height: 100%; min-height: 0; }
+
+  /* Same reasoning one level up. A body taller than the visible area is a
+     page the browser is entitled to scroll, and on iOS that is exactly what it
+     does when a field is focused -- taking the header off the top of the
+     screen and leaving the app looking shifted. */
+  body { height: calc(100dvh - var(--kb-inset, 0px)); }
+
+  /* The sign-in screen and every dialog are full-height too, and they are
+     where a keyboard is most likely to be up: a password field at the bottom
+     of a card is unreachable if the card is taller than what is visible. */
+  .auth-screen,
+  .settings-modal { height: calc(100dvh - var(--kb-inset, 0px)); }
+
+  /* Advice, a token meter and a switch, none of which is worth a line of the
+     third of the screen the keyboard has left. */
+  :root.keyboard-open .input-footer { display: none; }
 
   /* ---- sidebar as a drawer ---- */
   .claude-sidebar {
@@ -2987,10 +3080,19 @@ img.user-avatar { object-fit: cover; padding: 0; }
 
   .message-row { padding-inline: 0.75rem; }
   .message-content { max-width: 100%; }
-  .composer-wrapper { padding: 0.5rem 0.6rem calc(0.5rem + env(safe-area-inset-bottom)); }
+  /* The gesture bar sits over the bottom of the screen, so the composer needs
+     to be held off it -- except when the keyboard is up, which covers that
+     area itself and would otherwise leave a strip of dead space above it. */
+  .input-area-wrapper {
+    padding: 0.5rem 0.6rem calc(0.5rem + env(safe-area-inset-bottom));
+  }
+  :root.keyboard-open .input-area-wrapper { padding-bottom: 0.5rem; }
 
-  /* iOS zooms the page when a focused field is under 16px. */
-  .composer-input,
+  /* iOS zooms the page when a focused field is under 16px -- and once it has
+     zoomed, the layout viewport is wider than the screen and the composer is
+     partly off it. `1rem` is 16px only while the user has not changed their
+     browser's font size, which is not a guarantee, so it is said in px. */
+  .chat-input,
   .settings-input,
   .settings-textarea,
   input[type='text'],
@@ -3019,40 +3121,153 @@ img.user-avatar { object-fit: cover; padding: 0; }
   }
   .settings-overlay { padding: 0; }
 
-  /* Settings tabs scroll sideways instead of wrapping into a wall. */
+  /* Settings tabs scroll sideways instead of wrapping into a wall.
+
+     `flex: 0 0 auto` is the load-bearing line and the reason is not obvious.
+     `.settings-modal` is a flex column with a fixed height on a phone, so its
+     children shrink whenever the content is taller than the screen -- and a
+     flex item whose `overflow` is anything other than `visible` loses the
+     automatic minimum size that would otherwise stop it at its content. So
+     the very declaration that made this strip scroll, `overflow-x: auto`,
+     also made it free to shrink to nothing, and it did: one pixel of
+     border-bottom, every tab clipped out of existence, and only whichever
+     panel happened to be open reachable at all. Nothing looked broken --
+     there was simply no tab bar, and no reason to think there should be one.
+
+     `min-height` would fix it too, but only by asserting a number that has to
+     be kept in step with the tab height. Refusing to shrink is the actual
+     intent. */
   .settings-tabs {
     display: flex;
+    flex: 0 0 auto;
     flex-wrap: nowrap;
     overflow-x: auto;
+    /* Momentum scrolling on iOS; a strip that stops dead under the finger
+       reads as something that is not meant to be scrolled. */
+    -webkit-overflow-scrolling: touch;
+    /* The browser's own bar is a few pixels of grey over the tab labels and
+       is not drawn at all until the strip is already moving, so it is hidden
+       and the fade below does the telling instead. */
     scrollbar-width: none;
+    /* Room for the fade, so the last tab is never sitting under it. */
+    padding-inline-end: 0.75rem;
+    /* Sideways only. Without this, a vertical drag that begins on the strip
+       is swallowed by it instead of scrolling the panel underneath. */
+    touch-action: pan-x;
   }
   .settings-tabs::-webkit-scrollbar { display: none; }
   .settings-tabs button { flex: 0 0 auto; }
 
-  /* ---- touch targets ---- */
+  /* "There is more this way."
+
+     A mask rather than an overlaid gradient, because the strip is its own
+     scroll container: an ::after pinned to its right edge would scroll away
+     with the tabs. A mask is painted against the element's box, so it stays
+     at the edge.
+
+     Which edges fade is decided in App.jsx from the scroll position, so the
+     first tab is not dimmed before anyone has scrolled and the last is not
+     dimmed once they have reached it -- a fade that never goes away stops
+     being a signal and becomes a smudge. */
+  .settings-tabs[data-overflow='end'] {
+    mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+  }
+  .settings-tabs[data-overflow='start'] {
+    mask-image: linear-gradient(to left, #000 calc(100% - 2.5rem), transparent);
+  }
+  .settings-tabs[data-overflow='both'] {
+    mask-image: linear-gradient(to right, transparent, #000 2.5rem, #000 calc(100% - 2.5rem), transparent);
+  }
+  [dir='rtl'] .settings-tabs[data-overflow='end'] {
+    mask-image: linear-gradient(to left, #000 calc(100% - 2.5rem), transparent);
+  }
+  [dir='rtl'] .settings-tabs[data-overflow='start'] {
+    mask-image: linear-gradient(to right, #000 calc(100% - 2.5rem), transparent);
+  }
+
+  /* ---- touch targets ----
+     34px was the old figure and it is under both platforms' guidance; a finger
+     is not a cursor and the difference is missed taps on the buttons that
+     delete things. */
   .history-actions button,
   .action-btn,
-  .icon-btn { min-width: 34px; min-height: 34px; }
+  .icon-btn { min-width: 40px; min-height: 40px; }
+  .cmd-item, .dropdown-item, .settings-tabs button { min-height: 42px; }
 
-  /* Hover-to-reveal does not exist on a touch screen. */
+  /* Hover-to-reveal does not exist on a touch screen. The chat list's row
+     actions are small and sit inside their row, so showing them always is
+     fine; the message toolbar is neither, and is handled in the `hover: none`
+     block near the end of this file. */
   .history-actions { opacity: 1; pointer-events: auto; }
-  .msg-hover-actions { opacity: 1; }
+
+  /* Tapping to scroll a message must not select the text under the finger,
+     and a long-press on a button should not offer to copy its label. */
+  .icon-btn, .action-btn, .cmd-item, .starter-card, .history-item {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+  }
 
   /* The in-chat system monitor is detail nobody needs on a phone. */
   .system-strip { display: none; }
+
+  /* ---- the empty state ----
+     Two columns of starter cards at 210px minimum means one column that
+     overflows on anything under 460px. */
+  .starter-grid { grid-template-columns: 1fr; width: 100%; margin-top: 1.25rem; }
+  .empty-state { padding-inline: 1rem; }
+  .empty-state h1 { font-size: 1.35rem; }
+  .empty-logo svg { width: 36px; height: 36px; }
+
+  /* ---- toasts ----
+     Bottom-right is a desktop convention. On a phone the composer is there, so
+     a toast lands on the send button -- and its Undo, which is the only way
+     back from a deleted chat, sits under the thing you are trying to tap. */
+  .toast-stack {
+    left: 0.6rem;
+    right: 0.6rem;
+    bottom: calc(0.6rem + env(safe-area-inset-bottom));
+    max-width: none;
+  }
+  .toast { padding: 0.7rem 0.8rem; }
+  .toast-action { min-height: 36px; padding-inline: 0.75rem; }
+
+  /* ---- dialogs ----
+     `.settings-modal` is every dialog in the app and the block above already
+     gives it the screen. Several are opened with an inline `max-width`, which
+     beats a stylesheet, so it is overridden here rather than by editing nine
+     call sites -- on a phone none of those widths is the right answer. */
+  .settings-modal { max-width: 100% !important; }
+
 }
 
 /* Very narrow phones. */
 @media (max-width: 400px) {
-  .main-header .model-selector-container { max-width: 42vw; }
   .claude-metrics { font-size: 0.68rem; }
   .variant-model { max-width: 8rem; }
+
+  /* The empty state is `margin: auto` inside a flex column, so it shrinks to
+     its widest child rather than to the screen. On a 320px phone that left it
+     narrower than the composer under it, which reads as a mistake. */
+  .empty-state { width: 100%; }
+  .starter-card { padding: 0.7rem; }
+
+  /* Three things on the footer row: a token count, a meter and a labelled
+     switch. At this width the label wrapped to three lines and pushed the
+     switch into the corner. The meter is the one that can afford to shrink. */
+  .ctx-meter-bar { width: 44px; }
+  .mcp-toggle-label span {
+    max-width: 5.5rem;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .input-footer { font-size: 0.66rem; }
 }
 
 /* A phone held sideways has almost no height; give it back to the messages. */
 @media (max-height: 480px) and (orientation: landscape) {
   .main-header { padding-block: 0.3rem; }
-  .composer-wrapper { padding-block: 0.35rem; }
+  .input-area-wrapper { padding-block: 0.35rem; }
 }
 
 /* ---- what the phone screenshots showed was actually wrong ---- */
@@ -3062,54 +3277,4476 @@ img.user-avatar { object-fit: cover; padding: 0; }
      four-word-wide column and shoved the rest off. The advice is the part
      nobody needs on every screen. */
   .input-footer {
-    flex-wrap: wrap;
     gap: 0.4rem;
-    padding-inline: 0.6rem !important;
+    padding-inline: 0.6rem;
     font-size: 0.7rem;
   }
-  .input-footer > span:first-child { display: none; }
-  .input-footer > div {
+  .composer-disclaimer { display: none; }
+  .composer-controls {
     width: 100%;
-    justify-content: space-between;
-    gap: 0.5rem !important;
+    /* Centred rather than spread. `space-between` is right for one row and
+       wrong for a wrapped one: it pushes the two items that did fit to
+       opposite edges and leaves the third stranded under a gap the width of
+       the screen. */
+    justify-content: center;
+    column-gap: 0.75rem;
+    row-gap: 0.45rem;
   }
+  /* Each of them may give ground so that two can share a line. */
+  .ctx-meter,
+  .mcp-toggle-container,
+  .think-toggle { min-width: 0; flex: 0 1 auto; }
   .ctx-meter-bar { width: 70px; }
+
+  /* The attach and microphone buttons sit to the left of the text box and
+     between them took 111px of a 360px screen, leaving 186px to write in --
+     about twenty characters before the line starts scrolling.
+
+     Two things are wrong there and they pull in opposite directions: the
+     buttons were 36px, below every touch-target guideline there is, and the
+     sentence needs the width. So the buttons get *bigger*, to 40px, and the
+     space between and around them gets smaller -- 8px of container padding
+     instead of 12, 4px of gap instead of 8, which pays for it.
+
+     Measured at 390px, before and after: the text box is 216px wide either
+     way, and every target has grown from 36 to 40. The tighter spacing buys
+     the bigger buttons rather than buying width, which is the trade worth
+     making -- a 36px target on a phone is a mis-tap waiting to happen and the
+     writing area is no worse off. */
+  .attach-btn {
+    padding: 0.35rem;
+    min-width: 40px;
+    min-height: 40px;
+  }
+  .attach-btn svg { width: 19px; height: 19px; }
+  .input-container {
+    padding-inline: 0.5rem;
+    gap: 0.25rem;
+  }
 
   /* A model name is long and has nowhere to go; let it end in an ellipsis
      rather than push the send button off the screen. */
-  .composer-model,
-  .dropdown-trigger,
-  .model-selector-container > button {
+  .composer-model {
     max-width: 45vw;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
 
-  /* The header carries six icon buttons plus a model picker. Keep the ones
-     that steer the conversation and drop the rest into the command palette,
-     which is where they already are. */
-  .main-header { flex-wrap: nowrap; }
-  /* Starred-only, the outline, the system monitor and chat info are all in the
-     command palette as well, so a phone loses the buttons and not the feature.
-     Keeping them left the model picker hanging 118px past the right edge. */
-  .header-secondary { display: none !important; }
-}
+  /* ---- the header, on a phone ----
 
-@media (max-width: 860px) {
-  /* The header is a row of fixed-size controls plus a model name of arbitrary
-     length. Without telling the name it may shrink, it takes the space it wants
-     and the buttons at the end fall off the edge. */
-  .main-header { gap: 0.3rem; }
+     What it has to fit: a drawer toggle, the model picker, a way to search, and
+     a way to reach everything else. The model picker is the one that has to be
+     legible, because it is the only one that says something rather than doing
+     something -- and it was the one that disappeared.
+
+     Why it disappeared: the search field was told to take the full width of the
+     group it sits in, and the group is sized by its contents, so the picker was
+     left with nothing and the buttons after it hung off the edge. The field now
+     comes out of the row entirely and is reached from a button. */
+  .main-header {
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    height: auto;
+    min-height: 56px;
+    padding-block: 0.4rem;
+    /* Not centred: the group beside it grows to two rows when the search opens,
+       and centring across both leaves the drawer toggle floating between the
+       two lines rather than beside the model picker. */
+    align-items: flex-start;
+  }
+  .header-tools {
+    flex: 1 1 0;
+    min-width: 0;
+    gap: 0.3rem;
+    flex-wrap: wrap;
+  }
+  .main-header > .toggle-sidebar {
+    flex: 0 0 auto;
+    display: flex;
+    align-items: center;
+    /* Matches the height of a control on the first row, so the icon lines up
+       with the model picker whether or not a second row is showing. */
+    min-height: 40px;
+  }
+
+  /* Starred-only, the outline, the system monitor, chat info, compare, export
+     and the theme cycle are every one of them in the command palette, so a
+     phone loses the buttons and not the features. */
+  .header-secondary { display: none !important; }
+  .header-compact-only { display: inline-flex; }
+
+  /* The picker takes the row, and its name ellipsises rather than shoving. */
   .main-header .model-selector-container { flex: 1 1 0; min-width: 0; max-width: none; }
-  .main-header .dropdown-trigger { width: 100%; min-width: 0; padding-inline: 0.4rem; }
+  .main-header .dropdown-trigger {
+    width: 100%;
+    min-width: 0;
+    justify-content: space-between;
+    padding-inline: 0.5rem;
+    border: 1px solid var(--border-color);
+  }
   .main-header .model-name {
     min-width: 0;
     overflow: hidden;
     text-overflow: ellipsis;
     white-space: nowrap;
   }
-  .main-header > .icon-btn,
-  .main-header .toggle-sidebar { flex: 0 0 auto; }
-  .main-header .sidebar-search { flex: 0 1 auto; min-width: 0; }
+
+  /* A second row, and only when asked for. `order` puts it after everything
+     else in the group, and a full basis makes it wrap onto its own line. */
+  .main-header .header-search { display: none; }
+  .main-header .header-search.is-open {
+    display: flex;
+    order: 10;
+    flex: 1 0 100%;
+    width: 100%;
+  }
+
+  /* The menu's `min-width: 240px` was set for a trigger the size of a model
+     name. The trigger is now the width of the row, so the menu matches it and
+     stops overhanging the screen. It scrolls rather than running off the
+     bottom, because a phone showing a dozen models has no room for a dozen. */
+  .main-header .dropdown-menu {
+    left: 0;
+    right: 0;
+    width: auto;
+    min-width: 0;
+    max-height: min(58vh, 420px);
+  }
+  .main-header .dropdown-item { padding-block: 0.7rem; }
+}
+
+
+/* =========================================================
+   Message actions where there is no pointer
+   =========================================================
+   The toolbar under a message is positioned `absolute; bottom: -36px`, and it
+   is only ever invisible because it is only ever shown on hover: the space it
+   occupies belongs to the *next* message. On a touch screen there is no hover,
+   so the previous answer here was to leave every toolbar switched on -- which
+   put a floating bar across the top of every following bubble, permanently.
+
+   Two changes, and they only work together. The toolbar is anchored to the
+   bottom of its own message rather than 36px past it, and the message grows a
+   strip of padding to hold it -- so it takes room of its own instead of
+   borrowing the next message's. And it appears when the message is tapped
+   rather than by existing, which App.jsx signals with `.actions-open`. One
+   message's actions show at a time, which is what every phone messaging app
+   already does.
+
+   The layout is left alone on purpose. Making the row wrap so the toolbar
+   could sit in the flow would also let the *message* wrap out from beside its
+   avatar, because a flex line is chosen from an item's natural width before
+   shrinking is considered, and a long paragraph's natural width is enormous.
+   Padding is the change that touches nothing else.
+
+   `hover: none` rather than a width: a narrow window on a laptop still has a
+   mouse and should keep the hover behaviour, and a large tablet has no
+   pointer and should not. */
+@media (hover: none) {
+  .msg-hover-actions {
+    /* An absolutely positioned box is placed against its container's padding
+       box, so `bottom: 0` is the far edge of the padding added below -- the
+       toolbar sits inside the room the message just made for it. */
+    bottom: 0;
+    top: auto;
+    /* `right: 0` is the row's padding-box edge, which on a phone is the edge
+       of the screen. Held off it by the same margin the app gives everything
+       else along that edge. */
+    inset-inline-end: 0.5rem;
+    inset-inline-start: auto;
+    opacity: 1;
+    display: none;          /* out of the layout *and* out of the a11y tree */
+    max-width: calc(100% - 1.5rem);
+    /* One row that scrolls, never two that wrap: the padding below has to be
+       a number, and it can only be one number if the height is fixed. The
+       last assistant message carries seven buttons, which is wider than a
+       320px phone. */
+    flex-wrap: nowrap;
+    overflow-x: auto;
+    scrollbar-width: none;
+  }
+  .msg-hover-actions::-webkit-scrollbar { display: none; }
+
+  /* Hover cannot happen here, but a stylus or a hybrid device can still fire
+     it, and it must not bring back the always-on toolbar. */
+  .message-row:hover .msg-hover-actions { display: none; }
+
+  /* 40px of button, 2px of border, and a little air. */
+  .message-row.actions-open { padding-bottom: 50px; }
+  .message-row.actions-open .msg-hover-actions,
+  .message-row.actions-open:hover .msg-hover-actions {
+    display: flex;
+    animation: msg-actions-in var(--dur-fast, 0.16s) var(--ease-out, ease);
+  }
+
+  /* Tapping a bubble is a gesture now, so the browser must not flash a
+     highlight over the whole message when it happens. Selecting text still
+     works: press and hold enters the platform's own selection mode. */
+  .message-row { -webkit-tap-highlight-color: transparent; }
+}
+
+@keyframes msg-actions-in {
+  from { opacity: 0; transform: translateY(-4px); }
+  to   { opacity: 1; transform: none; }
+}
+
+/* =========================================================
+   Reading position
+   =========================================================
+   A hairline across the top of the conversation showing how far down it you
+   are. It is orientation rather than a control -- the browser's own scrollbar
+   is a few pixels wide on a laptop and is not drawn at all on a phone until
+   you are already moving, which is exactly when you have stopped needing it.
+
+   Scaled rather than resized: `transform` is composited, and this is updated
+   on every scroll event. Animating `width` here would lay the page out sixty
+   times a second while somebody is flicking through a long answer. */
+.read-progress {
+  height: 2px;
+  flex: 0 0 auto;
+  background: var(--primary);
+  transform-origin: left center;
+  transform: scaleX(0);
+  transition: transform 90ms linear;
+  /* Not a landmark, not a control, and nothing announces it. */
+  pointer-events: none;
+}
+[dir='rtl'] .read-progress { transform-origin: right center; }
+
+/* Back to the top, beside the existing jump-to-latest, so a long answer can be
+   left as easily as it is caught up with.
+   
+   The pair is a centred flex row rather than two absolutely positioned
+   buttons: whichever of the two is showing, each stays where it was, rather
+   than sliding across as its neighbour appears and disappears. */
+.scroll-nudges {
+  position: absolute;
+  top: -3rem;
+  left: 50%;
+  transform: translateX(-50%);
+  display: flex;
+  gap: 0.4rem;
+  z-index: 10;
+}
+.scroll-nudges[hidden] { display: none; }
+.scroll-nudge {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  height: 34px;
+  border-radius: 50%;
+  background: var(--bg-primary);
+  border: 1px solid var(--border-color);
+  color: var(--text-primary);
+  cursor: pointer;
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.2);
+  animation: grow-in var(--dur, 0.2s) var(--ease-out, ease);
+}
+.scroll-nudge:hover { background: var(--hover-bg); }
+
+/* =========================================================
+   Selecting several chats at once
+   ========================================================= */
+.sidebar-search { display: flex; align-items: center; gap: 0.4rem; }
+.sidebar-search .sidebar-search-inner { flex: 1 1 auto; min-width: 0; }
+.sidebar-select-toggle { flex: 0 0 auto; }
+
+/* The box on each row. Drawn rather than an `<input type=checkbox>` because a
+   native one cannot be sized or coloured consistently across the platforms
+   this runs on, and it is decoration here: the row itself is the control, and
+   the row already reports its own state. */
+.row-check {
+  flex: 0 0 auto;
+  width: 16px;
+  height: 16px;
+  margin-inline-end: 0.15rem;
+  border-radius: 4px;
+  border: 1.5px solid var(--border-color);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: var(--btn-active-text, #fff);
+  transition: background var(--dur-fast, 0.15s) var(--ease-out, ease),
+              border-color var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+.row-check.on { background: var(--primary); border-color: var(--primary); }
+.history-item.picked { background: rgba(var(--primary-rgb), 0.12); }
+
+.bulk-bar {
+  border-top: 1px solid var(--border-color);
+  padding: 0.6rem 0.75rem calc(0.6rem + env(safe-area-inset-bottom));
+  display: flex;
+  flex-direction: column;
+  gap: 0.5rem;
+  background: var(--bg-primary);
+}
+.bulk-count {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  font-size: 0.78rem;
+  color: var(--text-muted);
+}
+.bulk-all {
+  background: transparent;
+  border: none;
+  padding: 0.2rem 0;
+  color: var(--primary);
+  font: inherit;
+  cursor: pointer;
+}
+.bulk-all:hover { text-decoration: underline; }
+.bulk-actions { display: flex; align-items: center; gap: 0.4rem; }
+.bulk-actions .icon-btn { flex: 1 1 0; }
+.bulk-actions .icon-btn:disabled { opacity: 0.4; cursor: not-allowed; }
+.bulk-actions .icon-btn.danger { color: var(--danger); }
+.bulk-move-wrap { position: relative; display: flex; flex: 1 1 0; }
+.bulk-move-wrap > .icon-btn { width: 100%; }
+
+/* =========================================================
+   Filing a chat by dragging it
+   =========================================================
+   The row fades while it is in the air, and the thing it is over says so. A
+   drop target that gives no sign it is one is a drop target nobody finds. */
+.history-item[draggable='true'] { cursor: grab; }
+.history-item.dragging { opacity: 0.45; }
+.folder-head.drop-target,
+.recents-label.drop-target {
+  background: rgba(var(--primary-rgb), 0.14);
+  outline: 1px dashed var(--primary);
+  outline-offset: -2px;
+  border-radius: var(--radius-sm);
+}
+
+/* The date headings were laid out inline in App.jsx and are a drop target now,
+   which needs a class to hang the highlight on. Same numbers as before. */
+.recents-label {
+  padding: 0.5rem 1rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  font-weight: 600;
+  text-transform: uppercase;
+}
+
+/* =========================================================
+   Wrapping a code block
+   ========================================================= */
+.code-header-actions { display: flex; align-items: center; gap: 0.3rem; }
+.code-copy-btn.is-on { color: var(--primary); }
+/* `pre` defaults to `pre`, which is what makes a long line scroll. `pre-wrap`
+   keeps every other piece of whitespace exactly as it was -- indentation is
+   the whole shape of the code -- and only allows a break at the edge. */
+.code-container pre.is-wrapped,
+.code-container pre.is-wrapped code {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+@media (max-width: 860px) {
+  /* Four buttons across a phone's sidebar, each big enough to hit. */
+  .bulk-actions .icon-btn { min-height: 42px; }
+  .row-check { width: 18px; height: 18px; }
+  /* Dragging a row is a gesture a touch screen has no way to start -- a press
+     and a drag is a scroll -- and `draggable` on a touch device sometimes
+     blocks the scroll instead. The row menu is how a chat is filed here. */
+  .history-item[draggable='true'] { cursor: default; }
+  /* A finger, not a cursor. */
+  .scroll-nudge { width: 40px; height: 40px; }
+}
+
+/* =========================================================
+   A reply arriving in a chat you are not looking at
+   =========================================================
+   Leaving a chat while it is being answered is allowed now, which means the
+   interface has to say two things it never had to before: which chat is being
+   written to, and why this one's composer will not send yet. */
+
+/* In the chat list, beside the title. The same spinner the app uses
+   everywhere else, at the size of the pin marker next to it. */
+.row-generating {
+  flex: 0 0 auto;
+  color: var(--primary);
+  margin-inline-end: 0.1rem;
+}
+
+/* Under the composer of every *other* chat. Without it the send button is
+   simply dead and there is nothing on screen explaining why. */
+.busy-elsewhere {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  align-self: center;
+  width: 100%;
+  max-width: var(--content-width, 768px);
+  margin-bottom: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-left: 3px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: var(--bg-primary);
+  color: var(--text-muted);
+  font-size: 0.78rem;
+}
+.busy-elsewhere svg { color: var(--primary); flex-shrink: 0; }
+.busy-elsewhere span {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.busy-elsewhere button {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  padding: 0.15rem 0.25rem;
+  color: var(--primary);
+  font: inherit;
+  cursor: pointer;
+}
+.busy-elsewhere button:hover { text-decoration: underline; }
+
+@media (max-width: 860px) {
+  /* A finger needs the whole strip to be a target, and the row has no width
+     to spare for a label that ellipsises to three words. */
+  .busy-elsewhere { padding: 0.5rem 0.6rem; font-size: 0.75rem; }
+  .busy-elsewhere button { min-height: 32px; padding-inline: 0.4rem; }
+}
+
+/* =========================================================
+   The archive
+   =========================================================
+   A view, not a place: the banner is what stops "my chats are gone" from
+   being a reasonable conclusion when the list is showing the other half. */
+.archive-banner {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0.5rem 0.75rem 0.25rem;
+  padding: 0.45rem 0.6rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  color: var(--text-muted);
+  font-size: 0.75rem;
+}
+.archive-banner svg { flex-shrink: 0; }
+.archive-banner span { flex: 1; min-width: 0; }
+.archive-banner button {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  padding: 0.15rem 0.2rem;
+  color: var(--primary);
+  font: inherit;
+  cursor: pointer;
+}
+.archive-banner button:hover { text-decoration: underline; }
+
+/* =========================================================
+   Hands-free
+   =========================================================
+   The mode owns the microphone and the speaker for as long as it is on, so
+   it is worth a line of the screen saying so and which of its four states it
+   is in. A mode that spends ten seconds silently thinking is otherwise
+   indistinguishable from one that has crashed. */
+.voice-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  align-self: center;
+  width: 100%;
+  max-width: var(--content-width, 768px);
+  margin-bottom: 0.5rem;
+  padding: 0.45rem 0.75rem;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--primary-rgb), 0.08);
+  color: var(--text-primary);
+  font-size: 0.8rem;
+}
+.voice-state { flex: 1; min-width: 0; }
+.voice-strip button {
+  flex: 0 0 auto;
+  background: transparent;
+  border: none;
+  padding: 0.15rem 0.3rem;
+  color: var(--primary);
+  font: inherit;
+  cursor: pointer;
+}
+.voice-strip button:hover { text-decoration: underline; }
+
+/* One dot, four colours, so the state is readable at a glance and without
+   reading. It pulses only while listening -- the state where the app is
+   waiting on the person rather than the other way round. */
+.voice-dot {
+  width: 9px;
+  height: 9px;
+  flex: 0 0 auto;
+  border-radius: 50%;
+  background: var(--text-muted);
+}
+.voice-dot.listening {
+  background: var(--danger);
+  animation: voice-pulse 1.4s var(--ease-out, ease) infinite;
+}
+.voice-dot.thinking { background: var(--primary); }
+.voice-dot.speaking { background: var(--success); }
+
+@keyframes voice-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.45; transform: scale(0.78); }
+}
+:root[data-motion="reduced"] .voice-dot.listening { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .voice-dot.listening { animation: none; }
+}
+
+/* The microphone button while the mode is on. */
+.attach-btn.voice-mode-on {
+  background: rgba(var(--primary-rgb), 0.14);
+  border-radius: 50%;
+}
+
+@media (max-width: 860px) {
+  /* Hands-free is mostly a phone feature -- the whole point is not holding
+     the phone -- so its controls get finger-sized targets. */
+  .voice-strip { padding: 0.55rem 0.7rem; font-size: 0.78rem; }
+  .voice-strip button { min-height: 32px; padding-inline: 0.4rem; }
+  .archive-banner button { min-height: 30px; }
+}
+
+/* =========================================================
+   The Python runner's canvas
+   =========================================================
+   pygame draws through SDL, which draws onto a canvas the page has to provide.
+   It is only in the document while something is going to draw on it — see
+   GRAPHICS_MODULES in artifacts.jsx — so a script that prints numbers does not
+   grow an empty grey box underneath it.
+
+   The element's width and height attributes are the drawing surface and
+   `pygame.display.set_mode()` rewrites them. CSS must therefore size it
+   *down* only: setting a width here would stretch whatever the game chose. */
+.py-canvas-wrap {
+  display: flex;
+  justify-content: center;
+  padding: 0.6rem;
+  background: var(--bg-main);
+  border-top: 1px solid var(--border-color);
+}
+.py-canvas {
+  max-width: 100%;
+  height: auto;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-color);
+  background: #000;
+  /* A game's pixels are usually meant to be pixels. Smoothing a 320x240
+     surface up to a retina display turns pixel art into mud. */
+  image-rendering: pixelated;
+}
+
+/* =========================================================
+   The header, at whatever width the column actually has
+   =========================================================
+   These were media queries in the phone block, which meant they fired on
+   window width and therefore never fired when the artifact panel was what took
+   the room away. A 1500px window with the panel open leaves this column 540px
+   wide, and the header was still laid out as though it had 1500: four system
+   meters, a full-width model name, a search field and six buttons, needing
+   802px and overlapping in 540.
+
+   Expressed against the column instead, one set of rules covers both cases —
+   a narrow window and a wide window with the panel open are the same problem,
+   and the header cannot tell them apart because there is nothing to tell.
+
+   The phone block keeps what is genuinely about being a phone: touch target
+   sizes, safe-area padding, the drawer. Those are not width questions. */
+
+@container mainpane (max-width: 860px) {
+  /* Starred-only, the outline, the system monitor, chat info, compare, export
+     and the theme cycle are every one of them in the command palette, so a
+     narrow column loses the buttons and not the features. */
+  .main-header .header-secondary { display: none !important; }
+  .main-header .header-compact-only { display: inline-flex; }
+
+  /* The model picker is the only control up here that says something rather
+     than doing something, so it gets the room and ellipsises rather than
+     shoving its neighbours off the edge. */
+  .main-header .model-selector-container { flex: 1 1 0; min-width: 0; max-width: none; }
+  .main-header .dropdown-trigger {
+    width: 100%;
+    min-width: 0;
+    justify-content: space-between;
+    padding-inline: 0.5rem;
+  }
+  .main-header .model-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  /* The search field comes out of the row and is reached from a button. Left
+     in, it takes the width of the group it sits in — the group is sized by its
+     contents — and the picker is left with nothing. */
+  .main-header .header-search { display: none; }
+  .main-header .header-search.is-open {
+    display: flex;
+    order: 10;
+    flex: 1 0 100%;
+    width: 100%;
+  }
+
+  .main-header {
+    flex-wrap: wrap;
+    gap: 0.3rem;
+    height: auto;
+    min-height: 56px;
+    padding-block: 0.4rem;
+    align-items: flex-start;
+  }
+  .main-header .header-tools { flex: 1 1 0; min-width: 0; gap: 0.3rem; flex-wrap: wrap; }
+  .main-header > .toggle-sidebar { flex: 0 0 auto; display: flex; align-items: center; min-height: 40px; }
+
+  .main-header .dropdown-menu {
+    left: 0;
+    right: 0;
+    width: auto;
+    min-width: 0;
+    max-height: min(58vh, 420px);
+  }
+}
+
+/* Between "roomy" and "narrow" the search field is what can afford to give way
+   first — it is a field with a button that reopens it. */
+@container mainpane (max-width: 1180px) {
+  .main-header .header-search { width: 150px; }
+}
+
+/* The header must not overflow at any width, and picking breakpoints for the
+   system meters cannot guarantee that: how much room is left depends on the
+   length of the model's name, which is a string from Ollama and can be
+   anything. So the name is the part that always gives way — it ellipsises at
+   every width rather than only on a phone — and the meters' breakpoints go
+   back to being about how many are worth showing rather than about whether the
+   row fits.
+
+   `min-width: 0` on each ancestor is the load-bearing half: a flex item's
+   automatic minimum size is its content, so without it the trigger refuses to
+   shrink below the full name and pushes the row wider instead of ellipsising. */
+.main-header .header-tools { min-width: 0; }
+.main-header .model-selector-container { min-width: 0; }
+.main-header .dropdown-trigger { min-width: 0; }
+.main-header .model-name {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* =========================================================
+   "This would freeze the page"
+   =========================================================
+   Shown instead of running, not alongside it. A warning printed next to the
+   output is no use here: by the time it is on screen the tab is already gone,
+   because the thing being warned about is the thread that would have drawn it. */
+.py-blocked {
+  padding: 0.85rem 1rem;
+  border-top: 1px solid var(--border-color);
+  background: var(--bg-main);
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+.py-blocked-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.5rem;
+  color: var(--danger);
+}
+.py-blocked-head strong { color: var(--text-primary); font-size: 0.88rem; }
+.py-blocked p { margin: 0 0 0.6rem; }
+.py-blocked code {
+  font-family: var(--font-mono, monospace);
+  font-size: 0.92em;
+  padding: 0.05rem 0.25rem;
+  border-radius: 3px;
+  background: var(--input-bg);
+}
+.py-blocked pre {
+  margin: 0 0 0.75rem;
+  padding: 0.7rem 0.85rem;
+  border-radius: var(--radius-sm);
+  background: var(--input-bg);
+  border: 1px solid var(--border-color);
+  overflow-x: auto;
+  font-family: var(--font-mono, monospace);
+  font-size: 0.78rem;
+  line-height: 1.5;
+  color: var(--text-primary);
+}
+.py-blocked-actions {
+  display: flex;
+  align-items: center;
+  gap: 0.7rem;
+  flex-wrap: wrap;
+}
+.py-blocked-actions span { font-size: 0.76rem; color: var(--text-muted); }
+
+/* A shortened attachment says so on the chip, not only in a toast that has
+   since gone. Sending half a document without noticing is the kind of thing
+   you find out about from the answer. */
+.attachment-cut {
+  margin-inline-start: 0.35rem;
+  padding: 0.05rem 0.3rem;
+  border-radius: 3px;
+  background: rgba(var(--primary-rgb), 0.18);
+  color: var(--primary);
+  font-size: 0.7em;
+}
+
+/* The list of things a plain-HTTP address takes away. Tight, because it is a
+   diagnosis rather than a feature. */
+.insecure-list {
+  margin: 0.4rem 0;
+  padding-inline-start: 1.1rem;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+.insecure-list li { list-style: disc; }
+
+/* =========================================================
+   What each model actually does on this machine
+   =========================================================
+   A table rather than more meters: these are numbers to compare between rows,
+   and a bar chart of four medians says less than four numbers in a column. */
+.perf-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 0.74rem;
+  margin-top: 0.35rem;
+}
+.perf-table th {
+  text-align: end;
+  font-weight: 600;
+  color: var(--text-muted);
+  padding: 0.2rem 0.35rem;
+  border-bottom: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+.perf-table th:first-child,
+.perf-table td:first-child { text-align: start; }
+.perf-table td {
+  text-align: end;
+  padding: 0.28rem 0.35rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+  border-bottom: 1px solid rgba(var(--primary-rgb), 0.06);
+}
+/* A model name is long and the numbers are the point, so the name is what
+   gives way. */
+.perf-name {
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-primary);
+}
+.perf-table tr.is-current td { color: var(--text-primary); }
+.perf-table tr.is-current .perf-name { font-weight: 600; color: var(--primary); }
+
+.perf-note { margin-top: 0.5rem; }
+.perf-warn {
+  margin-top: 0.4rem;
+  padding: 0.35rem 0.5rem;
+  border-inline-start: 2px solid var(--primary);
+  background: rgba(var(--primary-rgb), 0.07);
+  border-radius: var(--radius-sm);
+}
+
+.sysmon-clear {
+  margin-inline-start: auto;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 0.1rem 0.2rem;
+  display: flex;
+}
+.sysmon-clear:hover { color: var(--danger); }
+
+@media (max-width: 860px) {
+  /* Four columns of numbers on a phone: the model name takes what is left. */
+  .perf-name { max-width: 7rem; }
+  .perf-table { font-size: 0.72rem; }
+}
+
+/* =========================================================
+   Thinking, in the composer
+   =========================================================
+   A three-way segmented control small enough to sit in the footer beside the
+   token meter. It belongs here rather than in Settings because it is decided
+   per question — a quick factual one does not want thirty seconds of
+   reasoning, and a hard one does. */
+.think-toggle {
+  display: flex;
+  align-items: center;
+  gap: 0.15rem;
+  padding: 0.1rem 0.2rem 0.1rem 0.35rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+}
+.think-icon { color: var(--text-muted); flex-shrink: 0; margin-inline-end: 0.15rem; }
+.think-toggle button {
+  background: transparent;
+  border: none;
+  border-radius: 4px;
+  padding: 0.18rem 0.4rem;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.68rem;
+  line-height: 1.2;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: background var(--dur-fast, 0.15s) var(--ease-out, ease),
+              color var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+.think-toggle button:hover { color: var(--text-primary); }
+.think-toggle button.active {
+  background: rgba(var(--primary-rgb), 0.16);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+@media (max-width: 860px) {
+  /* The footer is already two rows on a phone; this joins the second one and
+     gets finger-sized targets rather than shrinking to fit. */
+  .think-toggle button { min-height: 30px; padding-inline: 0.5rem; font-size: 0.7rem; }
+}
+@media (max-width: 400px) {
+  /* At this width the label beside the meter is what gives way first. */
+  .think-toggle { padding-inline-start: 0.2rem; }
+  .think-icon { display: none; }
+}
+
+/* =========================================================
+   The bar over a selected passage
+   =========================================================
+   Selecting text is already the gesture for "this bit". This turns it into a
+   question without a round trip through copy, scroll, paste and quote. */
+.selection-bar {
+  position: fixed;
+  transform: translateX(-50%);
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  gap: 0.1rem;
+  padding: 0.25rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md, 10px);
+  /* `--bg-main`, not an invented name. This said
+     `var(--bg-elevated, var(--bg-panel))` and neither of those variables has
+     ever existed, so the whole declaration was invalid and the bar had no
+     background at all -- the answer's text showed straight through it and the
+     buttons were unreadable. An undefined custom property fails silently,
+     which is why it survived being looked at. `.dropdown-menu` and every other
+     floating layer here use `--bg-main`; so does this now. */
+  background: var(--bg-main);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.22);
+  animation: selection-bar-in 0.13s var(--ease-out, ease-out);
+  /* Never wider than the window, however it is centred on the selection. */
+  max-width: calc(100vw - 1.5rem);
+  overflow-x: auto;
+  scrollbar-width: none;
+}
+.selection-bar::-webkit-scrollbar { display: none; }
+@keyframes selection-bar-in {
+  from { opacity: 0; transform: translateX(-50%) translateY(4px); }
+  to   { opacity: 1; transform: translateX(-50%) translateY(0); }
+}
+.selection-bar button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  flex-shrink: 0;
+  min-height: 30px;
+  padding: 0.25rem 0.5rem;
+  border: none;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.74rem;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.selection-bar button:hover { background: var(--hover-bg); color: var(--text-primary); }
+.selection-bar-sep {
+  width: 1px;
+  align-self: stretch;
+  margin: 0.15rem 0.15rem;
+  background: var(--border-color);
+  flex-shrink: 0;
+}
+@media (max-width: 560px) {
+  /* Labels go, icons stay: four words do not fit across a phone, and the
+     icons are the part that is still readable at this size. */
+  .selection-bar button span { display: none; }
+  .selection-bar button { padding-inline: 0.6rem; }
+}
+
+/* =========================================================
+   Attachments you can open
+   =========================================================
+   The chip used to be a label. It is a button now, because the moment you
+   most want to check what you attached is before you send it — and because a
+   long paste is collapsed into one of these, so the only way to see what you
+   pasted is to open it. */
+.attachment-doc,
+.attachment-open {
+  background: none;
+  border: none;
+  font: inherit;
+  cursor: pointer;
+  text-align: start;
+}
+.attachment-doc:hover:not(:disabled) { color: var(--text-primary); }
+.attachment-doc:disabled { cursor: default; }
+.attachment-open { padding: 0; display: flex; line-height: 0; }
+.attachment-open:hover img { filter: brightness(1.08); }
+
+.attachment-name {
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* What the chip says in place of the content it is standing for. */
+.attachment-tag {
+  font-size: 0.68rem;
+  padding: 0.05rem 0.35rem;
+  border-radius: 999px;
+  background: var(--hover-bg);
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.attachment-tag.ok { color: var(--primary); background: rgba(var(--primary-rgb), 0.14); }
+
+/* ---- the viewer ---- */
+.attachment-viewer {
+  position: fixed;
+  inset: 0;
+  z-index: 70;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 1.5rem;
+  background: var(--overlay-bg, rgba(0, 0, 0, 0.55));
+  backdrop-filter: blur(3px);
+  animation: overlay-in var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+.attachment-viewer-box {
+  display: flex;
+  flex-direction: column;
+  width: min(900px, 100%);
+  max-height: 100%;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  overflow: hidden;
+  animation: modal-in var(--dur, 0.2s) var(--ease-out, ease);
+}
+.attachment-viewer-head {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.6rem 0.75rem;
+  border-bottom: 1px solid var(--border-color);
+  flex-shrink: 0;
+}
+.attachment-viewer-name {
+  font-weight: 600;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* Pushes the buttons to the far end, and is the first thing to give way. */
+.attachment-viewer-meta {
+  margin-inline-end: auto;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+.attachment-viewer-body {
+  overflow: auto;
+  padding: 0.75rem 1rem;
+  min-height: 0;
+}
+.attachment-viewer-body pre {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-size: 0.82rem;
+  line-height: 1.55;
+  color: var(--text-primary);
+}
+/* Big enough to actually read, and never bigger than the space there is. */
+.attachment-viewer-body img,
+.attachment-viewer-body video {
+  display: block;
+  margin: 0 auto;
+  max-width: 100%;
+  max-height: calc(100vh - 10rem);
+  object-fit: contain;
+}
+.attachment-viewer-body video { background: #000; border-radius: var(--radius-sm); }
+
+@media (max-width: 860px) {
+  .attachment-viewer { padding: 0.5rem; }
+  .attachment-viewer-box { max-height: calc(100dvh - 1rem); }
+  .attachment-name { max-width: 8rem; }
+}
+
+/* Where a document may be used. A library that cannot say this is a flat pile:
+   a manual meant for every chat looks exactly like an invoice that arrived in
+   one, and there is no way to tell why an answer cited something odd. */
+.rag-scope {
+  display: inline-block;
+  margin-inline-start: 0.4rem;
+  padding: 0.02rem 0.35rem;
+  border-radius: 999px;
+  background: var(--hover-bg);
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  max-width: 12rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+.rag-scope.shared { color: var(--primary); background: rgba(var(--primary-rgb), 0.13); }
+
+/* =========================================================
+   Questions held because they could not be sent
+   =========================================================
+   Visible rather than silent. A queue that retries in the background is
+   indistinguishable from an app that has lost your question, and the entries
+   that have run out of attempts need somebody to decide about them. */
+.send-queue {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  width: 100%;
+  padding: 0.5rem 1rem 0;
+}
+.send-queue-item {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  padding: 0.35rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+.send-queue-item.is-stalled {
+  border-color: var(--danger);
+  color: var(--text-primary);
+}
+.send-queue-item.is-stalled svg { color: var(--danger); }
+.send-queue-text {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* The message the keyboard is on. A ring rather than a background: the row
+   already uses background to mean starred and to mean search-hit, and three
+   meanings on one property is how a highlight stops meaning anything. */
+.message-row.nav-focus {
+  outline: 2px solid var(--primary);
+  outline-offset: 4px;
+  border-radius: var(--radius-sm);
+}
+
+/* What the installed models cost. The per-model size was already here and it
+   answers the wrong question: people read this list when they are trying to
+   free space, and "6.1 GB" next to "33.4 GB" in a column of text does not make
+   the difference visible. */
+.manager-total {
+  margin-inline-start: 0.4rem;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--hover-bg);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-weight: 500;
+}
+.manager-bar {
+  display: block;
+  flex: 0 0 60px;
+  height: 4px;
+  border-radius: 999px;
+  background: var(--hover-bg);
+  overflow: hidden;
+}
+.manager-bar > span {
+  display: block;
+  height: 100%;
+  background: var(--primary);
+}
+
+/* =========================================================
+   Tables in an answer
+   =========================================================
+   There were no rules for these at all, which means a browser's defaults:
+   no borders, no padding, and — the one that matters — no scroll container.
+   A model asked to compare things produces eight columns, and eight columns
+   of real text is wider than the conversation column on a desktop and far
+   wider than a phone. Without somewhere to scroll, the table pushes the page
+   sideways, which is the same failure the composer footer had.
+
+   The wrapper is the fix; the rest is making it legible. A table streams in
+   one row at a time, so all of this has to hold while it is still arriving —
+   `table-layout: auto` is deliberate, because fixed widths computed from a
+   half-arrived table would be wrong for the rest of it. */
+/* The flex item has to be allowed to shrink first.
+   `.message-row` is `display: flex`, so `.markdown-body` is a flex item, and a
+   flex item's automatic minimum size is its *content* -- it will not go below
+   the width of the widest thing inside it. A `max-content` table therefore
+   pushes the item, the row and the page sideways, and `max-width: 100%` on the
+   table cannot save it because 100% of a content-sized parent is the content.
+   This is the same rule that broke the settings tab strip. */
+.message-row > .markdown-body,
+.message-row .bubble,
+.message-row .message-content { min-width: 0; }
+
+.markdown-body table,
+.think-body table {
+  display: block;
+  width: max-content;
+  max-width: 100%;
+  overflow-x: auto;
+  border-collapse: collapse;
+  margin: 0.85rem 0;
+  font-size: 0.88em;
+  /* Momentum scrolling, and no scroll chaining out to the transcript when the
+     table reaches its end — which on a phone otherwise flings the whole
+     conversation sideways. */
+  overscroll-behavior-x: contain;
+}
+.markdown-body th,
+.markdown-body td {
+  border: 1px solid var(--border-color);
+  padding: 0.4rem 0.65rem;
+  text-align: start;
+  vertical-align: top;
+  /* A cell of prose may wrap; a cell of numbers should not be broken up. */
+  word-break: normal;
+  overflow-wrap: anywhere;
+}
+.markdown-body th {
+  background: var(--hover-bg);
+  font-weight: 600;
+  white-space: nowrap;
+}
+/* Banding, so the eye can follow a row across eight columns. */
+.markdown-body tbody tr:nth-child(even) { background: rgba(var(--primary-rgb), 0.04); }
+
+@media (max-width: 860px) {
+  .markdown-body table { font-size: 0.82em; }
+  .markdown-body th,
+  .markdown-body td { padding: 0.32rem 0.45rem; }
+}
+
+/* A citation you can press.
+   The model is told to cite retrieved passages as [1], [2] — and before this
+   the number was nothing at all: not a link, not a hover, not clickable. To
+   check a claim you had to open the collapsed reasoning block and count
+   paragraphs. The whole point of a citation is that checking it is cheap. */
+.citation-mark {
+  display: inline;
+  padding: 0 0.18rem;
+  margin: 0 0.05rem;
+  border: none;
+  border-radius: 4px;
+  background: rgba(var(--primary-rgb), 0.14);
+  color: var(--primary);
+  font: inherit;
+  font-size: 0.85em;
+  font-variant-numeric: tabular-nums;
+  line-height: inherit;
+  cursor: pointer;
+  vertical-align: baseline;
+}
+.citation-mark:hover { background: rgba(var(--primary-rgb), 0.28); }
+
+/* Searching your own history by meaning.
+   The button sits inside the search box because it acts on what is in it, and
+   the note below says what happened — a search that silently adds three chats
+   to the list is one nobody trusts. */
+.sidebar-semantic { flex: 0 0 auto; }
+.sidebar-search-note {
+  padding: 0.25rem 0.15rem 0;
+  font-size: 0.7rem;
+  color: var(--text-muted);
+}
+
+/* A citation that points at a page rather than at a passage.
+   Underlined, because that is what a link looks like and pressing it leaves
+   the app — which is worth knowing before you press rather than after. */
+.citation-mark.is-link {
+  text-decoration: underline;
+  text-underline-offset: 2px;
+}
+
+/* ------------------------------------------------- a shared conversation
+
+   The read-only page somebody lands on when they follow a share link. It
+   deliberately does not reuse the app's chrome: there is no sidebar to open,
+   no composer to type in and no account to be signed into, so borrowing that
+   layout would only leave a reader looking for controls that are not there.
+   What it does reuse is `.message-row` and `.markdown-body`, because a shared
+   answer should look exactly like the answer it is a copy of. */
+.shared-page {
+  min-height: 100dvh;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  display: flex;
+  flex-direction: column;
+}
+
+.shared-header {
+  border-bottom: 1px solid var(--border-color);
+  background: var(--bg-primary);
+  position: sticky;
+  top: 0;
+  z-index: 5;
+}
+.shared-header-inner {
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 0.9rem 1.25rem;
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  /* The title is the one thing allowed to shrink; without this the date is
+     pushed off the right edge on a phone instead of the title truncating. */
+  min-width: 0;
+}
+.shared-header-inner h1 {
+  margin: 0;
+  font-size: 1rem;
+  font-weight: 600;
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.shared-when {
+  flex: 0 0 auto;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+}
+
+.shared-main {
+  flex: 1 1 auto;
+  width: 100%;
+  max-width: 46rem;
+  margin: 0 auto;
+  padding: 1.5rem 1.25rem 2rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1.25rem;
+}
+
+.shared-footer {
+  border-top: 1px solid var(--border-color);
+  padding: 1.25rem;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+  line-height: 1.6;
+}
+.shared-footer p { margin: 0.15rem 0; }
+
+/* ------------------------------------------------------ the share dialog */
+
+.share-url-row {
+  display: flex;
+  gap: 0.4rem;
+  align-items: stretch;
+  margin: 0.6rem 0;
+}
+.share-url-row input {
+  flex: 1 1 auto;
+  min-width: 0;
+  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+  font-size: 0.8rem;
+}
+
+.share-list { display: flex; flex-direction: column; gap: 0.5rem; }
+.share-row {
+  display: flex;
+  align-items: center;
+  gap: 0.6rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 8px;
+  background: var(--bg-primary);
+}
+.share-row-main { flex: 1 1 auto; min-width: 0; }
+.share-row-title {
+  font-size: 0.85rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.share-row-meta { font-size: 0.72rem; color: var(--text-secondary); }
+
+/* ------------------------------------------- the screen before a conversation
+
+   Pressing "new chat" no longer makes a conversation, so this is not an empty
+   chat any more — it is the screen you start from. It is laid out that way:
+   the greeting and the composer are one centred group, with the suggestions
+   under them, rather than a blank transcript with the composer stuck to the
+   bottom edge as though a conversation were already underway.
+
+   The centring is done with auto margins rather than `justify-content`,
+   because the header is in the same column and must stay at the top. Margins
+   push only the two elements between them. */
+.claude-main.is-blank .messages-scroll-area {
+  /* Sized to the greeting instead of eating the column. */
+  flex: 0 0 auto;
+  margin-top: auto;
+  overflow: visible;
+}
+.claude-main.is-blank .empty-state {
+  /* `margin: auto` is what centred it inside the tall scroller; the auto
+     margins above do that job now, and leaving both fights over the space.
+     The bottom margin is the gap to the composer: without it the greeting sits
+     directly on the top edge of the box. */
+  margin: 0 0 1.5rem;
+  gap: 0.75rem;
+}
+.claude-main.is-blank .input-area-wrapper {
+  /* No fade: it is not covering a conversation that continues underneath. */
+  background: none;
+}
+.claude-main.is-blank .starter-grid {
+  margin: 0 auto auto;
+  padding: 0 1rem 1.5rem;
+}
+
+/* The greeting sits closer to the composer than the old two-column welcome
+   did, so it is quieter: this is a label on a text box, not a splash screen. */
+.claude-main.is-blank .empty-state h1 {
+  font-size: 1.6rem;
+  font-weight: 500;
+  letter-spacing: -0.01em;
+}
+.claude-main.is-blank .empty-logo {
+  margin-bottom: 0;
+  color: var(--primary);
+}
+
+@media (max-width: 640px) {
+  /* On a phone the keyboard takes half the screen, and a group centred in
+     what is left ends up under the thumb. Anchor it to the composer instead. */
+  .claude-main.is-blank .messages-scroll-area { margin-top: auto; }
+  .claude-main.is-blank .starter-grid { padding-bottom: 0.75rem; }
+  .claude-main.is-blank .empty-state h1 { font-size: 1.3rem; }
+}
+
+/* --------------------------------------------------------- personas
+
+   A persona is somebody to talk to rather than a setting, so the card that
+   picks one has to carry enough to choose by: the name is not enough on its
+   own, and the opening line is the thing that actually says what it is for. */
+.persona-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 0.6rem;
+}
+.persona-card {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.7rem;
+  padding: 0.75rem 0.85rem;
+  text-align: left;
+  border: 1px solid var(--border-color);
+  border-radius: 10px;
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  font: inherit;
+  cursor: pointer;
+}
+.persona-card:hover { background: var(--hover-bg); }
+.persona-card-avatar {
+  flex: 0 0 auto;
+  width: 34px;
+  height: 34px;
+  display: grid;
+  place-items: center;
+  border-radius: 9px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  font-size: 1.05rem;
+  line-height: 1;
+}
+/* min-width:0 or the flex item refuses to shrink and the ellipsis never
+   happens -- a long opening line pushes the card wider instead. */
+.persona-card-body { min-width: 0; display: flex; flex-direction: column; gap: 0.15rem; }
+.persona-card-name { font-size: 0.9rem; font-weight: 500; }
+.persona-card-line {
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.persona-card-meta { font-size: 0.7rem; color: var(--text-muted); }
+
+/* The glyph standing in for the assistant's spark, at the size the spark was. */
+.persona-avatar-glyph { font-size: 15px; line-height: 1; }
+
+.persona-row-avatar {
+  flex: 0 0 auto;
+  width: 26px;
+  height: 26px;
+  display: grid;
+  place-items: center;
+  border-radius: 7px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  font-size: 0.85rem;
+}
+
+/* Wide enough for two emoji and no wider: it is a one-glyph field, and a
+   full-width box invites a sentence. */
+.persona-avatar-input { flex: 0 0 4.5rem; text-align: center; }
+
+.persona-open { flex: 0 0 auto; }
+
+/* ==== Deep research ====
+
+   Two surfaces. The strip under the composer says what sending is about to
+   cost, because the difference between quick and thorough is the difference
+   between one minute and ten and nobody should discover that by waiting. The
+   trace above the answer is the run's own record: the queries it chose, the
+   pages it opened, the ones that refused it. A report that arrives out of
+   nowhere is a report nobody can check. */
+
+.research-strip {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  align-self: center;
+  width: 100%;
+  max-width: var(--content-width, 768px);
+  margin-bottom: 0.5rem;
+  padding: 0.4rem 0.7rem;
+  border: 1px solid var(--primary);
+  border-radius: var(--radius-sm);
+  background: rgba(var(--primary-rgb), 0.08);
+  color: var(--text-primary);
+  font-size: 0.78rem;
+}
+.research-strip-title { font-weight: 600; flex: 0 0 auto; }
+.research-strip-cost {
+  flex: 1;
+  min-width: 0;
+  text-align: end;
+  color: var(--text-muted);
+  /* The cost is the thing the strip exists to say, but it is also the thing
+     that has nowhere to go on a phone. It goes rather than wrapping the row. */
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.research-depths {
+  display: flex;
+  flex: 0 0 auto;
+  gap: 0.15rem;
+  padding: 0.1rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+}
+.research-depths button {
+  padding: 0.15rem 0.5rem;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.75rem;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out),
+              color var(--dur-fast) var(--ease-out);
+}
+.research-depths button:hover { color: var(--text-primary); }
+.research-depths button.is-on {
+  background: var(--primary);
+  color: #fff;
+}
+
+/* (The telescope that this styled is inside the `+` menu now; what says
+   research is armed is the dot on the `+` and the strip under the composer.) */
+
+/* ---- the trace ---- */
+
+.research-trace {
+  margin-bottom: 0.6rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle, var(--bg-main));
+  font-size: 0.82rem;
+}
+.research-trace.is-running { border-color: var(--primary); }
+
+.research-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: start;
+}
+.research-summary:hover { color: var(--text-primary); }
+.research-title { flex: 0 0 auto; }
+.research-meta {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.research-chevron {
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+.research-summary[aria-expanded='true'] .research-chevron { transform: rotate(180deg); }
+
+.research-body { padding-top: 0.5rem; }
+
+.research-steps {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 0.28rem;
+}
+.research-step {
+  display: flex;
+  align-items: baseline;
+  gap: 0.45rem;
+  color: var(--text-secondary);
+  /* A long page title is not worth a second line here: the step list is a
+     record of what happened, and the link carries the whole title in a
+     tooltip and in the source list below. */
+  min-width: 0;
+}
+.research-step-icon {
+  flex: 0 0 auto;
+  align-self: center;
+  display: grid;
+  place-items: center;
+  width: 18px;
+  height: 18px;
+  border-radius: 5px;
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+}
+.research-step.is-running .research-step-icon { border-color: var(--primary); color: var(--primary); }
+.research-step.is-failed .research-step-icon { border-color: #EF4444; color: #EF4444; }
+.research-step-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.research-step-label a { color: inherit; text-decoration: none; }
+.research-step-label a:hover { text-decoration: underline; }
+.research-step-count,
+.research-step-error { flex: 0 0 auto; font-size: 0.75rem; color: var(--text-muted); }
+.research-step-error { color: #EF4444; }
+
+/* The queries are the interesting half of the plan step -- they are what
+   turned one question into several -- so they get their own line rather than
+   being truncated onto the end of it. */
+.research-queries {
+  flex-basis: 100%;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-inline-start: 1.6rem;
+}
+.research-queries code {
+  padding: 0.05rem 0.35rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  font-size: 0.73rem;
+  color: var(--text-secondary);
+}
+
+.research-sources {
+  list-style: none;
+  margin: 0.55rem 0 0;
+  padding: 0.55rem 0 0;
+  border-top: 1px solid var(--border-color);
+  display: flex;
+  flex-direction: column;
+  gap: 0.2rem;
+  counter-reset: none;
+}
+.research-sources a {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  min-width: 0;
+  color: var(--text-secondary);
+  text-decoration: none;
+}
+.research-sources a:hover { color: var(--primary); }
+.research-source-n { flex: 0 0 auto; color: var(--text-muted); font-variant-numeric: tabular-nums; }
+.research-source-title {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.research-source-host { flex: 0 0 auto; color: var(--text-muted); font-size: 0.74rem; }
+/* A source that was only glimpsed in a search result is weaker evidence than
+   one that was read, and the reader checking a citation needs to know which. */
+.research-sources li:not(.was-read) a { opacity: 0.72; }
+.research-source-note { margin-inline-start: 1.6rem; color: var(--text-muted); font-size: 0.72rem; }
+
+@media (max-width: 640px) {
+  .research-strip { flex-wrap: wrap; gap: 0.4rem; }
+  .research-strip-cost { flex-basis: 100%; text-align: start; }
+}
+
+/* ==== Monitoring: what the numbers compare against ====
+
+   The original panel was four percentages. Everything below is a comparison
+   instead — how much of a model is on the card rather than in system RAM, what
+   the disk holds once shared blobs are counted once, whether speed is moving.
+   Each needs a shape a bar chart cannot give it. */
+
+.sysmon-alerts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  margin-bottom: 0.15rem;
+}
+.sysmon-alert {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  padding: 0.45rem 0.6rem;
+  border-radius: var(--radius-sm);
+  border: 1px solid;
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+.sysmon-alert svg { flex: 0 0 auto; margin-top: 0.12rem; }
+/* Two levels, and they have to look different from across the room -- an
+   amber row that says "getting full" beside a red one that says "already
+   spilling onto the CPU" is the whole point of having two. */
+.sysmon-alert.is-warn {
+  border-color: rgba(245, 158, 11, 0.45);
+  background: rgba(245, 158, 11, 0.10);
+  color: #B45309;
+}
+.sysmon-alert.is-high {
+  border-color: rgba(239, 68, 68, 0.45);
+  background: rgba(239, 68, 68, 0.10);
+  color: #B91C1C;
+}
+[data-theme='dark'] .sysmon-alert.is-warn { color: #FCD34D; }
+[data-theme='dark'] .sysmon-alert.is-high { color: #FCA5A5; }
+
+.sysmon-window {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+.sysmon-window-buttons {
+  display: flex;
+  gap: 0.15rem;
+  padding: 0.1rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+}
+.sysmon-window-buttons button {
+  padding: 0.1rem 0.45rem;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.72rem;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.sysmon-window-buttons button.is-on { background: var(--primary); color: #fff; }
+
+/* ---- where a model is running ---- */
+
+.sysmon-residency + .sysmon-residency { margin-top: 0.6rem; }
+.sysmon-residency-head,
+.sysmon-disk-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-bottom: 0.25rem;
+}
+.sysmon-residency-head .sysmon-model-name,
+.sysmon-disk-head .sysmon-model-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* One bar, two segments. A percentage on its own has to be read twice to work
+   out which way round it goes; a bar that is four-fifths filled does not. */
+.sysmon-split {
+  height: 6px;
+  border-radius: 3px;
+  overflow: hidden;
+  /* The unfilled part is the CPU share, so it is a colour rather than a
+     groove -- "empty" would be the wrong reading. */
+  background: rgba(239, 68, 68, 0.35);
+}
+.sysmon-split-gpu {
+  height: 100%;
+  background: var(--primary);
+  transition: width var(--dur) var(--ease-out);
+}
+.sysmon-split-gpu.is-partial { background: #F59E0B; }
+
+.sysmon-residency-foot {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  margin-top: 0.2rem;
+}
+.sysmon-expiry { flex: 0 0 auto; font-variant-numeric: tabular-nums; opacity: 0.85; }
+
+/* ---- the disk ---- */
+
+.sysmon-disk + .sysmon-disk { margin-top: 0.45rem; }
+.sysmon-more {
+  margin-top: 0.4rem;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--primary);
+  font: inherit;
+  font-size: 0.76rem;
+  cursor: pointer;
+}
+.sysmon-more:hover { text-decoration: underline; }
+
+/* ---- series that are not percentages ---- */
+
+.mini-chart { margin-top: 0.3rem; }
+.mini-chart svg { width: 100%; height: 40px; display: block; }
+.mini-chart-scale {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.15rem;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+  font-variant-numeric: tabular-nums;
+}
+.usage-value.is-warn { color: #F59E0B; }
+
+/* ==== Use, as opposed to the machine ====
+
+   The same overlay, a second tab. What is being drawn here is not a load
+   graph: days with nothing on them are the most informative bars in the
+   chart, so the empty ones are drawn rather than skipped. */
+
+.sysmon-tabs {
+  display: flex;
+  gap: 0.15rem;
+  margin-bottom: 0.85rem;
+  padding: 0.15rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+}
+.sysmon-tabs button {
+  flex: 1;
+  padding: 0.3rem 0.5rem;
+  border: none;
+  border-radius: calc(var(--radius-sm) - 2px);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.82rem;
+  cursor: pointer;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.sysmon-tabs button:hover { color: var(--text-primary); }
+.sysmon-tabs button.is-on { background: var(--primary); color: #fff; }
+
+.usage-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(96px, 1fr));
+  gap: 0.5rem;
+}
+.usage-stat {
+  padding: 0.55rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle, var(--bg-main));
+}
+.usage-stat-label {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+.usage-stat-value {
+  margin-top: 0.15rem;
+  font-size: 1.25rem;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.2;
+}
+.usage-stat-hint { color: var(--text-muted); font-size: 0.7rem; }
+
+/* ---- days ---- */
+
+/* A row of bars rather than a line: the values are counts of separate days,
+   and a line between them implies a continuity that is not there. */
+.usage-days {
+  display: flex;
+  align-items: flex-end;
+  gap: 2px;
+  height: 56px;
+  margin-top: 0.35rem;
+}
+.usage-day {
+  flex: 1;
+  min-width: 2px;
+  height: var(--fill, 0%);
+  border-radius: 2px 2px 0 0;
+  background: var(--primary);
+  transition: height var(--dur) var(--ease-out);
+}
+/* Drawn, not skipped. A day with nothing on it is the most informative bar in
+   the chart, and a chart of only the busy days is a chart of constant use. */
+.usage-day.is-empty {
+  height: 2px;
+  background: var(--border-color);
+}
+
+/* ---- hours ---- */
+
+.usage-hours {
+  display: flex;
+  align-items: flex-end;
+  flex-wrap: wrap;
+  gap: 2px;
+  height: 52px;
+  margin-top: 0.35rem;
+}
+.usage-hour {
+  flex: 1;
+  min-width: 4px;
+  height: max(2px, var(--fill, 0%));
+  border-radius: 2px 2px 0 0;
+  background: var(--primary);
+  opacity: 0.85;
+}
+.usage-hour-axis {
+  flex-basis: 100%;
+  display: flex;
+  justify-content: space-between;
+  margin-top: 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.68rem;
+  font-variant-numeric: tabular-nums;
+}
+
+/* ---- models ---- */
+
+.usage-model-row + .usage-model-row { margin-top: 0.55rem; }
+.usage-model-head {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  margin-bottom: 0.2rem;
+}
+.usage-model-head .sysmon-model-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-model-share { flex: 0 0 auto; font-variant-numeric: tabular-nums; }
+
+/* ---- the longest chats ---- */
+
+.usage-chat-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0.3rem 0;
+  background: none;
+  border: none;
+  border-bottom: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.8rem;
+  text-align: start;
+  cursor: pointer;
+}
+.usage-chat-row:last-child { border-bottom: none; }
+.usage-chat-row:hover { color: var(--primary); }
+.usage-chat-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.usage-chat-meta { flex: 0 0 auto; color: var(--text-muted); font-size: 0.74rem; }
+
+.usage-window { margin-inline-start: auto; }
+
+/* The drift note reuses the alert shape, and needs the third, calm variant:
+   "it got faster" is information, not a problem. */
+.sysmon-alert.is-ok {
+  border-color: rgba(34, 197, 94, 0.4);
+  background: rgba(34, 197, 94, 0.09);
+  color: #15803D;
+}
+[data-theme='dark'] .sysmon-alert.is-ok { color: #86EFAC; }
+
+/* Shared by the usage bars and the disk block. */
+.usage-track { height: 6px; border-radius: 3px; overflow: hidden; background: var(--border-color); }
+.usage-track .usage-fill { height: 100%; background: var(--primary); transition: width var(--dur) var(--ease-out); }
+
+/* ==== Tags ====
+
+   Deliberately quiet. A tag is a second-order fact about a chat — the title is
+   what people scan for — so the chips sit under it, at the size of the
+   timestamp beside them, and only earn colour when they are doing something:
+   filtering, or being removed. */
+
+.chat-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.2rem;
+  max-width: 12rem;
+  padding: 0.05rem 0.4rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-main);
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.68rem;
+  line-height: 1.5;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out),
+              border-color var(--dur-fast) var(--ease-out);
+}
+.chat-tag:hover { color: var(--text-primary); border-color: var(--text-muted); }
+.chat-tag-count {
+  opacity: 0.65;
+  font-variant-numeric: tabular-nums;
+}
+
+.history-tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.2rem;
+  margin-top: 0.2rem;
+}
+
+.tag-filter-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  padding: 0 0.75rem 0.5rem;
+}
+.chat-tag.is-filter { font-size: 0.7rem; }
+.chat-tag.is-on {
+  border-color: var(--primary);
+  background: rgba(var(--primary-rgb), 0.14);
+  color: var(--primary);
+}
+.tag-clear {
+  padding: 0.05rem 0.35rem;
+  background: none;
+  border: none;
+  color: var(--primary);
+  font: inherit;
+  font-size: 0.7rem;
+  cursor: pointer;
+}
+.tag-clear:hover { text-decoration: underline; }
+
+/* ---- the editor ---- */
+
+.tag-editor-current {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+  min-height: 1.6rem;
+  margin-bottom: 0.5rem;
+}
+.chat-tag.is-editable {
+  padding-inline-end: 0.15rem;
+  font-size: 0.76rem;
+  color: var(--text-primary);
+  cursor: default;
+}
+.chat-tag.is-editable button {
+  display: grid;
+  place-items: center;
+  width: 14px;
+  height: 14px;
+  padding: 0;
+  border: none;
+  border-radius: 50%;
+  background: transparent;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.chat-tag.is-editable button:hover { background: var(--border-color); color: var(--text-primary); }
+
+.tag-editor-suggestions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.3rem;
+  margin-top: 0.6rem;
+}
+/* The label sits on its own line above the chips rather than beside them, so a
+   long vocabulary does not push it off the edge. */
+.tag-editor-suggestions .usage-detail { flex-basis: 100%; }
+
+/* ==== Reading the answers ====
+
+   Under the columns, never instead of them: the synthesis is a reading of the
+   answers and the answers are its evidence, so everything it claims has to be
+   checkable by looking up. Full width, because it is prose about three
+   columns rather than a fourth column. */
+
+.compare-consensus {
+  margin-top: 0.85rem;
+  padding: 0.7rem 0.85rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle, var(--bg-main));
+}
+.compare-consensus-head {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin-bottom: 0.5rem;
+  flex-wrap: wrap;
+}
+.compare-consensus-title { font-weight: 600; font-size: 0.86rem; }
+/* The overlap figure and the model picker are settings for the button, so
+   they sit against it rather than against the title. */
+.compare-consensus-head .compare-metrics { margin-inline-start: auto; }
+
+.compare-judge {
+  max-width: 11rem;
+  padding: 0.2rem 0.4rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.76rem;
+}
+.compare-consensus .markdown-body { font-size: 0.88rem; }
+.compare-consensus .compare-empty { font-size: 0.78rem; line-height: 1.5; }
+
+/* ==== What the regeneration changed ====
+
+   One column, not two. Side-by-side is more reading rather than less: the same
+   six hundred words twice, and the eye has to do the comparison itself. Struck
+   through and underlined in place is the whole answer *and* the change, in one
+   pass. */
+
+.variant-diff {
+  margin-top: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle, var(--bg-main));
+}
+.variant-diff-head {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.75rem;
+  color: var(--text-muted);
+}
+.variant-diff-summary { font-variant-numeric: tabular-nums; }
+.variant-diff-coarse { font-style: italic; opacity: 0.85; }
+.variant-diff-head .variant-btn { margin-inline-start: auto; }
+
+.variant-diff-body {
+  margin-top: 0.45rem;
+  max-height: 22rem;
+  overflow-y: auto;
+  /* The answers being compared are very often code, and reflowing a diff of
+     code is how a one-line change becomes unreadable. */
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  font-size: 0.86rem;
+  line-height: 1.6;
+  color: var(--text-secondary);
+}
+
+/* Colour *and* a line through or under: a diff that is only red and green is
+   one that a red-green colourblind reader cannot read at all. */
+.diff-add {
+  background: rgba(34, 197, 94, 0.16);
+  color: var(--text-primary);
+  text-decoration: underline;
+  text-decoration-color: rgba(34, 197, 94, 0.8);
+  text-decoration-thickness: 2px;
+  text-underline-offset: 2px;
+}
+.diff-remove {
+  background: rgba(239, 68, 68, 0.14);
+  color: var(--text-muted);
+  text-decoration: line-through;
+  text-decoration-color: rgba(239, 68, 68, 0.8);
+}
+.variant-btn.is-on { color: var(--primary); }
+
+/* ==== Which model answers what ====
+
+   A rule reads as a sentence: condition, arrow, model. Two selects and an
+   arrow rather than a form with labels, because the labels would be "when"
+   and "then" and the row already says that by its shape. */
+
+.routing-rules {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+  margin-top: 0.7rem;
+}
+.routing-rule {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.routing-rule select { flex: 1; min-width: 0; max-width: none; }
+.routing-rule.is-off { opacity: 0.5; }
+.routing-arrow { flex: 0 0 auto; color: var(--text-muted); }
+.routing-actions { display: flex; gap: 0.4rem; margin-top: 0.3rem; }
+.routing-manual {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  margin-top: 0.5rem;
+}
+
+/* In the metrics row, where it explains a number that is already there — why
+   this answer was unusually fast, or unusually slow. */
+.routed-chip {
+  color: var(--primary);
+  /* No background: this line is four small facts in a row and giving one of
+     them a pill makes it look like a warning. */
+  opacity: 0.9;
+}
+
+/* ==== Checking an answer ====
+
+   Under the answer, quoting it. Every verdict carries the answer's own words
+   so the reader can go and look — which is the whole difference between a
+   second opinion and a second assertion. */
+
+.verify-panel {
+  margin-top: 0.55rem;
+  padding: 0.55rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-left-width: 3px;
+  border-left-color: rgba(34, 197, 94, 0.6);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle, var(--bg-main));
+  font-size: 0.82rem;
+}
+.verify-panel.has-problems { border-left-color: #F59E0B; }
+.verify-panel.is-running,
+.verify-panel.is-failed {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  color: var(--text-muted);
+  border-left-color: var(--border-color);
+}
+.verify-panel.is-failed { border-left-color: #EF4444; color: #EF4444; }
+
+.verify-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  flex-wrap: wrap;
+  color: var(--text-secondary);
+}
+.verify-summary { font-weight: 600; }
+/* The distinction the panel turns on: with no sources these are questions to
+   ask, not findings, and saying so is the difference between a useful pass and
+   false assurance. */
+.verify-note { color: var(--text-muted); font-size: 0.74rem; font-style: italic; }
+
+.verify-verdict {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  margin-top: 0.4rem;
+  padding-top: 0.4rem;
+  border-top: 1px solid var(--border-color);
+  line-height: 1.55;
+}
+.verify-badge {
+  flex: 0 0 auto;
+  padding: 0.02rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid;
+  font-size: 0.68rem;
+  white-space: nowrap;
+}
+.verify-verdict.is-supported .verify-badge { border-color: rgba(34, 197, 94, 0.5); color: #15803D; }
+.verify-verdict.is-unsupported .verify-badge { border-color: rgba(245, 158, 11, 0.5); color: #B45309; }
+.verify-verdict.is-contradicted .verify-badge { border-color: rgba(239, 68, 68, 0.5); color: #B91C1C; }
+.verify-verdict.is-unchecked .verify-badge { border-color: var(--border-color); color: var(--text-muted); }
+[data-theme='dark'] .verify-verdict.is-supported .verify-badge { color: #86EFAC; }
+[data-theme='dark'] .verify-verdict.is-unsupported .verify-badge { color: #FCD34D; }
+[data-theme='dark'] .verify-verdict.is-contradicted .verify-badge { color: #FCA5A5; }
+
+.verify-quote { color: var(--text-primary); }
+.verify-why { color: var(--text-muted); font-size: 0.78rem; }
+/* Shown and marked, never hidden: "the checker quoted something that is not
+   there" is itself a finding, and dropping those rows would leave a page where
+   everything looks equally solid. */
+.verify-verdict.not-found { opacity: 0.62; }
+.verify-missing { color: #B45309; font-size: 0.72rem; }
+[data-theme='dark'] .verify-missing { color: #FCD34D; }
+
+.action-btn.is-on { color: var(--primary); }
+
+/* ==== Prompt chains ====
+
+   The intermediate outputs are most of the value and the part a single final
+   answer throws away. When the last step disappoints — and on a local model it
+   often will — the only useful question is which step went wrong, so each one
+   opens to show what it was actually sent and what came back. */
+
+.chain-trace {
+  margin-bottom: 0.6rem;
+  padding: 0.45rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle, var(--bg-main));
+  font-size: 0.82rem;
+}
+.chain-trace.is-running { border-color: var(--primary); }
+.chain-trace.has-failed { border-color: rgba(239, 68, 68, 0.5); }
+
+.chain-summary {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  width: 100%;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-weight: 500;
+  cursor: pointer;
+  text-align: start;
+}
+.chain-summary:hover { color: var(--text-primary); }
+.chain-name { flex: 0 0 auto; }
+.chain-meta {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-weight: 400;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chain-chevron {
+  flex-shrink: 0;
+  opacity: 0.7;
+  transition: transform var(--dur-slow) var(--ease-out);
+}
+[aria-expanded='true'] > .chain-chevron { transform: rotate(180deg); }
+
+.chain-steps {
+  list-style: none;
+  margin: 0.5rem 0 0;
+  padding: 0;
+}
+.chain-step + .chain-step { margin-top: 0.2rem; }
+.chain-step-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  width: 100%;
+  padding: 0.15rem 0;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+  text-align: start;
+}
+.chain-step-head:hover { color: var(--text-primary); }
+.chain-step-n {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  width: 17px;
+  height: 17px;
+  border-radius: 5px;
+  border: 1px solid var(--border-color);
+  background: var(--bg-main);
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  font-variant-numeric: tabular-nums;
+}
+.chain-step.is-done .chain-step-n { border-color: var(--primary); color: var(--primary); }
+.chain-step.is-running .chain-step-n { border-color: var(--primary); }
+.chain-step.is-failed .chain-step-n { border-color: #EF4444; color: #EF4444; }
+.chain-step-title {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.chain-step-count,
+.chain-step-error { flex: 0 0 auto; font-size: 0.73rem; color: var(--text-muted); }
+.chain-step-error { color: #EF4444; }
+
+.chain-step-body { padding: 0.25rem 0 0.4rem 1.4rem; }
+.chain-step-label {
+  display: flex;
+  align-items: center;
+  gap: 0.25rem;
+  margin: 0.3rem 0 0.15rem;
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+.chain-step-pre {
+  margin: 0;
+  padding: 0.4rem 0.55rem;
+  max-height: 14rem;
+  overflow: auto;
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  color: var(--text-secondary);
+  font-size: 0.75rem;
+  line-height: 1.5;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+/* ---- the editor ---- */
+
+.chain-editor-step {
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.6rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+}
+.chain-editor-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin-bottom: 0.35rem;
+}
+.chain-editor-head .settings-input { flex: 1; min-width: 0; }
+.chain-editor-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25rem;
+  margin-top: 0.3rem;
+}
+.chain-editor-refs code {
+  padding: 0.02rem 0.3rem;
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: 0.7rem;
+}
+/* Shown while typing, not on save: a chain is minutes long to run, so "step 2
+   uses step 3" has to arrive while it is being written. */
+.chain-editor-problem {
+  margin-top: 0.3rem;
+  font-size: 0.74rem;
+  color: #B45309;
+}
+.chain-editor-problem.is-noInput { color: var(--text-muted); font-style: italic; }
+[data-theme='dark'] .chain-editor-problem { color: #FCD34D; }
+[data-theme='dark'] .chain-editor-problem.is-noInput { color: var(--text-muted); }
+
+.chain-problem { color: #B45309; font-size: 0.72rem; }
+.prompt-lib-item.has-problems { border-color: rgba(245, 158, 11, 0.5); }
+.chain-strip .research-strip-title { font-weight: 600; }
+
+/* ==== Worth tidying ====
+
+   Every row says why it is a row. A tidying list whose reasons are implicit is
+   one people act on without reading, which is exactly the wrong habit to build
+   next to a delete button. */
+
+.tidy-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.4rem;
+  padding: 0.3rem 0;
+  border-bottom: 1px solid var(--border-color);
+  font-size: 0.8rem;
+}
+.tidy-row:last-of-type { border-bottom: none; }
+
+.tidy-kind {
+  flex: 0 0 auto;
+  padding: 0.02rem 0.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--border-color);
+  color: var(--text-muted);
+  font-size: 0.66rem;
+  white-space: nowrap;
+}
+/* The two that cost nothing to act on read as neutral; the one that is only
+   advice reads as advice. */
+.tidy-kind.is-duplicate { border-color: rgba(245, 158, 11, 0.45); color: #B45309; }
+.tidy-kind.is-huge { border-color: rgba(var(--primary-rgb), 0.45); color: var(--primary); }
+[data-theme='dark'] .tidy-kind.is-duplicate { color: #FCD34D; }
+
+.tidy-title {
+  flex: 0 1 auto;
+  min-width: 0;
+  max-width: 16rem;
+  padding: 0;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font: inherit;
+  text-align: start;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.tidy-title:hover { color: var(--primary); }
+.tidy-why {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.variant-btn.danger { color: #EF4444; }
+
+/* ==== About you, and long-conversation memory ==== */
+
+.profile-field { margin-bottom: 0.55rem; }
+.profile-field label {
+  display: block;
+  margin-bottom: 0.2rem;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+/* The one piece of prompt that is never dropped, never summarised and never
+   retrieved conditionally — so the meter moves while you type. */
+.profile-cost { margin-top: 0.4rem; }
+
+/* In the metrics row: it is the reason the timings look the way they do. */
+.memory-note { color: var(--primary); opacity: 0.9; }
+
+.memory-summary {
+  margin-top: 0.6rem;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle, var(--bg-main));
+  font-size: 0.8rem;
+}
+.memory-summary > summary {
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.78rem;
+}
+.memory-summary p {
+  margin: 0.45rem 0 0.3rem;
+  color: var(--text-secondary);
+  line-height: 1.6;
+  white-space: pre-wrap;
+}
+
+/* ==== The message footer, in two registers ====
+
+   It had grown to nine chips of equal weight in one non-wrapping flex row:
+   two lines on a desktop and seven on a phone, with the two loudest items
+   being the two that are not numbers. Measurements are one line; the reasons
+   those measurements look the way they do are a second, quieter one. */
+
+.claude-metrics {
+  display: block;          /* was a flex row that could not wrap */
+  margin-top: 1rem;
+}
+.metrics-numbers {
+  display: flex;
+  align-items: baseline;
+  flex-wrap: wrap;
+  gap: 0.4rem;
+  font-variant-numeric: tabular-nums;
+}
+.metrics-why {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.6rem;
+  margin-top: 0.2rem;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+  line-height: 1.5;
+}
+/* No colour of their own. These explain the row above; a chip that competes
+   with it for attention is a chip that gets read first and understood last. */
+.metrics-why .routed-chip,
+.metrics-why .memory-note { color: inherit; opacity: 1; }
+
+@media (max-width: 640px) {
+  /* On a phone the reasons are two full sentences. Stacked, they are two
+     readable lines; side by side they were five ragged ones. */
+  .metrics-why { flex-direction: column; gap: 0.1rem; }
+}
+
+/* ==== The inline code card, on a narrow screen ====
+
+   One flex row with no wrapping and no `nowrap` on the buttons, so at 390px
+   "코드 보기" rendered one character per line — a genuine break rather than a
+   tight fit. */
+
+.artifact-actions button { white-space: nowrap; }
+/* Long language names ellipsis instead of shoving the buttons off the edge. */
+.artifact-info { min-width: 0; }
+.artifact-lang,
+.artifact-lines { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+@media (max-width: 560px) {
+  .artifact-card { flex-wrap: wrap; gap: 0.6rem; padding: 0.75rem; }
+  /* The buttons get their own row rather than a sliver of the first one. */
+  .artifact-actions { flex-basis: 100%; }
+  .artifact-actions button { flex: 1; justify-content: center; }
+}
+
+/* ==== Folded settings ====
+
+   For a block that is important to have and rarely opened. Collapsed it is one
+   line that still says what it is and whether it has been set; open it is the
+   whole form. The alternative — seven fields at the top of the first tab —
+   pushed theme, text size and language below the fold for everybody, in
+   exchange for a form most people fill in once. */
+
+.settings-fold {
+  margin-bottom: 1.25rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-subtle, var(--bg-main));
+}
+.settings-fold > summary {
+  display: flex;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.55rem 0.7rem;
+  cursor: pointer;
+  color: var(--text-secondary);
+  font-size: 0.85rem;
+  font-weight: 600;
+  list-style: none;
+}
+.settings-fold > summary::-webkit-details-marker { display: none; }
+/* A chevron of our own, so the disclosure reads the same in every browser. */
+.settings-fold > summary::before {
+  content: '›';
+  display: inline-block;
+  transition: transform var(--dur-fast) var(--ease-out);
+  color: var(--text-muted);
+}
+.settings-fold[open] > summary::before { transform: rotate(90deg); }
+.settings-fold-state {
+  flex: 1;
+  min-width: 0;
+  color: var(--text-muted);
+  font-weight: 400;
+  font-size: 0.76rem;
+  text-align: end;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.settings-fold > .settings-group { margin: 0; padding: 0 0.7rem 0.7rem; }
+
+/* ==== Descriptions look like descriptions ====
+
+   `.setting-desc` was only ever styled inside `.setting-toggle-row`. The other
+   ten uses — the share explanation, the sign-in note, the sync caveats —
+   inherited body type and rendered at full size and full contrast, so a dialog
+   whose job was to offer one button opened with three paragraphs of caveats
+   shouting at the reader.
+
+   One base rule. The toggle-row version already matched these values, so it
+   stays correct by agreeing rather than by overriding. */
+
+.setting-desc {
+  color: var(--text-muted);
+  font-size: 0.75rem;
+  line-height: 1.55;
+}
+/* Consecutive ones are separate points, not one paragraph. */
+.setting-desc + .setting-desc { margin-top: 0.3rem; }
+
+/* ==== The composer, as a stack ====
+
+   It was a single row: attach, microphone, telescope, the box you type into,
+   send. That put three icons where the first word of a message should be, made
+   the widest element on the row the one that could shrink, and left the two
+   controls that decide *how* the message is answered — the model and the
+   thinking effort — somewhere else entirely, one in the title bar and one in a
+   strip of small buttons that a phone could not fit.
+
+   Two rows fix all of it. The box takes the top line, at the full width of the
+   conversation above it. Under it sits one row: what you can add to the message
+   on the left, how it gets answered on the right, and send at the end. */
+
+.composer-stack {
+  flex-direction: column;
+  /* `.input-container` is `align-items: flex-end`, which is right for a row of
+     controls and wrong for a column: it would shrink the textarea to the width
+     of its own placeholder. */
+  align-items: stretch;
+  gap: 0.25rem;
+}
+
+.composer-stack .chat-input {
+  width: 100%;
+  /* No `flex: 1`. In a column that would stretch the box to the height of the
+     composer, so an empty composer would open three lines tall. */
+  flex: none;
+  padding: 0.55rem 0.15rem 0.15rem;
+}
+
+.composer-row {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  width: 100%;
+  min-width: 0;
+}
+
+/* What separates "about the message" from "about the answer". A margin rather
+   than `justify-content: space-between`, which strands the middle group. */
+.composer-spacer { flex: 1 1 auto; min-width: 0.5rem; }
+
+.composer-stack .attach-btn { margin-bottom: 0; padding: 0.4rem; }
+.composer-stack .send-btn { margin-bottom: 0; flex-shrink: 0; }
+
+/* ---- the + ---- */
+
+.composer-add { position: relative; flex-shrink: 0; }
+
+.composer-plus {
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  border: 1px solid var(--border-color);
+  background: transparent;
+  color: var(--text-secondary);
+  display: grid;
+  place-items: center;
+  cursor: pointer;
+  transition: background var(--dur-fast, 0.15s) var(--ease-out, ease),
+              color var(--dur-fast, 0.15s) var(--ease-out, ease),
+              transform var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+.composer-plus:hover { background: var(--hover-bg); color: var(--text-primary); }
+/* Turned into an ×, because the button that opened the menu is the button that
+   closes it and nothing else on the row says so. */
+.composer-plus.is-open {
+  transform: rotate(45deg);
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+
+/* Something inside is switched on. Both entries in the menu are modes that
+   outlive the message that armed them, and folding them behind a button folded
+   away the only thing that said so. */
+.composer-plus.is-armed { border-color: var(--primary); color: var(--primary); }
+.composer-plus.is-armed::after {
+  content: '';
+  position: absolute;
+  top: -1px;
+  inset-inline-end: -1px;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--primary);
+  border: 1.5px solid var(--input-bg);
+}
+/* The dot is positioned against the button, and the rotation on `.is-open`
+   would take it round with the plus. */
+.composer-plus { position: relative; }
+.composer-plus.is-open.is-armed::after { transform: rotate(-45deg); }
+
+/* ---- the menus ---- */
+
+/* Both composer menus open upwards: the composer sits at the bottom of the
+   window, and a menu dropped below it would be off the screen. */
+.composer-menu {
+  top: auto;
+  bottom: calc(100% + 8px);
+  left: 0;
+  right: auto;
+  min-width: 250px;
+}
+
+.composer-model-menu { left: auto; right: 0; min-width: 260px; }
+
+.composer-menu-heading {
+  padding: 0.4rem 0.55rem 0.25rem;
+  font-size: 0.68rem;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--text-muted);
+}
+.composer-menu-heading:not(:first-child) {
+  margin-top: 0.25rem;
+  border-top: 1px solid var(--border-color);
+  padding-top: 0.5rem;
+}
+
+.composer-menu-empty { padding: 0.6rem 0.55rem; font-size: 0.82rem; color: var(--text-muted); }
+
+.composer-menu-item {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  width: 100%;
+  padding: 0.45rem 0.55rem;
+  border: none;
+  background: transparent;
+  color: var(--text-primary);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  text-align: left;
+  font: inherit;
+  font-size: 0.85rem;
+}
+.composer-menu-item:hover { background: var(--hover-bg); }
+.composer-menu-item.is-on { color: var(--primary); }
+.composer-menu-item > svg:first-child { flex-shrink: 0; }
+
+.composer-menu-label {
+  display: flex;
+  flex-direction: column;
+  gap: 0.1rem;
+  min-width: 0;
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+/* The second line of an entry: what it does, at the weight of a footnote. A
+   menu of five bare verbs is a menu nobody can choose from the first time. */
+.composer-menu-label em {
+  font-style: normal;
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+.composer-menu-check { flex-shrink: 0; color: var(--primary); }
+
+.composer-menu-note {
+  padding: 0.35rem 0.55rem 0.2rem;
+  font-size: 0.7rem;
+  line-height: 1.45;
+  color: var(--text-muted);
+}
+
+/* The web-access entry keeps its old wrapper so the phone rule that lets these
+   controls give ground still finds it. */
+.composer-menu .mcp-toggle-container { display: block; width: 100%; }
+
+/* ---- model and effort, as one control ---- */
+
+.composer-model { position: relative; min-width: 0; }
+
+.composer-model-trigger {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  max-width: 100%;
+  padding: 0.3rem 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background var(--dur-fast, 0.15s) var(--ease-out, ease);
+}
+.composer-model-trigger:hover,
+.composer-model-trigger.is-open { background: var(--hover-bg); color: var(--text-primary); }
+
+.composer-model-name {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 14ch;
+}
+
+/* The effort, on the trigger, but only when it is not "auto". A badge that is
+   always there is a badge nobody reads; one that appears when the setting has
+   been changed is the reminder it exists for. */
+.composer-effort-tag {
+  flex-shrink: 0;
+  padding: 0.05rem 0.3rem;
+  border-radius: 4px;
+  background: rgba(var(--primary-rgb), 0.16);
+  color: var(--primary);
+  font-size: 0.66rem;
+  font-weight: 600;
+  white-space: nowrap;
+}
+
+/* Inside the menu the effort scale gets the full width rather than the shard of
+   a row it had under the composer. */
+.composer-menu .think-toggle {
+  width: 100%;
+  margin: 0.1rem 0 0.2rem;
+  border: none;
+  background: transparent;
+  padding: 0 0.35rem;
+  flex-wrap: wrap;
+}
+.composer-menu .think-toggle button { padding: 0.25rem 0.45rem; font-size: 0.72rem; }
+
+@media (max-width: 860px) {
+  /* Two things share the row on a phone: the `+` and send are fixed, so the
+     model name is what gives ground. */
+  .composer-model-name { max-width: 8ch; }
+  .composer-menu { min-width: 0; width: max(220px, 68vw); }
+  .composer-model-menu { width: max(220px, 68vw); }
+  .composer-menu-item { min-height: 40px; }
+}
+
+
+
+/* A picture the model drew, in the transcript.
+
+   Full width rather than a thumbnail: judging a generated image is the only
+   thing anyone does with one, and that cannot be done at 120 pixels. */
+.msg-generated { display: flex; flex-direction: column; gap: 0.6rem; margin: 0.6rem 0 0.2rem; }
+.msg-generated figure { margin: 0; display: flex; flex-direction: column; gap: 0.3rem; }
+.msg-generated button {
+  padding: 0;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  overflow: hidden;
+  cursor: zoom-in;
+  line-height: 0;
+}
+.msg-generated img { width: 100%; height: auto; display: block; max-height: 70vh; object-fit: contain; }
+.msg-generated figcaption {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.45;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+
+
+/* ==== Chats or Studio ====
+
+   Two places, at the top of the panel where you choose between them. The studio
+   was a tab inside the system monitor, which is a reasonable place to put a
+   panel and a terrible place to find one: making a picture is something you set
+   out to do, not something you check on the way to a GPU graph. */
+.sidebar-places {
+  display: grid;
+  grid-template-columns: 1fr 1fr 1fr;
+  gap: 0.25rem;
+  padding: 0.6rem 0.75rem 0.2rem;
+}
+.sidebar-places button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.35rem;
+  padding: 0.4rem 0.5rem;
+  border: 1px solid transparent;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.sidebar-places button:hover { background: var(--hover-bg); color: var(--text-primary); }
+.sidebar-places button.is-on {
+  background: rgba(var(--primary-rgb), 0.12);
+  border-color: rgba(var(--primary-rgb), 0.35);
+  color: var(--primary);
+  font-weight: 600;
+}
+
+.claude-main { position: relative; }
+
+
+
+/* A generated film in the transcript plays where a picture would open. */
+.msg-generated video {
+  width: 100%;
+  height: auto;
+  display: block;
+  max-height: 70vh;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: #000;
+}
+
+
+
+/* ===========================================================================
+   The instrument pass
+   ===========================================================================
+
+   The app looked unfinished for three reasons, and they were all systemic
+   rather than local:
+
+   1. One grey. Sidebar, header, cards, inputs and popovers all sat within a
+      few percent of each other's lightness, with the same hairline border and
+      the same radius. Nothing receded and nothing advanced, so every surface
+      read as equally important — which is the same as none of them being.
+   2. The accent was everywhere. Terracotta on the logo, the active tab, the
+      starter icons, the toast rule, the send button and the studio's primary
+      action. A colour used for six things means nothing, and the one place it
+      genuinely had to shout — "press this" — was a washed brown bar that read
+      as disabled.
+   3. No type scale. Almost every label in the app was 0.7–0.85rem grey.
+
+   What this is instead: the app is a workbench for models running on your own
+   machine, and the thing it can say that no hosted chat can is that the
+   hardware is right here. So it is dressed as an instrument — a real elevation
+   ramp, colour spent once per screen, and every measurement set as a number
+   you can compare rather than as prose.
+
+   Appended at the end on purpose: these are single-class selectors matching
+   the specificity of what they revise, so ordering is what decides, and every
+   one of them is a deliberate override rather than an accident of weight. */
+
+:root {
+  /* Four surfaces, far enough apart to be told apart at a glance. The old
+     theme had two and used them interchangeably. */
+  --surface-sunken: #F7F5F0;
+  --surface: #FFFFFF;
+  --surface-raised: #FFFFFF;
+  --surface-overlay: #FFFFFF;
+  --hairline: rgba(31, 31, 29, 0.09);
+  --hairline-strong: rgba(31, 31, 29, 0.16);
+  --shadow-overlay: 0 16px 40px -12px rgba(31, 31, 29, 0.22), 0 2px 6px rgba(31, 31, 29, 0.06);
+  --shadow-raised: 0 1px 2px rgba(31, 31, 29, 0.05);
+
+  /* The signature. Every measurement in this app — tok/s, GPU load, VRAM,
+     seed, resolution, steps, context — is a number you compare against another
+     number, so they are all set in one tabular face at one size. The system
+     mono stack rather than a downloaded one: this app is used offline and on a
+     LAN, and a webfont for digits is a network dependency for punctuation. */
+  --font-mono: ui-monospace, "Cascadia Mono", "SF Mono", "Segoe UI Mono", "Roboto Mono", monospace;
+
+  --step-0: 0.8125rem;   /* body of the interface */
+  --step-1: 0.9375rem;   /* things you read */
+  --step-2: 1.125rem;    /* section headings */
+  --label: 0.6875rem;    /* the word above a control */
+}
+
+@media (prefers-color-scheme: dark) {
+  :root {
+    --surface-sunken: #131210;
+    --surface: #1B1A17;
+    --surface-raised: #232220;
+    --surface-overlay: #2A2825;
+    --hairline: rgba(235, 233, 228, 0.08);
+    --hairline-strong: rgba(235, 233, 228, 0.15);
+    --shadow-overlay: 0 20px 48px -14px rgba(0, 0, 0, 0.7), 0 2px 8px rgba(0, 0, 0, 0.4);
+    --shadow-raised: none;
+  }
+}
+:root[data-theme="light"] {
+  --surface-sunken: #F7F5F0;
+  --surface: #FFFFFF;
+  --surface-raised: #FFFFFF;
+  --surface-overlay: #FFFFFF;
+  --hairline: rgba(31, 31, 29, 0.09);
+  --hairline-strong: rgba(31, 31, 29, 0.16);
+  --shadow-overlay: 0 16px 40px -12px rgba(31, 31, 29, 0.22), 0 2px 6px rgba(31, 31, 29, 0.06);
+  --shadow-raised: 0 1px 2px rgba(31, 31, 29, 0.05);
+}
+:root[data-theme="dark"] {
+  --surface-sunken: #131210;
+  --surface: #1B1A17;
+  --surface-raised: #232220;
+  --surface-overlay: #2A2825;
+  --hairline: rgba(235, 233, 228, 0.08);
+  --hairline-strong: rgba(235, 233, 228, 0.15);
+  --shadow-overlay: 0 20px 48px -14px rgba(0, 0, 0, 0.7), 0 2px 8px rgba(0, 0, 0, 0.4);
+  --shadow-raised: none;
+}
+
+/* Every number, everywhere. Tabular so a column of them lines up and a
+   changing one does not make the row jitter. */
+.claude-metrics,
+.ctx-meter,
+.system-strip,
+.sysmon-value,
+.usage-stat-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+/* ---- the surfaces, told apart ---- */
+
+body, .claude-main { background: var(--surface-sunken); }
+
+/* The sidebar is a panel beside the work, not another sheet of the same paper.
+   One step up from the ground and separated by a hairline rather than a
+   full-strength border, because at this size a 1px #383632 line reads as a
+   seam. */
+.claude-sidebar {
+  background: var(--surface);
+  border-right: 1px solid var(--hairline);
+}
+
+/* The header carries the app's controls, so it sits with the sidebar rather
+   than with the conversation, and the rule under it is what says where the
+   chrome stops and the content starts. */
+.main-header {
+  background: var(--surface);
+  border-bottom: 1px solid var(--hairline);
+  height: 56px;
+  padding-inline: 0.75rem 1rem;
+}
+
+/* Menus float. They had the same background and the same border as the panel
+   behind them, so an open menu read as a hole rather than as something on top. */
+.popover,
+.dropdown-menu,
+.composer-menu {
+  background: var(--surface-overlay);
+  border: 1px solid var(--hairline-strong);
+  box-shadow: var(--shadow-overlay);
+  border-radius: 14px;
+}
+
+.settings-modal,
+.input-container,
+.starter-card,
+.toast {
+  background: var(--surface-raised);
+  border-color: var(--hairline);
+}
+.settings-modal { box-shadow: var(--shadow-overlay); }
+
+/* ---- the header, grouped ----
+
+   Eleven bare icons, two dropdowns, a stats strip and a search box that was
+   clipping its own placeholder, all at one weight in one undifferentiated row.
+   Nothing said which of them mattered.
+
+   Three groups now, hairline-separated: what you are looking at, what is
+   answering, and the tools. The icons keep their size but lose their boxes —
+   an outlined square around every icon is eleven competing rectangles, and
+   without them the two controls that *are* boxed (the model, the search) read
+   as the important ones. */
+.header-tools { gap: 0.15rem; }
+
+.header-tools .icon-btn.bordered {
+  border-color: transparent;
+  background: transparent;
+  color: var(--text-muted);
+  width: 32px;
+  height: 32px;
+}
+.header-tools .icon-btn.bordered:hover {
+  background: var(--hover-bg);
+  color: var(--text-primary);
+}
+/* Toggled is a state, so it gets the tint — but not the fill. A solid accent
+   block for "the monitor is open" is louder than the monitor. */
+.header-tools .icon-btn.bordered.toggled {
+  background: rgba(var(--primary-rgb), 0.13);
+  color: var(--primary);
+}
+
+/* A hairline before the last cluster, so the tools read as a group rather than
+   as more of the same row. */
+.header-tools > .model-selector-container:not(.header-secondary) {
+  margin-inline-start: 0.5rem;
+  padding-inline-start: 0.65rem;
+  border-inline-start: 1px solid var(--hairline);
+}
+
+.dropdown-trigger {
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 9px;
+  height: 32px;
+  font-size: var(--step-0);
+}
+.dropdown-trigger:hover { background: var(--hover-bg); }
+
+/* The search box was cutting off its own placeholder at this width. */
+.sidebar-search-inner input,
+.header-tools input[type="text"] { font-size: var(--step-0); }
+
+/* ---- spending the accent once ----
+
+   The active place in the sidebar was a filled terracotta pill — the loudest
+   object on the screen, for a tab. It is a *location*, not an action, so it
+   gets the quiet treatment a location deserves: a tint, the accent on the
+   text, and a rail on the leading edge that says which of the two you are in. */
+.sidebar-places {
+  padding: 0.7rem 0.7rem 0.5rem;
+  gap: 0.15rem;
+  border-bottom: 1px solid var(--hairline);
+  margin-bottom: 0.2rem;
+}
+.sidebar-places button {
+  position: relative;
+  border: none;
+  border-radius: 8px;
+  padding: 0.45rem 0.5rem;
+  font-size: var(--step-0);
+  letter-spacing: -0.005em;
+}
+.sidebar-places button.is-on {
+  background: rgba(var(--primary-rgb), 0.11);
+  border-color: transparent;
+  color: var(--primary);
+}
+.sidebar-places button.is-on::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: 0;
+  top: 22%;
+  bottom: 22%;
+  width: 2px;
+  border-radius: 2px;
+  background: var(--primary);
+}
+
+
+
+/* Starter cards were four identical outlined rectangles with an accent icon
+   each — four accents, no hierarchy. The icon goes quiet and only the hovered
+   card is coloured. */
+.starter-card { border-color: var(--hairline); border-radius: 12px; }
+.starter-card svg { color: var(--text-muted); transition: color var(--dur-fast, 0.15s) ease; }
+.starter-card:hover svg { color: var(--primary); }
+
+
+
+/* ---- the toast ----
+
+   A 400px slab with a left rule, wrapping a URL across three lines, parked over
+   the corner of whatever you were reading. It is a notification, so it should
+   be the size of its sentence and it should not compete with the work. */
+.toast {
+  border: 1px solid var(--hairline-strong);
+  border-left-width: 1px;
+  border-radius: 12px;
+  box-shadow: var(--shadow-overlay);
+  background: var(--surface-overlay);
+  font-size: var(--step-0);
+  line-height: 1.5;
+  padding: 0.7rem 0.8rem;
+  max-width: 340px;
+}
+/* The state goes on a dot rather than on the whole left edge — a 3px colour bar
+   down the side of every message made every message look like a warning. */
+.toast svg:first-child { color: var(--text-muted); }
+.toast-error { border-color: rgba(239, 68, 68, 0.4); }
+.toast-error svg:first-child { color: var(--danger); }
+.toast-success svg:first-child { color: var(--primary); }
+/* A URL is a string to copy, not prose to read. */
+.toast span { overflow-wrap: anywhere; }
+
+/* ---- the sidebar's long silence ----
+
+   Four fifths of the panel was empty space between a folder hint and the
+   account row. The hint is a caption, so it is set as one, and the list below
+   it gets to breathe rather than being pinned to the top of a void. */
+.sidebar-header { padding: 0.5rem 0.7rem; gap: 0.35rem; }
+.new-chat-btn {
+  background: var(--surface-raised);
+  border: 1px solid var(--hairline);
+  border-radius: 10px;
+  font-size: var(--step-1);
+}
+.new-chat-btn:hover { background: var(--hover-bg); }
+.sidebar-search { padding-inline: 0.7rem; }
+.sidebar-search-inner {
+  background: var(--surface-sunken);
+  border: 1px solid var(--hairline);
+  border-radius: 9px;
+}
+
+/* ---- the header's icon run ----
+
+   Five bare icons, a model picker, a vision picker and four more bare icons in
+   one uninterrupted line. The eye has nowhere to stop. A hairline before the
+   model group and another before the trailing tools turns one run of eleven
+   into three groups of a few, which is the number a glance can count. */
+.header-tools > .model-selector-container,
+.header-tools > .outline-wrap + button,
+.header-tools > button + .icon-btn.bordered:last-child {
+  position: relative;
+}
+.header-tools > .model-selector-container::before {
+  content: '';
+  position: absolute;
+  inset-inline-start: -0.45rem;
+  top: 20%;
+  bottom: 20%;
+  width: 1px;
+  background: var(--hairline);
+}
+.header-tools > .model-selector-container { margin-inline-start: 0.5rem; }
+
+/* The system strip is a reading, so it is set like one and stops pretending to
+   be a control. */
+.system-strip {
+  background: var(--surface-sunken);
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  font-size: 0.7rem;
+}
+
+/* ---- the composer's footer ---- */
+.input-footer { margin-top: 0.5rem; font-size: 0.72rem; }
+.composer-disclaimer { color: var(--text-muted); }
+.ctx-meter { font-size: 0.7rem; }
+
+.input-container {
+  border-color: var(--hairline-strong);
+  border-radius: 16px;
+  box-shadow: var(--shadow-raised);
+}
+.input-container:focus-within { border-color: rgba(var(--primary-rgb), 0.5); }
+
+
+
+/* ---- focus, everywhere ----
+
+   The quality floor: a visible ring that is the accent rather than the
+   browser's blue, on one rule instead of thirty. */
+:where(button, a, input, select, textarea, [tabindex]):focus-visible {
+  outline: 2px solid var(--primary);
+  outline-offset: 2px;
+  border-radius: 6px;
+}
+
+/* The signature reaches the stat tiles too. A column of figures you compare —
+   messages, tokens, tok/s — set in the same tabular face as every other number
+   in the app, so a glance down the grid is a glance down one alignment. */
+.stat-tile .stat-value,
+.usage-stat-value,
+.perf-table td {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.02em;
+}
+.stat-tile {
+  background: var(--surface-sunken);
+  border-color: var(--hairline);
+  border-radius: 10px;
+}
+.stat-tile .stat-label {
+  font-size: var(--label);
+  font-weight: 600;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+/* ---- the sidebar's empty middle ----
+
+   Below the folder hint there was nothing but four fifths of a panel. The hint
+   is a caption for a list that does not exist yet, so it says so once, quietly,
+   and stops taking up the room of a section. */
+.sidebar-section-hint,
+.folder-hint {
+  font-size: 0.72rem;
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+
+
+
+/* ============================================================ watching it work
+
+   The generation card used to be a spinner in a grey square. A spinner is the
+   same shape whether the sampler is on step 3 of 40 or the GPU died eighty
+   seconds ago, which is the one thing a reader needs to be able to tell apart.
+
+   So the square is given over to the picture as it is being drawn, and
+   everything known about the job sits on a scrim along the bottom of it: what
+   it is doing now, which step of how many, how far through, how long it has
+   taken and roughly how much is left. All of it fits in the space the spinner
+   was wasting. */
+
+.studio-progress {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  /* One cell. The frame and the readout are stacked rather than sitting in a
+     column, so the picture keeps the whole square and the text floats over it
+     -- and so that a job with no preview yet does not have a text block
+     hovering in the middle of an empty box. */
+  grid-template-areas: "stack";
+  background: var(--bg-main);
+}
+.studio-progress-frame,
+.studio-progress-body { grid-area: stack; }
+
+.studio-progress-frame { position: relative; overflow: hidden; }
+.studio-progress-frame img {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  /* The early frames are almost pure noise and rendering them sharp makes the
+     card look broken. Blurring the first ones would need to know which they
+     are; a small constant blur reads as "developing" throughout and settles
+     into the real picture as it resolves. */
+  filter: blur(0.3px);
+}
+
+/* Named. A half-finished picture that is not labelled as one is a finished
+   picture that came out badly. */
+.studio-progress-tag {
+  position: absolute;
+  top: 0.4rem;
+  left: 0.4rem;
+  padding: 0.1rem 0.36rem;
+  border-radius: 999px;
+  font-size: var(--label);
+  letter-spacing: 0.02em;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+}
+
+.studio-progress-body {
+  align-self: end;
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  padding: 1.6rem 0.6rem 0.5rem;
+  /* Legible over a picture whose brightness is unknown and changing. A scrim
+     rather than a solid bar: the top of the frame is the part worth seeing. */
+  background: linear-gradient(to top, rgba(0, 0, 0, 0.78) 35%, rgba(0, 0, 0, 0));
+  color: #fff;
+}
+/* With no picture behind it there is nothing to be legible against, so it
+   stops pretending to be an overlay. */
+.studio-progress:not(:has(.studio-progress-frame)) .studio-progress-body {
+  align-self: center;
+  background: none;
+  color: var(--text-primary);
+  padding: 1rem 0.75rem;
+}
+
+.studio-progress-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+  /* Without this a flex child refuses to shrink below its content, so the two
+     halves fight and both get clipped -- "확대하는 중" came out as "확다" beside a
+     step counter reading "/100". */
+  min-width: 0;
+}
+.studio-progress-phase {
+  font-size: var(--step-0);
+  font-weight: 550;
+  min-width: 0;
+  flex: 0 1 auto;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+/* The counter is short, fixed-width and the thing you actually watch, so it
+   keeps its width and the phase name gives way instead. */
+.studio-progress-steps {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--step-0);
+  flex: 0 0 auto;
+  white-space: nowrap;
+}
+.studio-progress-of { opacity: 0.55; margin: 0 0.05em; }
+
+.studio-progress-bar {
+  height: 3px;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.25);
+  overflow: hidden;
+}
+.studio-progress:not(:has(.studio-progress-frame)) .studio-progress-bar {
+  background: var(--hairline-strong);
+}
+.studio-progress-bar > span {
+  display: block;
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent);
+  /* Slower than the updates that drive it. Steps arrive in bursts and a bar
+     that snaps to each one reads as jitter rather than as progress. */
+  transition: width 420ms cubic-bezier(0.22, 0.61, 0.36, 1);
+}
+/* Nothing to go on yet -- a checkpoint loading, or a node that does not count
+   its own work. An indeterminate bar says "working" without claiming a
+   position, which a bar frozen at 0% does not. */
+.studio-progress-bar.is-unknown > span {
+  width: 35%;
+  animation: studio-progress-sweep 1.5s ease-in-out infinite;
+}
+@keyframes studio-progress-sweep {
+  0% { transform: translateX(-100%); }
+  100% { transform: translateX(320%); }
+}
+
+.studio-progress-meta {
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  /* One line, never two. These three numbers sit on a scrim over a picture and
+     a second line eats the picture; the estimate is the one that goes. */
+  flex-wrap: nowrap;
+  overflow: hidden;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--label);
+  opacity: 0.85;
+  white-space: nowrap;
+}
+.studio-progress-meta b { font-weight: 600; opacity: 1; }
+.studio-progress-left { overflow: hidden; text-overflow: ellipsis; }
+
+/* Stopping is a corner action, not a word competing with the numbers for the
+   same forty pixels. On the frame, where there is room. */
+.studio-progress-stop {
+  grid-area: stack;
+  place-self: start end;
+  z-index: 1;
+  margin: 0.35rem;
+  width: 22px;
+  height: 22px;
+  display: grid;
+  place-items: center;
+  border: none;
+  border-radius: 999px;
+  background: rgba(0, 0, 0, 0.5);
+  backdrop-filter: blur(6px);
+  color: #fff;
+  font-size: 15px;
+  line-height: 1;
+  cursor: pointer;
+  opacity: 0.75;
+  transition: opacity 120ms ease, background 120ms ease;
+}
+.studio-progress-stop:hover { opacity: 1; background: rgba(217, 119, 87, 0.9); }
+
+.studio-progress.is-failed .studio-progress-phase { color: #D97757; white-space: normal; }
+
+/* The card inside a conversation is at the end of this section -- see "in a
+   conversation, the picture is the point". */
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-progress-bar > span { transition: none; }
+  .studio-progress-bar.is-unknown > span { animation: none; width: 100%; opacity: 0.4; }
+}
+
+
+
+/* ---- corrections found by photographing it ----
+
+   The overlay is a one-cell grid, and a one-cell grid with no declared column
+   is an `auto` column: it sizes to its content, which here is an image asking
+   for 100% of a width that does not exist yet. The card came out narrower than
+   its own frame and the readout was clipped from both ends -- "확대하는 중" as
+   "확다", "45/100" as "/00". */
+.studio-progress {
+  grid-template-columns: minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr);
+}
+.studio-progress-frame,
+.studio-progress-body { min-width: 0; }
+
+/* And the head is a grid rather than a flex row, so the counter keeps its own
+   width by construction instead of by negotiation. */
+.studio-progress-head {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: baseline;
+}
+
+
+
+/* The scrim has to reach the text, not sit under it.
+   `to top, black 35%, transparent` put the phase name and the step counter in
+   the transparent half of their own gradient: over a dark corner of the
+   picture they read fine, and over the bright red umbrella in the middle of it
+   "45/100" rendered as "/100" -- white on white, which looks exactly like a
+   clipping bug and is not one. Opaque where the words are, and a shadow behind
+   them for the frames that are brighter still. */
+.studio-progress-body {
+  padding-top: 1.15rem;
+  background: linear-gradient(to top,
+    rgba(0, 0, 0, 0.9) 0%,
+    rgba(0, 0, 0, 0.78) 60%,
+    rgba(0, 0, 0, 0) 100%);
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.55);
+}
+.studio-progress:not(:has(.studio-progress-frame)) .studio-progress-body { text-shadow: none; }
+
+/* And it has to be *above* the picture, which it was not.
+   Both live in the same grid cell, but the frame is `position: relative` (it
+   holds the "in progress" tag), and a positioned element paints over an
+   unpositioned sibling whatever the source order says. So the scrim was being
+   drawn behind the image: the readout stayed legible over the dark corners of
+   a frame and vanished over the bright middle of it. Grid items take `z-index`
+   without needing `position`, which is the smallest thing that fixes it. */
+.studio-progress-body { z-index: 2; }
+.studio-progress-stop { z-index: 3; }
+
+
+@keyframes studio-fade-in { from { opacity: 0; } to { opacity: 1; } }
+
+
+
+/* ---- completing a tag ---- */
+
+.tag-prompt { position: relative; display: flex; flex-direction: column; gap: 0.25rem; }
+
+
+.tag-suggest {
+  position: absolute;
+  /* Below the box it belongs to, over everything under it. The form scrolls, so
+     this is positioned rather than laid out — a list that pushed the controls
+     down would move the button you were reaching for. */
+  top: calc(100% - 0.2rem);
+  left: 0;
+  right: 0;
+  z-index: 20;
+  margin: 0;
+  padding: 0.25rem;
+  list-style: none;
+  max-height: 17rem;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 11px;
+  background: var(--surface-overlay);
+  box-shadow: var(--shadow-overlay);
+}
+
+.tag-suggest-hit {
+  width: 100%;
+  display: grid;
+  /* Name, category, count on one line; the description under them across the
+     full width. A four-column row would give the name six characters. */
+  grid-template-columns: minmax(0, 1fr) auto auto;
+  gap: 0.1rem 0.45rem;
+  align-items: baseline;
+  padding: 0.34rem 0.45rem;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-primary);
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+}
+.tag-suggest-hit.is-on { background: var(--hover-bg); }
+
+.tag-suggest-name {
+  font-size: var(--step-0);
+  font-weight: 550;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.tag-suggest-cat {
+  font-size: var(--label);
+  color: var(--text-muted);
+  padding: 0.02rem 0.34rem;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  white-space: nowrap;
+  max-width: 11rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+/* How many pictures carry this tag, which is the single best signal of whether
+   it is the one you mean. Tabular, like every other number in this app. */
+.tag-suggest-count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: var(--label);
+  color: var(--text-muted);
+}
+.tag-suggest-desc {
+  grid-column: 1 / -1;
+  font-size: var(--label);
+  line-height: 1.45;
+  color: var(--text-muted);
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+
+/* ---- pasting a link ---- */
+
+.tag-prompt-hint,
+.tag-prompt-link {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: var(--label);
+  color: var(--text-muted);
+  padding-left: 0.1rem;
+}
+.tag-prompt-hint { opacity: 0.62; }
+.tag-prompt:focus-within .tag-prompt-hint { opacity: 1; }
+.tag-prompt-link.is-error { color: #D97757; cursor: pointer; line-height: 1.45; }
+
+/* ==================================== the generation card, with more to say
+
+   It was a bar, a percentage and three numbers. Correct, and flat: nothing on
+   it said what stage the work was at except a word, and nothing said what was
+   still to come — which is the thing a percentage genuinely cannot answer.
+   Eighty-nine per cent with an upscaler ahead is a minute away; eighty-nine per
+   cent with only the file left to write is seconds. */
+
+/* ---- the pipeline ---- */
+
+.studio-phases {
+  display: flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin: 0 0 0.1rem;
+  padding: 0;
+  list-style: none;
+  flex-wrap: wrap;
+}
+.studio-phase {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  padding: 0.1rem 0.3rem;
+  border-radius: 999px;
+  font-size: var(--label);
+  line-height: 1;
+  /* Three states, told apart by weight rather than by colour, so the one that
+     is lit is lit for everybody. */
+  opacity: 0.35;
+  transition: opacity 200ms ease, background 200ms ease;
+}
+.studio-phase.is-done { opacity: 0.6; }
+.studio-phase.is-now {
+  opacity: 1;
+  background: rgba(255, 255, 255, 0.16);
+}
+/* A tick between the stages, so the row reads as a sequence rather than as a
+   handful of icons that happen to be next to each other. */
+.studio-phase:not(:last-child)::after {
+  content: '';
+  width: 5px;
+  height: 1px;
+  margin-left: 0.3rem;
+  background: currentColor;
+  opacity: 0.45;
+}
+.studio-progress:not(:has(.studio-progress-frame)) .studio-phase.is-now,
+.studio-progress.is-compact .studio-phase.is-now { background: var(--hairline); }
+.studio-phase.is-now svg { color: var(--accent); }
+
+/* ---- the stage, said once more in words ---- */
+
+.studio-progress-phase {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+}
+.studio-progress-phase svg { flex: none; opacity: 0.85; }
+
+/* The percentage is the number people read, so it is the one that looks like a
+   number rather than like a footnote. */
+.studio-progress-pct {
+  font-size: var(--step-0);
+  letter-spacing: -0.01em;
+}
+
+/* ---- the frame ---- */
+
+/* Each new frame fades in over the one before rather than replacing it in a
+   single tick, which is what makes a sequence of previews read as a picture
+   developing instead of as a card flickering. */
+.studio-progress-frame img { animation: studio-frame-in 420ms ease both; }
+@keyframes studio-frame-in {
+  from { opacity: 0; transform: scale(1.012); }
+  to { opacity: 1; transform: none; }
+}
+
+/* A live dot on the "in progress" badge: the one element that says this is
+   still happening even in a screenshot where nothing is moving. */
+.studio-progress-tag { display: inline-flex; align-items: center; gap: 0.3rem; }
+.studio-progress-dot {
+  width: 5px;
+  height: 5px;
+  border-radius: 999px;
+  background: var(--accent);
+  animation: studio-pulse 1.6s ease-in-out infinite;
+}
+@keyframes studio-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
+
+/* Before the first frame arrives — a checkpoint loading, which on a cold start
+   is most of a minute. An empty card reads as one that failed. */
+.studio-progress-waiting {
+  grid-area: stack;
+  display: grid;
+  place-items: center;
+  color: var(--text-muted);
+  opacity: 0.5;
+}
+.studio-progress-waiting svg { animation: studio-pulse 1.8s ease-in-out infinite; }
+
+/* ---- the bar ---- */
+
+.studio-progress-bar > span {
+  position: relative;
+  overflow: hidden;
+}
+/* A sheen travelling along the filled part. The bar moves in bursts — a step
+   arrives, it jumps, then nothing for four seconds — and this is what says the
+   gap between bursts is work rather than a stall. */
+.studio-progress-bar > span::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg,
+    transparent 0%, rgba(255, 255, 255, 0.45) 50%, transparent 100%);
+  animation: studio-sheen 1.8s ease-in-out infinite;
+}
+@keyframes studio-sheen {
+  from { transform: translateX(-100%); }
+  to { transform: translateX(100%); }
+}
+.studio-progress.is-done .studio-progress-bar > span::after,
+.studio-progress.is-failed .studio-progress-bar > span::after { display: none; }
+.studio-progress.is-failed .studio-progress-bar > span { background: #D97757; }
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-progress-frame img,
+  .studio-progress-dot,
+  .studio-progress-waiting svg { animation: none; }
+  .studio-progress-bar > span::after { display: none; }
+}
+
+/* ---- the frame, in layers ----
+
+   Each frame is laid over the last and faded in once it has loaded, and the
+   one under it is only removed after that (see PreviewLayers). A clip is a
+   <video> in the same place, which is how MiniMax shows its denoising: the
+   whole few seconds, sharpening step by step. */
+.studio-progress-frame .studio-progress-layer {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  opacity: 0;
+  animation: none;
+  transition: opacity 420ms ease;
+}
+.studio-progress-frame .studio-progress-layer.is-ready { opacity: 1; }
+.studio-progress-frame.is-veiled .studio-progress-layer,
+.studio-progress-frame.is-veiled .studio-progress-source {
+  filter: blur(24px) saturate(0.6);
+  transform: scale(1.15);
+}
+/* The tag sits over the layers, whatever order they were added in. */
+.studio-progress-frame .studio-progress-tag { z-index: 1; }
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-progress-frame .studio-progress-layer { transition: none; }
+}
+
+/* ---- in a conversation, the picture is the point ----
+
+   It used to lie down as a 72px square cropped from the middle of the frame,
+   beside the numbers -- which kept the card small and threw away the one thing
+   on it worth watching. A picture developing out of noise, or a clip
+   sharpening step by step, cannot be followed at the size of an icon.
+
+   So it stands up: what is being made and from what prompt, then the frame at
+   the shape of the result, then the readout under it rather than over it.
+   The frame holds that shape from the first second -- `--ar` is the size that
+   was asked for until the first frame says otherwise -- so the conversation
+   does not jump when the picture lands. Sized by height, so a tall picture is
+   a narrow card and a wide one a broad card, and neither takes the screen. */
+
+.studio-progress.is-compact {
+  --frame-h: min(46vh, 22rem);
+  position: static;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  width: min(100%, 36rem, max(17rem, calc(var(--frame-h) * var(--ar, 1))));
+  padding: 0.65rem;
+  margin: 0.5rem 0;
+  border: 1px solid var(--hairline);
+  border-radius: 14px;
+  background: var(--surface-raised);
+  box-shadow: var(--shadow-raised);
+  animation: studio-fade-in 240ms ease both;
+}
+
+.studio-progress-top {
+  display: flex;
+  align-items: baseline;
+  gap: 0.55rem;
+  min-width: 0;
+  padding: 0 0.1rem;
+  font-size: var(--label);
+  color: var(--text-muted);
+}
+.studio-progress-kind {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-weight: 600;
+  color: var(--text-primary);
+}
+.studio-progress-kind svg { color: var(--accent); align-self: center; }
+.studio-progress-count {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-weight: 500;
+  padding: 0.05rem 0.4rem;
+  border-radius: 999px;
+  background: var(--surface-sunken);
+  color: var(--text-muted);
+}
+.studio-progress-prompt {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.studio-progress.is-compact .studio-progress-frame {
+  width: 100%;
+  aspect-ratio: var(--ar, 1);
+  /* A strip taller than this is letterboxed rather than allowed to push the
+     readout off the screen. */
+  max-height: var(--frame-h);
+  border-radius: 10px;
+  /* Dark whatever the theme: the frames are, and a light matte around them
+     reads as a border. */
+  background: #111113;
+  isolation: isolate;
+}
+
+/* Before the first frame: a sweep across the space the picture will fill, the
+   stage's icon in the middle, and the picture it is made from where there is
+   one. */
+.studio-progress.is-compact .studio-progress-frame.is-empty::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  background: linear-gradient(105deg,
+    transparent 35%, rgba(255, 255, 255, 0.07) 50%, transparent 65%);
+  background-size: 250% 100%;
+  animation: studio-shimmer 1.9s linear infinite;
+}
+@keyframes studio-shimmer {
+  from { background-position: 120% 0; }
+  to { background-position: -120% 0; }
+}
+.studio-progress-frame .studio-progress-source {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  opacity: 0.4;
+  filter: saturate(0.5);
+}
+.studio-progress.is-compact .studio-progress-waiting {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  color: rgba(255, 255, 255, 0.7);
+  opacity: 1;
+}
+
+.studio-progress.is-compact .studio-progress-tag {
+  top: 0.5rem;
+  left: 0.5rem;
+  padding: 0.14rem 0.45rem;
+}
+.studio-progress-tag-steps {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  opacity: 0.75;
+  margin-left: 0.15rem;
+}
+
+/* The readout, under the picture: no scrim, no shadow, the page's own text. */
+.studio-progress.is-compact .studio-progress-body {
+  /* `end` is for the overlay, where it pins the readout to the bottom of the
+     frame; in a column it would push it to the right. */
+  align-self: stretch;
+  padding: 0 0.1rem;
+  gap: 0.35rem;
+  background: none;
+  color: var(--text-primary);
+  text-shadow: none;
+}
+.studio-progress.is-compact .studio-progress-bar {
+  height: 4px;
+  background: var(--hairline-strong);
+}
+.studio-progress.is-compact .studio-progress-meta { color: var(--text-muted); opacity: 1; }
+/* One row of stages at any card width. A tall picture makes a 17rem card, and
+   seven stages at the overlay's spacing put the last one on a line of its own,
+   where it read as a separate thing rather than as the end of the sequence. */
+.studio-progress.is-compact .studio-phases {
+  flex-wrap: nowrap;
+  gap: 0.1rem;
+  overflow: hidden;
+}
+.studio-progress.is-compact .studio-phase { padding: 0.12rem 0.26rem; }
+.studio-progress.is-compact .studio-phase:not(:last-child)::after { width: 4px; margin-left: 0.22rem; }
+/* No stop button in a conversation: the composer's own Stop already cancels the
+   turn, and two ways to abandon the same thing is one too many. */
+.studio-progress.is-compact .studio-progress-stop { display: none; }
+
+/* A batch's pictures already made. */
+.studio-progress-made {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+  padding: 0 0.1rem;
+}
+.studio-progress-made img {
+  width: 2.4rem;
+  height: 2.4rem;
+  object-fit: cover;
+  border-radius: 7px;
+  border: 1px solid var(--hairline);
+  animation: studio-fade-in 300ms ease both;
+}
+.studio-progress-made.is-veiled img { filter: blur(8px) saturate(0.6); }
+
+@media (prefers-reduced-motion: reduce) {
+  .studio-progress.is-compact,
+  .studio-progress-made img,
+  .studio-progress.is-compact .studio-progress-frame.is-empty::before { animation: none; }
+}
+
+/* ==================================== what a tool did, as a receipt
+
+   The block under an answer used to be the tool's raw return value in a
+   monospace box — which is text addressed to the *model*: "do not describe
+   it", "you have 9 tool call(s) left", "citing any URLs you used". None of it
+   is for the person reading, and one of the tools returns nothing else.
+
+   So each tool gets a line saying what it did, and a body only where the body
+   is information. See `toolResults.js` for what is stripped. */
+
+.tool-receipts {
+  display: flex;
+  flex-direction: column;
+  gap: 0.3rem;
+  margin: 0.4rem 0;
+}
+
+.tool-receipt {
+  border: 1px solid var(--hairline);
+  border-radius: 9px;
+  background: var(--surface-sunken);
+  overflow: hidden;
+}
+.tool-receipt.is-failed { border-color: color-mix(in srgb, #D97757 45%, var(--hairline)); }
+
+.tool-receipt-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.32rem 0.55rem;
+  font-size: var(--label);
+  color: var(--text-secondary);
+}
+.tool-receipt-head svg { flex: none; color: var(--primary); opacity: 0.9; }
+.tool-receipt.is-failed .tool-receipt-head svg { color: #D97757; }
+.tool-receipt-verb { font-weight: 600; letter-spacing: 0.01em; }
+.tool-receipt.is-failed .tool-receipt-verb { color: #D97757; }
+
+/* A body only appears where there is something to read, so it can afford the
+   line that separates it. */
+.tool-receipt-body {
+  margin: 0;
+  padding: 0.45rem 0.55rem 0.5rem;
+  border-top: 1px solid var(--hairline);
+  font-family: var(--font-mono);
+  font-size: var(--label);
+  line-height: 1.55;
+  color: var(--text-secondary);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  max-height: 15rem;
+  overflow-y: auto;
+}
+
+/* The prompt a picture was asked for with. Prose somebody wrote, not program
+   output, so it is set as prose rather than in the monospace box the file
+   tools use for their contents. */
+.tool-block-prompt {
+  margin: 0;
+  padding: 0.45rem 0.6rem 0.5rem;
+  border-top: 1px solid var(--hairline);
+  font-size: var(--step-0);
+  line-height: 1.55;
+  color: var(--text-secondary);
+}
+
+/* A call that was never carried out. The failed receipt, set as the call's own
+   last line rather than as a second card inside the first. */
+.tool-block > .tool-receipt {
+  border: 0;
+  border-top: 1px solid color-mix(in srgb, #D97757 45%, var(--hairline));
+  border-radius: 0;
+}
+
+/* A call still being written: there, but not yet a thing that has happened. */
+.tool-block.is-pending { opacity: 0.7; }
+
+
+/* ==== Doing things to a picture ====
+
+   The row under a picture in the chat. Labels, not only icons: "remove
+   background" and "upscale" are not glyphs anyone reads at a glance. They wrap
+   on a phone rather than scroll, because a hidden action is one nobody uses. */
+.msg-generated .picture-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.3rem;
+}
+.msg-generated .picture-actions button {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.28rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.msg-generated .picture-actions button:hover:not(:disabled) { color: var(--text-primary); background: var(--hover-bg); }
+.msg-generated .picture-actions button:disabled { opacity: 0.45; cursor: default; }
+@media (max-width: 520px) {
+  .msg-generated .picture-actions span { display: none; }
+  .msg-generated .picture-actions button { padding: 0.38rem 0.55rem; }
+}
+.msg-generated .picture-actions button.is-on {
+  color: var(--text-primary);
+  border-color: var(--hairline-strong);
+  background: var(--hover-bg);
+}
+
+/* ---- what it was made with ----
+
+   A two-column sheet under the picture: the label quiet, the value in the
+   face its tool would print it in. Numbers and file names are monospace
+   because they are what gets copied into ComfyUI; the prompt and the negative
+   run the full width, because they are sentences. */
+.picture-settings {
+  display: flex;
+  flex-direction: column;
+  gap: 0.45rem;
+  padding: 0.6rem 0.7rem;
+  border: 1px solid var(--hairline);
+  border-radius: var(--radius-md, 10px);
+  background: var(--surface-sunken);
+  font-size: 0.74rem;
+  line-height: 1.45;
+  animation: studio-fade-in 180ms ease both;
+}
+.picture-settings-list {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(9.5rem, 1fr));
+  gap: 0.4rem 0.9rem;
+  margin: 0;
+}
+.picture-setting { min-width: 0; }
+.picture-setting.is-long { grid-column: 1 / -1; }
+.picture-setting dt {
+  font-size: var(--label);
+  color: var(--text-muted);
+  margin-bottom: 0.05rem;
+}
+.picture-setting dd {
+  margin: 0;
+  color: var(--text-primary);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.picture-setting.is-long dd {
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  display: -webkit-box;
+  -webkit-line-clamp: 6;
+  -webkit-box-orient: vertical;
+}
+.picture-setting dd.is-mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 0.72rem;
+}
+.picture-settings-foot {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.6rem;
+  font-size: var(--label);
+  color: var(--text-muted);
+}
+.picture-settings-foot > span { margin-right: auto; }
+/* Specific enough to win over `.msg-generated button`, which styles every
+   button in a conversation's picture as the picture. */
+.msg-generated .picture-settings .picture-settings-copy {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.24rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font: inherit;
+  line-height: 1.2;
+  cursor: pointer;
+}
+.msg-generated .picture-settings .picture-settings-copy:hover { color: var(--text-primary); background: var(--hover-bg); }
+@media (prefers-reduced-motion: reduce) { .picture-settings { animation: none; } }
+
+/* A question that came with a painted area. */
+.user-paint-chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  margin-bottom: 0.4rem;
+  padding: 0.2rem 0.55rem;
+  border: 1px solid rgba(239, 68, 68, 0.45);
+  border-radius: 999px;
+  background: rgba(239, 68, 68, 0.08);
+  color: inherit;
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: zoom-in;
+}
+
+/* ---- the paint editor and the tag sheet: one modal shape for both ---- */
+.mask-editor-backdrop,
+.picture-tags-backdrop {
+  position: fixed;
+  inset: 0;
+  z-index: 60;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 16px;
+  background: rgba(0, 0, 0, 0.55);
+}
+.mask-editor,
+.picture-tags {
+  width: min(760px, 100%);
+  max-height: 100%;
+  display: flex;
+  flex-direction: column;
+  gap: 0.6rem;
+  padding: 14px;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-lg);
+  background: var(--bg-primary, var(--bg-main));
+  color: var(--text-primary);
+  overflow: auto;
+}
+.picture-tags { width: min(560px, 100%); }
+.mask-editor-head { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; }
+.mask-editor-title { display: inline-flex; align-items: center; gap: 0.4rem; font-weight: 600; }
+.mask-editor-hint { margin: 0; font-size: 0.8rem; color: var(--text-secondary); }
+
+.mask-editor-stage { display: flex; justify-content: center; min-height: 0; }
+.mask-editor-frame {
+  position: relative;
+  height: min(62vh, 900px);
+  max-width: 100%;
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  background: var(--bg-main);
+}
+.mask-editor-frame img,
+.mask-editor-paint {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  user-select: none;
+  -webkit-user-drag: none;
+}
+.mask-editor-paint { opacity: 0.5; cursor: crosshair; touch-action: none; }
+.mask-editor-paint.is-erasing { cursor: cell; }
+
+.mask-editor-tools, .picture-tags-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.picture-tags-actions { justify-content: flex-end; }
+.mask-tool, .mask-send {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  padding: 0.38rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.mask-tool.is-on { color: var(--primary); border-color: rgba(var(--primary-rgb), 0.45); background: rgba(var(--primary-rgb), 0.1); }
+.mask-send { background: var(--primary); border-color: var(--primary); color: #fff; font-weight: 600; }
+.mask-send:disabled, .mask-tool:disabled { opacity: 0.45; cursor: default; }
+.mask-size { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.8rem; color: var(--text-secondary); }
+.mask-size input { width: 110px; }
+
+.mask-editor-ask { display: flex; gap: 0.5rem; align-items: stretch; }
+.mask-editor-ask textarea {
+  flex: 1;
+  min-width: 0;
+  resize: none;
+  padding: 0.5rem 0.65rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg, var(--bg-main));
+  color: inherit;
+  font: inherit;
+  font-size: 16px; /* or iOS zooms the page on focus */
+}
+@media (max-width: 520px) {
+  .mask-editor-ask { flex-direction: column; }
+  .mask-editor-frame { height: min(55vh, 600px); }
+}
+
+.picture-tags-wait { display: flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); padding: 1rem 0; }
+.picture-tags-error { color: #D97757; font-size: 0.85rem; }
+.picture-tags-list { display: flex; flex-wrap: wrap; gap: 0.3rem; max-height: 50vh; overflow: auto; }
+.picture-tag {
+  padding: 0.22rem 0.55rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+}
+.picture-tag.is-dropped { text-decoration: line-through; opacity: 0.45; }
+
+/* ---- the gallery ---- */
+/* Both classes: `.studio-place` sets `overflow: hidden` for the Studio, which
+   scrolls its own panes, and studio.css is loaded after this file -- so with
+   one class the gallery inherited that and could not scroll at all. */
+.studio-place.gallery-place {
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  -webkit-overflow-scrolling: touch;
+  background: var(--bg-main);
+}
+.picture-gallery { padding: 18px 20px 32px; max-width: 1400px; margin: 0 auto; }
+.picture-gallery-head { display: flex; align-items: baseline; justify-content: space-between; gap: 1rem; margin-bottom: 0.8rem; }
+.picture-gallery-title { display: inline-flex; align-items: center; gap: 0.45rem; font-size: 1.05rem; font-weight: 600; }
+.picture-gallery-count { font-size: 0.8rem; color: var(--text-muted); }
+.picture-gallery-filters { display: flex; flex-wrap: wrap; gap: 0.6rem; align-items: center; margin-bottom: 1rem; }
+.picture-gallery-search {
+  flex: 1 1 240px;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg, var(--bg-main));
+  color: var(--text-secondary);
+}
+.picture-gallery-search input { flex: 1; min-width: 0; border: 0; outline: none; background: transparent; color: var(--text-primary); font: inherit; font-size: 16px; }
+.picture-gallery-sources { display: inline-flex; gap: 0.25rem; }
+.picture-gallery-sources button {
+  padding: 0.35rem 0.7rem;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.8rem;
+  cursor: pointer;
+}
+.picture-gallery-sources button.is-on { color: var(--primary); border-color: rgba(var(--primary-rgb), 0.45); background: rgba(var(--primary-rgb), 0.1); }
+.picture-gallery-empty { padding: 3rem 1rem; text-align: center; color: var(--text-muted); }
+.picture-gallery-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 16px 12px; }
+@media (max-width: 520px) {
+  .picture-gallery-grid { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .picture-gallery { padding: 14px 16px 28px; }
+}
+.picture-gallery-item { margin: 0; display: flex; flex-direction: column; gap: 0.3rem; min-width: 0; }
+.picture-gallery-open {
+  position: relative;
+  padding: 0;
+  aspect-ratio: 3 / 4;
+  max-width: 100%;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-secondary, var(--hover-bg));
+  overflow: hidden;
+  cursor: zoom-in;
+}
+.picture-gallery-open img, .picture-gallery-open video { width: 100%; height: 100%; object-fit: cover; display: block; }
+/* The glass's frame is the card: the same corners, so the blur that spills
+   past the picture is clipped to them. */
+.picture-gallery-frame { border-radius: var(--radius-md); }
+.picture-gallery-frame > .picture-gallery-open { display: block; width: 100%; }
+.picture-gallery-frame .safe-veil { font-size: 11.5px; gap: 6px; padding: 8px; }
+.picture-gallery-badge {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  display: inline-flex;
+  padding: 3px;
+  border-radius: 6px;
+  background: rgba(0, 0, 0, 0.5);
+  color: #fff;
+}
+.picture-gallery-item figcaption {
+  font-size: 0.72rem;
+  color: var(--text-muted);
+  line-height: 1.4;
+  display: -webkit-box;
+  -webkit-line-clamp: 2;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
+.picture-gallery-actions { display: flex; gap: 0.25rem; }
+.picture-gallery-actions button {
+  display: inline-flex;
+  padding: 0.3rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  cursor: pointer;
+}
+.picture-gallery-actions button:hover { color: var(--text-primary); background: var(--hover-bg); }
+
+/* The Studio's "pictures in chat are drawn with". */
+.studio-chat-model { display: flex; flex-direction: column; gap: 0.3rem; margin: 0.6rem 0 0.2rem; font-size: 0.78rem; color: var(--text-secondary); }
+.studio-chat-model select {
+  padding: 0.4rem 0.5rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-sm);
+  background: var(--input-bg, var(--bg-main));
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 16px;
 }

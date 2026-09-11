@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Camera, Trash2, Check, RefreshCcw, TriangleAlert, Lock, LogOut, UserPlus } from 'lucide-react';
+import { X, Camera, Trash2, Check, RefreshCcw, TriangleAlert, Lock, LogOut, UserPlus, Unlink } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
-import { updateUser, changePassword, prepareAvatar } from './auth.jsx';
+import { prepareAvatar } from './auth.jsx';
+import { updateProfile, changePassword } from './session.jsx';
 
 const PALETTE = ['#D97757', '#2563EB', '#059669', '#7C3AED', '#DB2777', '#D97706', '#0891B2', '#475569'];
 
@@ -29,7 +30,7 @@ export const ProfileAvatar = ({ user, size = 40, className = '' }) => {
   );
 };
 
-export const ProfileDialog = ({ user, onClose, onUpdated, onSignOut, onSwitch, onDelete }) => {
+export const ProfileDialog = ({ user, onClose, onUpdated, onSignOut, onSwitch, onDelete, onUnlinkKakao }) => {
   const { t } = useI18n();
   const fileRef = useRef(null);
 
@@ -73,11 +74,14 @@ export const ProfileDialog = ({ user, onClose, onUpdated, onSignOut, onSwitch, o
     setProfileSaved(false);
     setSavingProfile(true);
     try {
-      const result = await updateUser(user.id, { name, email, avatar });
-      if (result.error) { setProfileError(t(result.error)); return; }
+      // The server owns the record, so this is the only place it changes. There
+      // is no second, browser-local copy left to fall out of step with it.
+      const result = await updateProfile({ name, email, avatar });
       onUpdated(result.user);
       setProfileSaved(true);
       setTimeout(() => setProfileSaved(false), 2000);
+    } catch (err) {
+      setProfileError(err.message || String(err));
     } finally {
       setSavingProfile(false);
     }
@@ -90,13 +94,18 @@ export const ProfileDialog = ({ user, onClose, onUpdated, onSignOut, onSwitch, o
     if (nextPassword !== confirmPassword) { setPasswordError(t('auth.passwordMismatch')); return; }
     setSavingPassword(true);
     try {
-      const result = await changePassword(user.id, currentPassword, nextPassword);
-      if (result.error) { setPasswordError(t(result.error)); return; }
+      // Changing it ends every other session, which the server does and this
+      // reports. A password change that left the old sessions live would be the
+      // version of the feature that does nothing.
+      const result = await changePassword(currentPassword, nextPassword);
+      onUpdated(result.user);
       setCurrentPassword('');
       setNextPassword('');
       setConfirmPassword('');
       setPasswordSaved(true);
       setTimeout(() => setPasswordSaved(false), 2500);
+    } catch (err) {
+      setPasswordError(err.message || String(err));
     } finally {
       setSavingPassword(false);
     }
@@ -141,7 +150,7 @@ export const ProfileDialog = ({ user, onClose, onUpdated, onSignOut, onSwitch, o
                 className="settings-input"
                 value={email}
                 onChange={e => setEmail(e.target.value)}
-                placeholder={user.provider === 'password' ? '' : t('profile.optional')}
+                placeholder={user.hasPassword ? '' : t('profile.optional')}
               />
 
               {avatar && (
@@ -164,7 +173,7 @@ export const ProfileDialog = ({ user, onClose, onUpdated, onSignOut, onSwitch, o
           </div>
         </form>
 
-        {user.provider === 'password' && (
+        {user.hasPassword && (
           <form onSubmit={savePassword} className="settings-group">
             <label style={{ display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
               <Lock size={13} /> {t('profile.changePassword')}
@@ -214,19 +223,24 @@ export const ProfileDialog = ({ user, onClose, onUpdated, onSignOut, onSwitch, o
         )}
 
         <div className="settings-group">
-          <label>{t('profile.thisDevice')}</label>
+          <label>{t('profile.account')}</label>
           <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
             <button className="icon-btn bordered" onClick={onSwitch}>
-              <UserPlus size={14} /> {t('auth.switchAccount')}
+              <UserPlus size={14} /> {t('auth.addAccount')}
             </button>
             <button className="icon-btn bordered" onClick={onSignOut}>
               <LogOut size={14} /> {t('auth.signOut')}
             </button>
+            {user.provider === 'kakao' && onUnlinkKakao && (
+              <button className="icon-btn bordered" onClick={onUnlinkKakao}>
+                <Unlink size={14} /> {t('auth.kakaoUnlink')}
+              </button>
+            )}
             <button className="icon-btn bordered" style={{ color: 'var(--danger)' }} onClick={onDelete}>
               <Trash2 size={14} /> {t('auth.deleteAccount')}
             </button>
           </div>
-          <div className="auth-note" style={{ marginTop: '0.75rem' }}>{t('auth.localNote')}</div>
+          <div className="auth-note" style={{ marginTop: '0.75rem' }}>{t('auth.serverNote')}</div>
         </div>
       </div>
     </div>

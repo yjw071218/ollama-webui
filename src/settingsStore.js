@@ -1,51 +1,91 @@
-// Settings that belong to a profile, and a tab that knows which profile it is.
+// Settings that belong to an account.
 //
-// Two things were wrong and they compound.
+// Two things used to be wrong here and they compounded.
 //
 // Settings were stored under bare names — `systemPrompt`, `theme` — shared by
-// every profile in the browser. Snapshotting them at the moment a profile
-// changed worked inside one tab and fell apart across two, because both tabs
-// write the same keys. Keys are scoped now, so two profiles simply cannot
+// every profile in the browser, so two people on one machine overwrote each
+// other continuously. Keys carry the scope now, and two accounts simply cannot
 // collide.
 //
-// And the signed-in profile lived in localStorage, which the whole origin
-// shares, so two tabs could never be two people: whichever signed in last
-// dragged the other with it. A tab's session lives in sessionStorage instead,
-// seeded once from the last-used profile so opening a new tab still lands you
-// where you were.
+// And this file used to *decide* the scope, at boot, by reading a record out of
+// sessionStorage and falling back to a browser-wide one. It had to, because
+// identity was a client-side notion and there was nothing else to ask. That is
+// what produced the split-brain: this guess was available instantly, the
+// server's answer arrived a round trip later, and anything written in between
+// went into whichever bucket the guess had named.
 //
-// The guest keeps the bare keys, so an existing install opens with everything
-// exactly where it left it.
-
-const SESSION_KEY = 'webui-tab-session';
-const LAST_USED_KEY = 'webui-last-profile';
+// It no longer decides anything. The session provider asks the server who is
+// signed in and calls setActiveScope once, before the app renders.
+//
+// The third thing this file now does is remember *when* each setting last
+// changed. Sync resolves conflicts per record by timestamp, and a setting with
+// no timestamp cannot take part in that: two devices would fall back to
+// comparing values, which cannot tell a change from a stale copy. The stamps
+// are what let a phone and a laptop each change a different setting and both
+// changes survive.
 
 // Names a file or a device on this computer, so it is the same whoever is
-// signed in and is deliberately not scoped.
+// signed in and is deliberately not scoped, nor synced.
 const MACHINE_LOCAL = new Set(['ttsRefAudio']);
 
-// Not settings: identity, other profiles' stores, and the app's own bookkeeping.
+// Not settings: other scopes' stores, and the app's own bookkeeping.
 const NOT_A_SETTING = new Set([
-  'ollama-sessions', 'ollama-users', 'ollama-auth-session',
-  SESSION_KEY, LAST_USED_KEY,
+  'ollama-sessions',
+  // Left by the account system that used to live in the browser. Never synced,
+  // never read as a login again.
+  'ollama-users', 'ollama-auth-session',
+  'webui-tab-session', 'webui-last-profile',
 ]);
 
-// Marks a profile whose settings have been seeded, so the inheritance below
-// happens once instead of forever.
-const SEEDED_PREFIX = 'settingsSeeded';
+// Prefixes of keys that carry their own scope suffix, or that record something
+// *about* a scope rather than being a setting in it. Without this, a key like
+// `syncRev@srv-x` reads back as a setting called `syncRev` belonging to srv-x,
+// and then syncs itself to every device.
+const NOT_A_SETTING_PREFIX = [
+  'ollama-sessions', 'chatFolders', 'samplingPresets', 'systemPrompts', 'settingsSnapshot',
+  // Who is asking. Scoped as `userProfile:<scope>`, like the lists above it,
+  // and it was missing from this list — so the guest's sweep, which takes every
+  // bare key with no `@` in it, was picking up *every* account's profile and
+  // syncing them all as the guest's own settings.
+  'userProfile',
+  'settingsSeeded', 'legacyImportOffered', 'legacyImportedFrom',
+  /* Whether this browser has had its context defaults raised. A fact about
+     this install, not a preference — syncing it would mean a phone that had
+     already been raised telling a desktop it had been too, and the desktop
+     keeping its cut-off answers. */
+  'ctxDefaultsRaised',
+  'settingStamps', 'syncRev', 'syncSent',
+  // Half-typed messages. They belong to this browser and this moment, not to
+  // the account: syncing them would upload on every keystroke, and a draft
+  // arriving on another device would overwrite whatever was being typed there.
+  'chatDrafts',
+  // Timings from this machine's GPU. Syncing them would average a laptop's
+  // numbers together with a desktop's and describe neither.
+  'perfRuns',
+  /* The Studio's saved form and its gallery. Both carry their own `:scope`
+     suffix and both are synced as whole-list records of their own, so the
+     settings sweep must not also pick them up as bare settings — that is how
+     `userProfile` came to be uploaded once per account by the guest. */
+  'studioSettings', 'studioHistory',
+  /* What the image classifier said about pictures seen in this browser. A
+     cache, keyed by URL and by hashes of pictures — not a preference, and
+     re-derivable anywhere. Studio jobs carry their own verdict, synced with
+     the job. */
+  'nsfwVerdicts',
+];
 
 export const isScopedSetting = (key) =>
-  !!key && !NOT_A_SETTING.has(key) && !MACHINE_LOCAL.has(key)
-  && !key.startsWith('ollama-sessions') && !key.startsWith('chatFolders')
-  && !key.startsWith('samplingPresets') && !key.startsWith('settingsSnapshot')
-  && !key.startsWith(SEEDED_PREFIX);
+  !!key
+  && !NOT_A_SETTING.has(key)
+  && !MACHINE_LOCAL.has(key)
+  && !NOT_A_SETTING_PREFIX.some(prefix => key.startsWith(prefix));
 
 /**
- * Where a setting is stored for a given profile.
+ * Where a setting is stored for a given scope.
  *
  * The guest keeps the bare name. That is not only for tidiness: every install
- * that existed before this has its settings under bare keys, and the guest is
- * who they belong to.
+ * that existed before any of this has its settings under bare keys, and the
+ * guest — the signed-out state of this browser — is who they belong to.
  */
 export const scopedKey = (key, scope) =>
   (scope && isScopedSetting(key)) ? `${key}@${scope}` : key;
@@ -54,90 +94,108 @@ export const scopedKey = (key, scope) =>
 
 let activeScope = '';
 
-const readJson = (storage, key) => {
-  try {
-    const raw = storage?.getItem(key);
-    return raw ? JSON.parse(raw) : null;
-  } catch (e) {
-    return null;
-  }
-};
-
-/**
- * The profile this tab is showing, decided once at boot.
- *
- * Read synchronously so the settings that React reads while first rendering are
- * already the right profile's. A tab with no session of its own inherits the
- * last one used in this browser, so opening a new tab is not a surprise.
- */
-export const bootScope = () => {
-  const own = readJson(globalThis.sessionStorage, SESSION_KEY);
-  if (own) {
-    activeScope = own.scope || '';
-    return { scope: activeScope, localUserId: own.localUserId || null, adopted: false };
-  }
-
-  const last = readJson(globalThis.localStorage, LAST_USED_KEY) || {};
-  activeScope = last.scope || '';
-  // Recorded for this tab so it stops following the rest of the browser.
-  try {
-    globalThis.sessionStorage?.setItem(SESSION_KEY, JSON.stringify(last));
-  } catch (e) { /* private mode */ }
-  return { scope: activeScope, localUserId: last.localUserId || null, adopted: true };
-};
-
 export const getActiveScope = () => activeScope;
 
-const seedMarker = (scope) => `${SEEDED_PREFIX}@${scope}`;
-
-export const isSeeded = (scope) =>
-  !scope || localStorage.getItem(seedMarker(scope)) === '1';
-
 /**
- * Give a profile the settings that were in effect when it first appeared.
+ * Point this browser at an account's settings.
  *
- * Once, and never again: after this the profile owns its settings outright and
- * nothing another profile does can reach them.
+ * Called once per identity, by the session provider, before anything renders.
+ * There is deliberately no inheritance from whatever scope was active a moment
+ * ago: an account is portable and a browser is not, so seeding one from the
+ * other makes an account's setup depend on which machine first signed into it —
+ * the same class of leak between identities that the rest of this rework
+ * removes, just wearing a friendlier hat.
  */
-export const seedScope = (scope, fromScope = '') => {
-  if (!scope || isSeeded(scope)) return 0;
-  const copied = writeScopeSettings(scope, readScopeSettings(fromScope), { onlyMissing: true });
-  try { localStorage.setItem(seedMarker(scope), '1'); } catch (e) { /* quota */ }
-  return copied;
+export const setActiveScope = (scope) => {
+  activeScope = scope || '';
+  return activeScope;
 };
 
-/** Point this tab at a profile. Other tabs are untouched. */
-export const setActiveScope = (scope, localUserId = null) => {
-  const previous = activeScope;
-  activeScope = scope || '';
-  // A profile being activated for the first time takes over the setup that was
-  // on screen a moment ago, rather than snapping to defaults.
-  if (activeScope) seedScope(activeScope, previous);
-  const record = { scope: activeScope, localUserId };
-  try { globalThis.sessionStorage?.setItem(SESSION_KEY, JSON.stringify(record)); } catch (e) {}
-  // Only so a *new* tab opens where you left off; existing tabs never read it.
-  try { globalThis.localStorage?.setItem(LAST_USED_KEY, JSON.stringify(record)); } catch (e) {}
+// ------------------------------------------------------------- the stamps
+
+const stampsKey = (scope) => `settingStamps@${scope || 'guest'}`;
+
+/** When each of a scope's settings last changed here, as `key -> epoch ms`. */
+export const settingStamps = (scope) => {
+  try {
+    return JSON.parse(localStorage.getItem(stampsKey(scope)) || '{}');
+  } catch (e) {
+    return {};
+  }
+};
+
+const writeStamps = (scope, stamps) => {
+  try { localStorage.setItem(stampsKey(scope), JSON.stringify(stamps)); } catch (e) { /* quota */ }
+};
+
+/**
+ * Record when a setting changed.
+ *
+ * `at` is passed explicitly when the value came from another device, so the
+ * stamp is the one that travelled with it rather than the moment it arrived —
+ * otherwise every download would look like the newest edit and win every
+ * subsequent conflict.
+ */
+export const stampSetting = (scope, key, at = Date.now()) => {
+  const stamps = settingStamps(scope);
+  stamps[key] = at;
+  writeStamps(scope, stamps);
+};
+
+export const forgetSettingStamp = (scope, key) => {
+  const stamps = settingStamps(scope);
+  if (!(key in stamps)) return;
+  delete stamps[key];
+  writeStamps(scope, stamps);
+};
+
+/** Drop a scope's stamps, so its next sync treats everything as new. */
+export const clearSettingStamps = (scope) => {
+  try { localStorage.removeItem(stampsKey(scope)); } catch (e) { /* private mode */ }
 };
 
 // ------------------------------------------------------------ the accessors
 
 /**
- * Reads only this profile's own value.
+ * Reads only this account's own value.
  *
- * There is deliberately no fallback to the browser-wide key. Falling back
- * looked like "a new profile inherits the current setup", and it is: once. As a
- * read-time rule it means every profile that has not overridden a setting keeps
- * reading the guest's, so changing something as the guest changes it for all of
- * them. Inheritance happens once, when the profile is first activated.
+ * There is deliberately no fallback to the browser-wide key. Falling back means
+ * every account that has not overridden a setting reads the guest's, so
+ * changing something while signed out changes it for all of them.
  */
-export const getSetting = (key) => localStorage.getItem(scopedKey(key, activeScope));
+export const getSetting = (key) => {
+  try {
+    return localStorage.getItem(scopedKey(key, activeScope));
+  } catch (e) {
+    return null;   // private mode with storage disabled
+  }
+};
 
+/**
+ * Writes it, and records when.
+ *
+ * The stamp is not optional bookkeeping: it is what the account uses to decide
+ * whose version of this setting is newer when two devices have both touched it.
+ */
 export const setSetting = (key, value) => {
-  try { localStorage.setItem(scopedKey(key, activeScope), value); } catch (e) { /* quota */ }
+  try {
+    const target = scopedKey(key, activeScope);
+    if (localStorage.getItem(target) === String(value)) return;   // no real change
+    localStorage.setItem(target, value);
+    if (isScopedSetting(key)) stampSetting(activeScope, key);
+  } catch (e) { /* quota */ }
 };
 
 export const removeSetting = (key) => {
-  try { localStorage.removeItem(scopedKey(key, activeScope)); } catch (e) {}
+  try {
+    localStorage.removeItem(scopedKey(key, activeScope));
+    forgetSettingStamp(activeScope, key);
+  } catch (e) { /* private mode */ }
+};
+
+/** Remove a key belonging to a scope other than the active one. */
+export const removeScopedKey = (scope, key) => {
+  try { localStorage.removeItem(scopedKey(key, scope)); } catch (e) { /* private mode */ }
 };
 
 /** Every setting belonging to a scope, for sync and backup. */
@@ -153,6 +211,8 @@ export const readScopeSettings = (scope) => {
       if (!isScopedSetting(bare)) continue;
       out[bare] = localStorage.getItem(key);
     } else {
+      // The guest's are the bare keys, so anything carrying a scope suffix
+      // belongs to somebody else.
       if (!isScopedSetting(key) || key.includes('@')) continue;
       out[key] = localStorage.getItem(key);
     }
@@ -163,10 +223,15 @@ export const readScopeSettings = (scope) => {
 /**
  * Write settings into a scope.
  *
- * `onlyMissing` is what seeding uses. A profile can already hold settings
- * before it is first activated here — restored from its account on another
- * device, say — and filling in around them is inheritance; writing over them
- * would be losing the very thing that was synced.
+ * `onlyMissing` is what the legacy import uses: an account can already hold
+ * settings — synced from another device, say — and filling in around them is
+ * importing, while writing over them would be losing the very thing that came
+ * down.
+ *
+ * Deliberately does not stamp. Callers know whether the value is a local edit
+ * (stamp it now) or one that arrived from the account (stamp it with the time
+ * it carried), and guessing here would make every download look like the newest
+ * edit on this device.
  */
 export const writeScopeSettings = (scope, settings, { onlyMissing = false } = {}) => {
   let changed = 0;
@@ -179,4 +244,26 @@ export const writeScopeSettings = (scope, settings, { onlyMissing = false } = {}
     try { localStorage.setItem(target, value); changed++; } catch (e) { /* quota */ }
   }
   return changed;
+};
+
+/**
+ * Forget everything an account cached in this browser.
+ *
+ * Signing out on a shared computer should not leave the account's settings
+ * sitting in localStorage for the next person to read, and a stale cache is
+ * also how a later sign-in can appear to show the wrong setup.
+ */
+export const clearScopeSettings = (scope) => {
+  if (!scope) return 0;                          // never the guest's bare keys
+  const suffix = `@${scope}`;
+  const doomed = [];
+  for (let i = 0; i < localStorage.length; i++) {
+    const key = localStorage.key(i);
+    if (key && key.endsWith(suffix)) doomed.push(key);
+  }
+  for (const key of doomed) {
+    try { localStorage.removeItem(key); } catch (e) { /* private mode */ }
+  }
+  clearSettingStamps(scope);
+  return doomed.length;
 };

@@ -1,42 +1,65 @@
-// Which profile's data is in view.
+// Which account's data is in view.
 //
-// Every store keys off this, so getting it wrong is not a display bug: signing
-// out while it still named the account meant the guest read, wrote and deleted
-// the account's chats, and the sync then uploaded those deletions.
+// Every store keys off this, so getting it wrong is not a display bug. The
+// version this replaces took two arguments — a server account and a browser-
+// local profile — and picked whichever was present. That is where the data
+// mixing came from, because during boot the local one was present immediately
+// and the server one arrived a round trip later, so the same browser produced
+// two different scopes seconds apart and wrote chats into both.
 //
-// It lives in its own file so the rule can be tested rather than inferred from
-// a ternary in the middle of a component.
+// There is one input now: the account the server says is signed in. And there
+// are three outcomes, not two, because "we have not asked yet" is a real state
+// and pretending it means "signed out" is exactly what pointed a signed-in
+// person at the guest's storage.
+
+/** Identity is not yet known. Nothing account-scoped may be read or written. */
+export const SCOPE_UNKNOWN = null;
+
+/** The guest: signed out, on this browser. Keeps the original bare keys. */
+export const SCOPE_GUEST = '';
 
 /**
- * The scope for a signed-in state.
+ * The scope for a session.
  *
- * The server account wins when there is one, because that identifier is the
- * same in every browser and is what makes a profile portable. The local profile
- * is next. Neither means guest, whose data is stored under the bare keys.
- *
- * `serverUser` must be cleared when the local profile signs out. A server
- * session that outlives the sign-in is how the guest ends up looking at someone
- * else's history.
+ * `status` is the session provider's, and must be 'ready' before this means
+ * anything. The prefix is kept from the previous scheme so an account that was
+ * already syncing keeps the bucket its chats are already in.
  */
-export const deriveScope = (serverUser, localUser) => {
-  if (serverUser?.id) return `srv-${serverUser.id}`;
-  if (localUser?.id) return String(localUser.id);
-  return '';
+export const deriveScope = (user, status = 'ready') => {
+  if (status !== 'ready') return SCOPE_UNKNOWN;
+  return user?.id ? `srv-${user.id}` : SCOPE_GUEST;
 };
 
-/** True when the two states describe different people's data. */
+/** Whether a scope names something that can be read from and written to. */
+export const isResolved = (scope) => scope !== SCOPE_UNKNOWN;
+
+/** True when the two describe different people's data. */
 export const scopeChanged = (before, after) => before !== after;
 
 /**
- * Whether a server session may be kept when the local profile becomes `next`.
+ * The account id a scope names, or null for the guest.
  *
- * Signing out, or switching to a different person, must not leave the previous
- * account's session attached — everything downstream reads the scope, so a
- * stale session silently redirects one person's writes into another's store.
+ * This is what a state payload is stamped with, and what the server checks that
+ * stamp against. Deriving it from the scope rather than from a separate
+ * variable is deliberate: the two cannot then drift, and drift is what put one
+ * account's chats into another's file.
  */
-export const mayKeepServerSession = (serverUser, nextLocalUser) => {
-  if (!serverUser) return false;
-  if (!nextLocalUser) return false;            // guest never keeps an account
-  // The same person: the local profile that the account was linked from.
-  return !!nextLocalUser.id;
+export const ownerOfScope = (scope) => {
+  if (!scope || scope === SCOPE_UNKNOWN) return null;
+  return scope.startsWith('srv-') ? scope.slice(4) : null;
+};
+
+/**
+ * Whether a payload may be applied to a scope.
+ *
+ * The client-side half of the server's owner check. A pull that arrives for a
+ * different account than the one on screen is discarded, not merged: by the
+ * time the payload is here the only thing merging can do is put one person's
+ * chats in another person's list.
+ */
+export const mayApplyState = (scope, payloadOwnerId) => {
+  const owner = ownerOfScope(scope);
+  if (!owner) return false;                     // the guest syncs nothing
+  if (!payloadOwnerId) return true;             // an older, unstamped payload
+  return payloadOwnerId === owner;
 };
