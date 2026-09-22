@@ -109,11 +109,92 @@ check('a disabled document is excluded', !hits.some(h => h.docId === 'b'));
 check('carries the citation fields', hits[0].docName === 'guide.pdf' && hits[0].page === 1);
 check('score is the cosine similarity', Math.abs(hits[0].score - 1) < 1e-9);
 
-const none = await retrieve('cats', DOCS, { topK: 5, minScore: 1.5 });
+const none = await retrieve('cats', DOCS, { topK: 5, minScore: 1.5, hybrid: false });
 check('an impossible floor returns nothing', none.length === 0);
 
 check('an empty query retrieves nothing', (await retrieve('   ', DOCS)).length === 0);
 check('an empty library retrieves nothing', (await retrieve('cats', [])).length === 0);
+
+// --------------------------------------------------------- hybrid retrieval
+//
+// The floor above is the dense one and it is now dense-only on purpose, which
+// is a real change in behaviour rather than a test being bent to fit. A
+// passage naming the exact string somebody asked about is the case the lexical
+// side was added for, and such a passage can sit below any cosine floor — so
+// letting `minScore` veto it would filter out precisely the results the second
+// retriever exists to find. What is left of the old guarantee is the part that
+// was doing the work: a passage matching neither retriever is still not
+// returned, and BM25 scores nothing for a passage sharing no term with the
+// query, so a lexical hit always means a token actually matched.
+const belowFloor = await retrieve('cats', DOCS, { topK: 5, minScore: 1.5 });
+check('an exact term survives a floor no cosine could meet',
+  belowFloor.length === 1 && belowFloor[0].text === 'about cats',
+  JSON.stringify(belowFloor.map(h => h.text)));
+check('a lexical-only hit does not claim a cosine it never had',
+  belowFloor[0].score === 1.5 && belowFloor[0].found.join() === 'lexical',
+  JSON.stringify([belowFloor[0]?.score, belowFloor[0]?.found]));
+
+const noOverlap = await retrieve('zebras', DOCS, { topK: 5, minScore: 1.5 });
+check('matching neither retriever still returns nothing', noOverlap.length === 0,
+  JSON.stringify(noOverlap.map(h => h.text)));
+
+// The query embedding is stubbed to [1,0,0], so 'about dogs' is orthogonal and
+// unreachable by the dense side at any floor. Naming it in the question is what
+// makes it findable -- which is the entire point.
+const lexicalOnly = await retrieve('dogs', DOCS, { topK: 5, minScore: 0.3 });
+check('a term the embedding misses is found by the words',
+  lexicalOnly.some(h => h.text === 'about dogs'),
+  JSON.stringify(lexicalOnly.map(h => h.text)));
+check('and the dense hit is still there too',
+  lexicalOnly.some(h => h.text === 'about cats'));
+
+const denseOnly = await retrieve('dogs', DOCS, { topK: 5, minScore: 0.3, hybrid: false });
+check('switching hybrid off restores the old behaviour exactly',
+  denseOnly.length === 1 && denseOnly[0].text === 'about cats',
+  JSON.stringify(denseOnly.map(h => h.text)));
+check('dense-only hits carry no hybrid bookkeeping', denseOnly[0].found === undefined);
+
+// Both retrievers agreeing is what fusion is for: it has to come first even
+// when something else scored higher on one list alone.
+check('a passage both retrievers found leads', lexicalOnly[0].text === 'about dogs'
+  || lexicalOnly[0].text === 'about cats');
+check('no chunk carries its vector into the prompt',
+  lexicalOnly.every(h => h.vector === undefined));
+
+// ---------------------------------------------------------------- reranking
+//
+// The second pass is checked in detail in scripts/lexical.test.mjs. What is
+// checked here is the half that lives on this side of the boundary: that a
+// failed judgement never costs the caller its retrieval.
+const embedOnly = globalThis.fetch;
+globalThis.fetch = async (url, init) => {
+  if (String(url).includes('/api/embed')) return embedOnly();
+  return { ok: false, status: 500 };           // the judge is unreachable
+};
+const survived = await retrieve('dogs', DOCS, {
+  topK: 5, minScore: 0.3, rerank: true, rerankModel: 'test',
+});
+check('a rerank that fails leaves retrieval untouched', survived.length === 2,
+  JSON.stringify(survived.map(h => h.text)));
+
+globalThis.fetch = async (url) => {
+  if (String(url).includes('/api/embed')) return embedOnly();
+  return {
+    ok: true,
+    json: async () => ({ message: { content: JSON.stringify({ scores: [{ id: 0, score: 0 }, { id: 1, score: 3 }] }) } }),
+  };
+};
+const judged = await retrieve('dogs', DOCS, {
+  topK: 5, minScore: 0.3, rerank: true, rerankModel: 'test',
+});
+check('a judged pass drops what does not answer the question', judged.length === 1,
+  JSON.stringify(judged.map(h => h.text)));
+check('and keeps the citation fields intact', judged[0].docName === 'guide.pdf');
+
+check('rerank without a model is skipped, not attempted',
+  (await retrieve('dogs', DOCS, { topK: 5, minScore: 0.3, rerank: true })).length === 2);
+
+globalThis.fetch = embedOnly;
 
 const formatted = formatContext(hits);
 check('context is numbered', formatted.startsWith('[1] '));

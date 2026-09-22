@@ -1,6 +1,8 @@
-import React, { useState, useEffect, useRef, useMemo, memo, useCallback } from 'react';
+import { flushSync } from 'react-dom';
+import { resumableChatReader } from './chatStream.js';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, useCallback } from 'react';
 import localforage from 'localforage';
-import { ArrowUp, Paperclip, Sparkles, RefreshCcw, Trash2, Copy, Check, Terminal, Settings, Edit, MessageSquare, ChevronDown, Download, Square, X, Play, Mic, MicOff, Volume2, Search, Code, Maximize2, Sun, Moon, Monitor, Pin, PinOff, GitBranch, FileDown, Command, Cpu, Plus, Save, ArrowDown, Zap, Layers, Server, ExternalLink, Star, Info, TriangleAlert, FileText, Minimize2, PanelLeft, ListTree, LogOut, UserPlus, Languages, User, Activity, Globe, Folder, FolderPlus, MoreHorizontal, ChevronLeft, ChevronRight, SlidersHorizontal, CornerDownRight, Archive, WrapText, ListChecks, ChevronUp, Vibrate, Smartphone, FolderInput, StretchHorizontal, TextQuote, Brain, HelpCircle, Baby, Share2, ClipboardPaste, Upload, Users, Telescope, ShieldCheck, Wand2, Clock, Film, Brush, Scissors, Tags, Images } from 'lucide-react';
+import { ArrowUp, Paperclip, Sparkles, RefreshCcw, Trash2, Copy, Check, Terminal, Settings, Edit, MessageSquare, ChevronDown, Download, Square, X, Play, Mic, MicOff, Volume2, Search, Code, Maximize2, Sun, Moon, Monitor, Pin, PinOff, GitBranch, FileDown, Command, Cpu, Plus, Save, ArrowDown, Zap, Layers, Server, ExternalLink, Star, Info, TriangleAlert, FileText, Minimize2, PanelLeft, ListTree, LogOut, UserPlus, Languages, User, Activity, Globe, Folder, FolderPlus, MoreHorizontal, ChevronLeft, ChevronRight, SlidersHorizontal, CornerDownRight, Archive, WrapText, ListChecks, ChevronUp, Vibrate, Smartphone, FolderInput, StretchHorizontal, TextQuote, Brain, HelpCircle, Baby, Share2, ClipboardPaste, Upload, Users, Telescope, ShieldCheck, Wand2, Clock, Film, Brush, Scissors, Tags, Images, SquareSplitHorizontal, Undo2, Music } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -33,16 +35,31 @@ import { StudioPanel, loadHistory as loadStudioHistory, thumbOf } from './Studio
 import { MaskEditor } from './MaskEditor.jsx';
 import { PictureTags } from './PictureTags.jsx';
 import { PictureGallery } from './PictureGallery.jsx';
-import { JobProgress, useJobStream } from './studioProgress.jsx';
+import { JobProgress, useJobStream, promptExcerpt } from './studioProgress.jsx';
+import { LongStoryboard } from './LongStoryboard.jsx';
 import { sizeRatio } from './jobProgress.js';
 import { PictureSettings } from './PictureSettings.jsx';
 import { SafePicture, useSafeguardLevel } from './SafeImage.jsx';
+import { videoFileOf } from './videoSafety.js';
+import { StudioLightbox } from './StudioLightbox.jsx';
+import { chatPictures, beforeUrlOf } from './galleryItems.js';
+import { joinPrompt } from './promptTags.js';
+import { readJson, fetchJson } from './jsonFetch.js';
+import { loadCharacters, characterOf, swapRequest, swapTarget, withPinnedCharacter } from './characters.js';
+import { BeforeAfter } from './BeforeAfter.jsx';
+import { cacheKey } from './nsfwClassifier.js';
 import { shouldVeil, promptSignal } from './safeguard.js';
+import {
+  getRetouchMode, INSPECT_PROMPT, readVerdict, retouchPlan, retouchPrompt,
+  RETOUCH_DENOISE, inspector, regionLabel,
+} from './retouch.js';
+import { inpaintFields } from './inpaint.js';
 import { readAll as readStudioSettings, restoreForm, CHAT_PICTURE_KEY, readChatPictureModel } from './studioSettings.js';
 import {
-  blobToDataUrl, pictureSize, padForExtension, samplingSize, parseAspect, sizeForAspect, asImageDataUrl,
+  asDataUrl, asBase64, pictureSize, padForExtension, samplingSize, paintedGrow, parseAspect, sizeForAspect, asImageDataUrl,
 } from './pictureTools.js';
-import { normalizeTimeline, durationFromTimeline, clampSeconds, VIDEO_SECONDS, H3_GUIDE, asksForVideo } from './videoPrompt.js';
+import { normalizeTimeline, durationFromTimeline, clampSeconds, VIDEO_SECONDS, H3_GUIDE, asksForVideo, namesLength, videoArea, segmentPlan, frameBudgetArea, splitCaptions, segmentSecondsForTempo } from './videoPrompt.js';
+import { designCue, asksForPicture } from './characterDesign.js';
 import { UsagePanel } from './UsagePanel.jsx';
 import {
   cleanTag, tagsOf, addTag, removeTag, allTags, suggest as suggestTags,
@@ -71,36 +88,46 @@ import { fileMarker, indexedMarker, extractAttachments, stripAttachments } from 
 import { forHistory, isToolResult, turnStart, wireText } from './wireHistory.js';
 import { isDraft, newDraft, promoted, withoutStaleDrafts, persistable, nextSessionId } from './draftChat.js';
 import { Logo } from './Logo.jsx';
+import { Chart } from './Chart.jsx';
+import { parseChart } from './chart.js';
 import {
   buildSnapshot, createShare, listShares, revokeShare,
-  loadShareUrls, rememberShareUrl, forgetShareUrl,
+  loadShareUrls, rememberShareUrl, forgetShareUrl, picturePayload,
 } from './shareLink.js';
 import { turnMetrics } from './turnMetrics.js';
+import { traceOf, slowestLeg } from './turnTrace.js';
+import {
+  EVERY, newSchedule, dueNow, noteRun, loadSchedules, saveSchedules,
+  // `nextDue` is taken by the retry queue; this one answers a different
+  // question about a different kind of waiting.
+  nextDue as nextFiring,
+} from './schedules.js';
 import { runResearch, DEPTHS } from './research.js';
 import { ResearchTrace } from './ResearchTrace.jsx';
 import { waitFor, isOverdue } from './coalesce.js';
 import { copyText } from './clipboard.js';
 import { buildSelectionPrompt, selectionTarget, SELECTION_ACTIONS } from './selection.js';
 import { promptsFrom, stepHistory, wantsHistory, NOT_BROWSING } from './promptHistory.js';
-import { canShare, shareText, shareBody } from './share.js';
+import { canShare, shareText, shareBody, sharePicture, whyNoSheet } from './share.js';
 import { DRAWING_TAGS, schemasFor, toolCallsIn, nativeCallToTag, tagAttrs, TAG_ATTRS, canonicalToolTags } from './tools.js';
 import { parseAssistantMessage } from './messageParts.js';
 import { localSttAvailable, recordAndTranscribe, whisperLanguage } from './stt.js';
 import { wantsNavigation, NAV_KEYS, step } from './messageNav.js';
 import {
   loadQueue, enqueue, removeEntry, noteAttempt, nextDue, stalled,
-  makeEntry, isRetryable, MAX_ATTEMPTS,
+  makeEntry, isRetryable, MAX_ATTEMPTS, heldReason, carryAttempt,
 } from './sendQueue.js';
 import { ingestDocument, shouldPasteAsFile, namePastedText } from './ingest.js';
 import { holdScreenAwake } from './wakeLock.js';
+import { notify, notifyState, askToNotify, unattended, subscribeToPush, unsubscribeFromPush } from './notify.js';
 import { recordRun, loadRuns, clearRuns, summarise, promptCostTrend } from './perf.js';
 import {
-  syncFully, createSyncScheduler, accountStamp, resetSyncPosition, OwnerMismatch,
+  syncFully, createSyncScheduler, accountStamp, resetSyncPosition, OwnerMismatch, withoutPictureBytes,
   subscribeToAccount,
 } from './syncEngine.js';
 import {
   useSession, deleteAccount as deleteServerAccount, signOutOtherDevices,
-  leaveHandoff, takeHandoff, fetchServerConfig,
+  leaveHandoff, takeHandoff, fetchServerConfig, api,
 } from './session.jsx';
 import {
   findLegacyData, wasOffered, markOffered, importLegacyBucket, alreadyImported,
@@ -352,6 +379,7 @@ const TOOL_ICONS = {
   TOOL_SYSTEM_INFO: Cpu,
   TOOL_GENERATE_IMAGE: Wand2,
   TOOL_GENERATE_VIDEO: Film,
+  TOOL_GENERATE_MUSIC: Music,
   TOOL_REMOVE_BACKGROUND: Scissors,
   TOOL_UPSCALE_IMAGE: Maximize2,
   TOOL_EXTEND_IMAGE: Maximize2,
@@ -879,6 +907,21 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
   const language = normalizeLanguage(match ? match[1] : '');
   const codeContent = extractText(codeEl?.props?.children ?? children).replace(/\n$/, '');
   const lineCount = codeContent.split('\n').length;
+  /* A chart before anything else.
+   *
+   * `chart` is not a language and the block is not code: it is a handful of
+   * numbers the answer is about, and the answer is better for showing them.
+   * Drawn where it stands rather than promoted to the side panel, because a
+   * chart belongs in the sentence that introduced it.
+   *
+   * A block that does not parse falls through and is shown as the code it is.
+   * A "could not draw this" box would hide what the model actually wrote,
+   * which is the one thing that could say why. */
+  if (language === 'chart') {
+    const drawn = <Chart source={codeContent} t={t} />;
+    if (drawn && parseChart(codeContent)) return drawn;
+  }
+
   const previewable = isPreviewable(language);
   const runnable = isPythonish(language);
   const isLong = lineCount > 15;
@@ -893,24 +936,28 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
     // Anything previewable, runnable or simply long gets promoted to the side
     // panel. Short Python still runs inline, long Python now runs in the panel
     // instead of quietly losing its Run button.
-    if (previewable || runnable || isLong) {
+    /* Short Python stays in the answer, readable, with its runner under it --
+       which is what the comment above always said. The condition promoted
+       every Python block, so a one-line `print(x)` became a card reading
+       "Python, 1 lines" with the code itself a click away. */
+    if (previewable || isLong) {
       const openAs = previewable ? 'preview' : runnable ? 'run' : 'code';
       return (
         <div className="artifact-card" onClick={() => onOpenArtifact(codeContent, openAs, language)}>
           <div className="artifact-icon"><Code size={20} /></div>
           <div className="artifact-info">
-            <span className="artifact-lang">{language || 'Code snippet'}</span>
-            <span className="artifact-lines">{lineCount} lines</span>
+            <span className="artifact-lang">{language || t('artifact.code')}</span>
+            <span className="artifact-lines">{t('attach.lines', { count: lineCount })}</span>
           </div>
           <div className="artifact-actions">
             {previewable && (
               <button onClick={(e) => { e.stopPropagation(); onOpenArtifact(codeContent, 'preview', language); }}>
-                <Play size={14} /> Preview
+                <Play size={14} /> {t('artifact.preview')}
               </button>
             )}
             {runnable && (
               <button onClick={(e) => { e.stopPropagation(); onOpenArtifact(codeContent, 'run', language); }}>
-                <Play size={14} /> Run
+                <Play size={14} /> {t('artifact.run')}
               </button>
             )}
             <button onClick={(e) => { e.stopPropagation(); onOpenArtifact(codeContent, 'code', language); }}>
@@ -953,6 +1000,23 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
 // The scope is settled before this module's component ever renders: the session
 // provider asks the server who is signed in, calls setActiveScope, and only
 // then mounts the tree. There is no boot-time guess left to be wrong.
+
+/* The two shapes the picture paths ask in.
+ *
+ * `postJson` is for a thing somebody pressed: it must say what happened, so a
+ * body that is not JSON becomes a sentence rather than a parser error. See
+ * src/jsonFetch.js for what that sentence says and why.
+ *
+ * `fetchJsonQuietly` is for the job poll, which runs once a second for as long
+ * as a picture takes. A poll that throws on one bad answer would end the wait
+ * for a generation that is still running perfectly well, so it hands back null
+ * and the caller tries again -- which is what it did before, and the reason it
+ * did is unchanged. */
+const postJson = async (url, init) => readJson(await fetch(url, init), 'The picture server');
+
+const fetchJsonQuietly = (url, init) => fetch(url, init)
+  .then(r => r.text())
+  .then((text) => { try { return JSON.parse(text); } catch (e) { return null; } });
 
 function App() {
   const [models, setModels] = useState([]);
@@ -1011,6 +1075,10 @@ function App() {
   const [studioOpened, setStudioOpened] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
+  /* What has been typed into the picker's search field. Cleared when the menu
+     closes: a filter left over from last time is a picker that has lost models
+     nobody removed. */
+  const [modelQuery, setModelQuery] = useState('');
 
   // Settings / Logs panel state
   const [showSettings, setShowSettings] = useState(false);
@@ -1058,6 +1126,9 @@ function App() {
      time, by index: two open diffs in one transcript is two things to read
      instead of the comparison you opened the first one for. */
   const [diffFor, setDiffFor] = useState(null);
+  /* Which answer has its trace open, by message index. One at a time: it is
+     opened to ask a question about one turn, not to compare two. */
+  const [traceFor, setTraceFor] = useState(null);
   /* Which results have their settings open, as `message:picture`. Several at
      once, unlike the diff: comparing two pictures' settings side by side is the
      reason to open the second. Not kept -- a reload closes them all. */
@@ -1306,6 +1377,13 @@ function App() {
   const [ragEnabled, setRagEnabled] = useState(() => getSetting('ragEnabled') !== 'false');
   const [embedModel, setEmbedModel] = useState(() => getSetting('embedModel') || DEFAULT_EMBED_MODEL);
   const [ragTopK, setRagTopK] = useState(() => readNum('ragTopK', 5));
+  /* On by default: it costs arithmetic over text already in memory, and it is
+     what makes an exact string -- an error code, a model number, a Korean word
+     the embedding model half-understands -- findable at all. See src/lexical.js. */
+  const [ragHybrid, setRagHybrid] = useState(() => getSetting('ragHybrid') !== 'false');
+  /* Off by default: it costs a round trip to the model before the reply
+     starts. See src/rerank.js. */
+  const [ragRerank, setRagRerank] = useState(() => getSetting('ragRerank') === 'true');
 
   // --- Cross-chat memory ---
   const [memories, setMemories] = useState([]);
@@ -1376,7 +1454,9 @@ function App() {
     setSetting('ragEnabled', String(ragEnabled));
     setSetting('embedModel', embedModel);
     setSetting('ragTopK', String(ragTopK));
-  }, [ragEnabled, embedModel, ragTopK]);
+    setSetting('ragHybrid', String(ragHybrid));
+    setSetting('ragRerank', String(ragRerank));
+  }, [ragEnabled, embedModel, ragTopK, ragHybrid, ragRerank]);
   const [stopSequences, setStopSequences] = useState(() => getSetting('stopSequences') || '');
   const [minP, setMinP] = useState(() => readNum('minP', 0));
   const [presencePenalty, setPresencePenalty] = useState(() => readNum('presencePenalty', 0));
@@ -1744,6 +1824,10 @@ function App() {
   const [ttsMaxChars, setTtsMaxChars] = useState(() => parseInt(readStr('ttsMaxChars', '600')) || 600);
   const [ttsAutoPlay, setTtsAutoPlay] = useState(() => readStr('ttsAutoPlay', 'false') === 'true');
   const [isSynthesizing, setIsSynthesizing] = useState(false);
+  /* Whether a finished generation is worth interrupting for. Off by default:
+     a notification nobody asked for is the reason people turn notifications
+     off. See src/notify.js for why it can be on and still show nothing. */
+  const [notifyWhenDone, setNotifyWhenDone] = useState(() => readStr('notifyWhenDone', 'false') === 'true');
 
   useEffect(() => {
     setSetting('ttsEngine', ttsEngine);
@@ -1755,6 +1839,8 @@ function App() {
     setSetting('ttsMaxChars', String(ttsMaxChars));
     setSetting('ttsAutoPlay', String(ttsAutoPlay));
   }, [ttsEngine, ttsRefAudio, ttsPromptText, ttsTextLang, ttsPromptLang, ttsSpeed, ttsMaxChars, ttsAutoPlay]);
+
+  useEffect(() => { setSetting('notifyWhenDone', String(notifyWhenDone)); }, [notifyWhenDone]);
 
   useEffect(() => {
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
@@ -2174,12 +2260,15 @@ function App() {
     // A reply still streaming lives in state and is not in storage yet.
     // Re-reading would throw away the half of it that has arrived.
     if (isGeneratingRef.current) return false;
+    const beforeRead = sessionsRef.current;
+    const readKey = storageKeyRef.current;
     let saved;
     try {
-      saved = await localforage.getItem(storageKeyRef.current);
+      saved = await localforage.getItem(readKey);
     } catch (e) {
       return false;
     }
+    if (isGeneratingRef.current || sessionsRef.current !== beforeRead || storageKeyRef.current !== readKey) return false;
     if (!saved || saved.length === 0) return false;
 
     /* Storage is the truth about conversations and knows nothing about
@@ -2203,8 +2292,35 @@ function App() {
     return true;
   };
 
+  /* The answer being written on another device, as far as it has got:
+     `{ chat, id, content }`, or null. Filled by `followElsewhere`. */
+  const [followed, setFollowed] = useState(null);
   const currentSession = sessions.find(s => s.id === currentSessionId) || sessions[0] || { id: nextSessionId(), title: 'New Chat', messages: [], createdAt: Date.now(), updatedAt: Date.now(), lastModel: '' };
-  const messages = currentSession?.messages || [];
+  /* An answer another device is writing, shown as it is typed.
+   *
+   * The conversation itself already syncs while an answer arrives -- it is
+   * saved every few hundred milliseconds and uploaded -- so a second device
+   * does see the reply, a second or two behind and in lumps. `followElsewhere`
+   * reads the same bytes the writing device is reading, so it arrives token by
+   * token instead.
+   *
+   * Over the top of the stored message rather than into it. This device is not
+   * the author: what it has is the words, without the pictures the turn made,
+   * without its metrics, and without whatever the author's own copy will say
+   * when it lands. Writing that into the chat would upload it -- a shorter,
+   * poorer copy with a newer timestamp, which is how a record gets lost. So it
+   * is shown and never stored, and the moment the real copy is at least as long
+   * it takes over on its own. */
+  const messages = useMemo(() => {
+    const stored = currentSession?.messages || [];
+    if (!followed?.content || followed.chat !== String(currentSessionId)) return stored;
+    const index = stored.findLastIndex(m => m.role === 'assistant');
+    if (index < 0) return stored;
+    if ((stored[index].content || '').length >= followed.content.length) return stored;
+    const shown = [...stored];
+    shown[index] = { ...shown[index], content: followed.content };
+    return shown;
+  }, [currentSession, followed, currentSessionId]);
   // For the global key handler, which is installed once and cannot see this.
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
@@ -2241,6 +2357,204 @@ function App() {
    * chat is concerned, nothing is.
    */
   const [generatingSessionId, setGeneratingSessionId] = useState(null);
+  const generationStorageKey = `chatGeneration:${profileScope || 'guest'}`;
+
+  const rememberGeneration = (sessionId, startedAt, jobId, messageIndex = null, prefix = '', model = '') => {
+    try {
+      localStorage.setItem(generationStorageKey, JSON.stringify({
+        sessionId,
+        startedAt,
+        jobId, prefix, model,
+        ...(Number.isInteger(messageIndex) ? { messageIndex } : {}),
+      }));
+    } catch (e) { /* generation state is best effort */ }
+  };
+
+  /* How long a picture key is worth believing. The same window the drawing
+     restore below uses: a generation older than this is not one ComfyUI is
+     still working on. */
+  const DRAWING_WINDOW_MS = 6 * 60 * 60 * 1000;
+
+  /** Whether that chat really has a picture being made, rather than a key about one. */
+  const drawingLooksLive = (drawingKey) => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(drawingKey) || 'null');
+      return !!saved?.id && Date.now() - Number(saved.startedAt || 0) < DRAWING_WINDOW_MS;
+    } catch (e) {
+      return false;
+    }
+  };
+
+  /* Picture keys left behind by turns that are long over.
+   *
+   * `chatDrawing:<scope>:<chat>` is written while a picture is being made and
+   * removed when it finishes -- but only ever for the chat on screen. Leaving
+   * that chat mid-generation, which is allowed and ordinary, leaves the key for
+   * the chat you left behind with nobody to clean it.
+   *
+   * On its own that is a stale line in storage. What it did was veto the
+   * clearing of the *generation* key in the restore below, and that key is what
+   * makes the app take over the screen on every load. Reported as "받는 중입니다"
+   * flickering for ever in a chat whose answer had finished, and surviving a
+   * server restart -- because what was stuck was in this browser. */
+  useEffect(() => {
+    try {
+      const prefix = `chatDrawing:${profileScope || 'guest'}:`;
+      for (const key of Object.keys(localStorage)) {
+        if (key.startsWith(prefix) && !drawingLooksLive(key)) localStorage.removeItem(key);
+      }
+    } catch (e) { /* storage is best effort */ }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [profileScope]);
+
+  const forgetGeneration = (expectedJobId) => {
+    try {
+      const saved = JSON.parse(localStorage.getItem(generationStorageKey) || 'null');
+      if (!expectedJobId || saved?.jobId === expectedJobId) localStorage.removeItem(generationStorageKey);
+    } catch (e) { /* best effort */ }
+  };
+
+  // Restore one server-owned generation and keep following its live bytes.
+  useEffect(() => {
+    if (!isStorageLoaded) return undefined;
+    let saved;
+    try { saved = JSON.parse(localStorage.getItem(generationStorageKey) || 'null'); }
+    catch { return undefined; }
+    if (!saved?.jobId || !saved.sessionId) return undefined;
+    const controller = new AbortController();
+    abortControllerRef.current = controller;
+    let disposed = false;
+
+    /* Is there still a generation to restore?
+     *
+     * Reported: "받는 중입니다" appearing and disappearing over and over, in a
+     * chat whose answer had finished, while the screen kept jumping back to
+     * it -- and a server restart did not help, because what was stuck was in
+     * *this browser*. The note below this says the job id lives in
+     * localStorage, and the two ways it was cleared both have holes: a
+     * leftover picture key vetoes the clear, and a storage write that fails
+     * skips it. Either way the app spent every load taking over the screen for
+     * a turn that ended yesterday.
+     *
+     * So the id is checked before anything is done with it. The generations a
+     * server holds are bounded and short-lived (see server/chatJobs.js), so an
+     * id it has never heard of is an id that is finished for good, whatever
+     * this browser wrote down -- and forgetting it is the whole of the repair.
+     */
+    const stillRunning = async () => {
+      try {
+        const answer = await fetch(`/api/chat/live?id=${encodeURIComponent(saved.jobId)}`, {
+          cache: 'no-store', signal: controller.signal,
+        }).then(r => r.json());
+        /* `known` rather than `running`: a job that has finished within the
+           retention window still has its frames, and replaying them is how a
+           reload during the last second of an answer gets the end of it. What
+           is being ruled out is an id nothing remembers at all.
+           Only an explicit no counts. A server that answered with an error, or
+           an older one with no such route, has not said the job is gone -- and
+           throwing an answer away on a question that was never answered is the
+           worse of the two mistakes. */
+        return answer?.known !== false;
+      } catch (e) {
+        /* The server is unreachable, which is not the same as the job being
+           gone: a phone on a sleeping wifi must not lose an answer that is
+           still being written. Restored, and the follow below decides. */
+        return !controller.signal.aborted;
+      }
+    };
+
+    const restore = async () => {
+      if (!await stillRunning()) {
+        if (!disposed) {
+          addLog('[recovery] the saved generation is finished; forgetting it', 'info');
+          forgetGeneration(saved.jobId);
+        }
+        return;
+      }
+      if (disposed) return;
+      // Recovery belongs to the saved chat; it must not change the chat being read.
+      setGeneratingSessionId(saved.sessionId);
+      setIsGenerating(true);
+      isGeneratingRef.current = true;
+      const reader = resumableChatReader(null, saved.jobId, controller.signal);
+      const decoder = new TextDecoder();
+      let buffer = '', thinking = '', content = '', metrics = null, terminal = false;
+      const commit = () => {
+        const restoredContent = (saved.prefix || '') + (thinking
+          ? (terminal || content ? `<think>\n${decodeByteFallback(thinking)}\n</think>\n\n`
+            : `<think>\n${decodeByteFallback(thinking)}`) : '') + decodeByteFallback(content);
+        const measured = metrics;
+        reviseSession(saved.sessionId, session => {
+          const messages = [...session.messages];
+          const index = Number.isInteger(saved.messageIndex) ? saved.messageIndex
+            : messages.findLastIndex(m => m.role === 'assistant');
+          if (index < 0 || index > messages.length) return session;
+          const previous = messages[index] || { role: 'assistant', content: '', model: saved.model };
+          // While replay catches up, the already saved answer stays on screen.
+          // Preserve a longer completed variant/continuation and its metrics.
+          if ((previous.content || '').length > restoredContent.length) return session;
+          messages[index] = { ...previous, content: restoredContent,
+            ...(measured ? { metrics: { ...previous.metrics, ...measured } } : {}), isMcpFetching: false };
+          return { ...session, messages };
+        });
+      };
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (disposed) return;
+          buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = done ? '' : lines.pop();
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            let frame;
+            try { frame = JSON.parse(line); } catch { continue; }
+            thinking += frame.message?.thinking || '';
+            content += frame.message?.content || '';
+            if (frame.done) terminal = true;
+            if (frame.error) addLog(frame.error, 'error');
+            if (frame.eval_count !== undefined || frame.total_duration !== undefined) metrics = {
+              totalTime: frame.total_duration !== undefined ? (frame.total_duration / 1e9).toFixed(2) : null,
+              evalCount: frame.eval_count ?? null, promptTokens: frame.prompt_eval_count ?? null,
+              tokensPerSec: frame.eval_count && frame.eval_duration
+                ? (frame.eval_count / (frame.eval_duration / 1e9)).toFixed(2) : null,
+              estimated: false,
+            };
+          }
+          if (done) terminal = true;
+          commit();
+          if (done) break;
+        }
+      } catch (error) {
+        if (!disposed && !controller.signal.aborted) addLog(error.message, 'error');
+      } finally {
+        if (!disposed) {
+          /* A picture still being made for this turn keeps it running: the
+             answer genuinely is not finished until the picture is. Judged by
+             the saved job's age, not by the key existing -- a key with nothing
+             behind it used to hold the whole turn open for ever. */
+          const drawingPending = drawingLooksLive(drawingKeyFor(saved.sessionId));
+          if (!drawingPending || controller.signal.aborted) {
+            flushSync(() => {
+              setIsGenerating(false);
+              setGeneratingSessionId(null);
+            });
+            const persisted = await persistSessions(sessionsRef.current);
+            if (!disposed) {
+              /* Forgotten either way. A write that failed will be made again by
+                 the save timer, which runs on every change; a job id left
+                 behind is a turn restored on every load, for ever, and there is
+                 nothing that clears it afterwards. */
+              if (!persisted) addLog('[recovery] the restored answer is not saved yet; it will be', 'error');
+              forgetGeneration(saved.jobId);
+            }
+          }
+        }
+      }
+    };
+    restore();
+    return () => { disposed = true; controller.abort(); };
+  }, [generationStorageKey, isStorageLoaded]);
 
   /* The picture being drawn for the answer that is being written.
    *
@@ -2251,8 +2565,365 @@ function App() {
    * the one distinction worth drawing. This is the job id to watch; the stream
    * itself is `drawingLive` further down. */
   const [drawing, setDrawing] = useState(null);
+  /* One spelling of the key, because there are two readers of it: this chat,
+     and the restore path asking whether some *other* chat was drawing. Written
+     twice, the two drifted apart the moment either scope changed. */
+  const drawingKeyFor = (sessionId) => `chatDrawing:${profileScope || 'guest'}:${sessionId || 'none'}`;
+  const drawingStorageKey = drawingKeyFor(currentSessionId);
+  const drawingHydratedRef = useRef(false);
+  const drawingRestorePendingRef = useRef(false);
+
+  useEffect(() => {
+    // Guest chats can also start a long-running picture job. Use the same
+    // guest namespace as the rest of the app instead of making restoration
+    // depend on having signed in.
+    const restoreSessionId = generatingSessionId || currentSessionId;
+    if (!restoreSessionId) return undefined;
+    const restoreDrawingKey = drawingKeyFor(restoreSessionId);
+    drawingHydratedRef.current = false;
+    try {
+      const raw = localStorage.getItem(restoreDrawingKey);
+      if (!drawing && raw) {
+        const saved = JSON.parse(raw);
+        if (saved?.id && Date.now() - Number(saved.startedAt || 0) < DRAWING_WINDOW_MS
+          && (!saved.sessionId || String(saved.sessionId) === String(restoreSessionId))) {
+          drawingRestorePendingRef.current = true;
+          setDrawing({ ...saved, sessionId: saved.sessionId || restoreSessionId, restored: true });
+          setGeneratingSessionId(saved.sessionId || restoreSessionId);
+          setIsGenerating(true);
+        } else {
+          localStorage.removeItem(restoreDrawingKey);
+          drawingHydratedRef.current = true;
+        }
+      } else if (!drawing && !raw) {
+        drawingHydratedRef.current = true;
+      } else {
+        drawingHydratedRef.current = true;
+      }
+      if (!drawing && raw && !localStorage.getItem(restoreDrawingKey)) {
+        drawingHydratedRef.current = true;
+      }
+    } catch (e) {
+      drawingHydratedRef.current = true;
+      try { localStorage.removeItem(restoreDrawingKey); } catch (error) { /* unavailable */ }
+    }
+    return undefined;
+  }, [drawingStorageKey, profileScope, currentSessionId, generatingSessionId, drawing]);
+
+  useEffect(() => {
+    if (!currentSessionId) return;
+    if (drawingRestorePendingRef.current) {
+      drawingRestorePendingRef.current = false;
+      drawingHydratedRef.current = true;
+      return;
+    }
+    if (!drawingHydratedRef.current) return;
+    try {
+      /* A job this device is running is written down, so a refresh mid-picture
+         picks it up again. A job it is only *watching* is not: it belongs to
+         another device, restoring it here would make this one think it had a
+         generation of its own to stop and to finish, and `watchElsewhere` finds
+         it again within seconds anyway. */
+      if (drawing?.id && !drawing.watched) {
+        localStorage.setItem(drawingKeyFor(drawing.sessionId || currentSessionId), JSON.stringify(drawing));
+      }
+    } catch (e) { /* progress restoration is best effort */ }
+  }, [drawing, drawingStorageKey, profileScope, currentSessionId]);
+
+  useEffect(() => {
+    if (!drawing?.restored || !drawing.id) return undefined;
+    let stopped = false;
+    const drawingSessionId = drawing.sessionId || currentSessionId;
+    const ownedDrawingKey = drawingKeyFor(drawingSessionId);
+    const finishRestoredDrawing = () => {
+      // Clear storage before clearing state: the restore effect runs first on
+      // the next render and would otherwise pick this completed job up again.
+      try { localStorage.removeItem(ownedDrawingKey); } catch (e) { /* best effort */ }
+      setDrawing(null);
+      forgetGeneration();
+      setIsGenerating(false);
+      setGeneratingSessionId(null);
+    };
+    const check = async () => {
+      try {
+        /* A song is not a ComfyUI job. It is ACE-Step's, and `/studio/job` has
+           never heard of its id -- asked there it answers "unknown", which this
+           reads as "gone" and takes the card down while the song is still being
+           made. Only for a job being watched: a song this device started has a
+           watcher of its own with the engine's own answers in it. */
+        const song = drawing.watched && drawing.kind === 'music';
+        const answer = await fetchJsonQuietly(song
+          ? `/music/status?id=${encodeURIComponent(drawing.id)}`
+          : `/studio/job?id=${encodeURIComponent(drawing.id)}`);
+        if (stopped || !answer) return;
+        // Flattened into the three words the rest of this reads.
+        const state = song
+          ? { ...answer, state: answer.done ? 'done' : (answer.failed ? 'failed' : 'running') }
+          : answer;
+        /* A job another device is running -- see `watchElsewhere`. This device
+           is a spectator: it shows the work and then stops showing it. What the
+           job produced is written into the conversation by the device that
+           asked for it, and arrives here as an ordinary sync. Writing it from
+           both ends would put the picture in twice, or into whichever message
+           happened to be last here. */
+        if (drawing.watched) {
+          if (state.state === 'done' || state.state === 'failed' || state.state === 'unknown') setDrawing(null);
+          else setDrawing(previous => (previous && (previous.polled !== state.state || previous.ahead !== state.ahead)
+            ? { ...previous, polled: state.state, ahead: state.ahead } : previous));
+          return;
+        }
+        if (state.state === 'failed' || state.state === 'unknown') {
+          finishRestoredDrawing();
+          return;
+        }
+        if (state.state === 'done') {
+          const output = finalOutput(state.outputs);
+          if (!output?.url) { finishRestoredDrawing(); return; }
+          reviseSession(drawingSessionId, session => {
+            const messages = [...session.messages];
+            const index = messages.length - 1;
+            if (index < 0) return session;
+            const message = messages[index];
+            // A completion can be observed twice when the page comes back
+            // while the final poll and the restored poll overlap.
+            if ((message.generated || []).some(item => item.url === output.url
+              || item.dataUrl === output.url
+              || item.filename === output.filename)) return session;
+            const generated = [...(message.generated || []), {
+              dataUrl: output.url,
+              url: output.url,
+              filename: output.filename,
+              prompt: drawing.prompt,
+              model: drawing.model,
+              ...(output.subfolder ? { subfolder: output.subfolder } : {}),
+              ...(output.type ? { type: output.type } : {}),
+              ...(output.media === 'video'
+                ? { file: { filename: output.filename, subfolder: output.subfolder || '', type: output.type || 'output' } }
+                : {}),
+              video: output.media === 'video',
+            }];
+            messages[index] = { ...message, generated, isMcpFetching: false };
+            return { ...session, messages };
+          });
+          finishRestoredDrawing();
+        } else if (state.state === 'running' || state.state === 'queued') {
+          setDrawing(previous => previous && {
+            ...previous,
+            polled: state.state,
+            ahead: state.ahead,
+          });
+        }
+      } catch (e) { /* the next poll can recover a transient request failure */ }
+    };
+    check();
+    const timer = setInterval(check, 1200);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [drawing?.id, drawing?.prompt, drawing?.restored, drawing?.watched, drawing?.sessionId, currentSessionId]);
+
+  /* A picture this conversation is having made somewhere else.
+   *
+   * Reported: a picture asked for on the desktop, the phone opened while it was
+   * being drawn, and the phone showed an empty bubble and three dots for the
+   * whole two minutes. The chat itself syncs while the answer is written -- the
+   * empty bubble *is* the desktop's answer, arriving -- but the generation did
+   * not, because what connects a conversation to a job in ComfyUI was a job id
+   * in the localStorage of the one browser that queued it.
+   *
+   * The server now writes that connection down (see `/studio/live`), so this
+   * asks the plain question: is anything being made for the chat on screen? If
+   * so the ordinary progress card goes up, fed by the ordinary progress stream
+   * -- the same card, the same `/studio/events`, watched instead of owned.
+   *
+   * Only while this device has nothing of its own going on. A device that is
+   * generating already has its own card up, and asking would be asking about
+   * itself. */
+  useEffect(() => {
+    if (!isStorageLoaded || !currentSessionId) return undefined;
+    /* Left the conversation the watched job belongs to. It is not this
+       device's card to carry around: dropping it here also starts the question
+       again for the chat that is now on screen. */
+    if (drawing?.watched && String(drawing.sessionId) !== String(currentSessionId)) {
+      setDrawing(null);
+      return undefined;
+    }
+    if (drawing || isGenerating) return undefined;
+    let stopped = false;
+    const watchElsewhere = async () => {
+      const chat = String(currentSessionId);
+      const answer = await fetchJsonQuietly(`/studio/live?chat=${encodeURIComponent(chat)}`).catch(() => null);
+      // `stopped` covers the chat having been left while the request was out:
+      // a card for another conversation's picture is worse than no card.
+      if (stopped || !answer?.success) return;
+      const job = (answer.jobs || [])[0];
+      if (!job?.id) return;
+      setDrawing(previous => (previous ? previous : {
+        id: job.id,
+        kind: job.kind || 'image',
+        video: job.kind === 'video',
+        prompt: job.prompt || '',
+        aspect: job.aspect || null,
+        model: job.model || '',
+        startedAt: job.startedAt || Date.now(),
+        sessionId: chat,
+        /* `restored` is what puts the card under the last message rather than
+           under the row being streamed -- there is no row being streamed here.
+           `watched` is what says this device does not own the job: it may not
+           write the result in, save the job, or stop it. */
+        restored: true,
+        watched: true,
+      }));
+    };
+    watchElsewhere();
+    const timer = setInterval(watchElsewhere, 4000);
+    return () => { stopped = true; clearInterval(timer); };
+  }, [currentSessionId, isStorageLoaded, drawing, isGenerating]);
+
+  /* The words of an answer another device is writing.
+   *
+   * The picture half of this is `watchElsewhere` above; this is the text. Same
+   * shape, and for the same reason: the bytes were always readable --
+   * `/api/chat/replay?follow=1` streams them to anyone, from any byte offset,
+   * and reconnects through a dropped connection -- but the id lived in the
+   * localStorage of the browser that started the turn. `/api/chat/live` is
+   * where a conversation's answer-in-progress can now be asked for.
+   *
+   * What comes out goes on screen and nowhere else. See `messages` above for
+   * why this device must not write it into the conversation.
+   */
+  useEffect(() => {
+    if (!isStorageLoaded || !currentSessionId || isGenerating) {
+      setFollowed(null);
+      return undefined;
+    }
+    const chat = String(currentSessionId);
+    const controller = new AbortController();
+    let stopped = false;
+    let reading = false;
+
+    const follow = async (id) => {
+      reading = true;
+      const reader = resumableChatReader(null, id, controller.signal);
+      const decoder = new TextDecoder();
+      let buffer = '', thinking = '', content = '', terminal = false;
+      /* The same two fields the writing device composes from: Ollama streams
+         reasoning separately, and an open <think> is what keeps the dropdown
+         spinning while the model is still in it. */
+      const compose = () => (thinking
+        ? (terminal || content
+          ? `<think>\n${decodeByteFallback(thinking)}\n</think>\n\n`
+          : `<think>\n${decodeByteFallback(thinking)}`)
+        : '') + decodeByteFallback(content);
+      try {
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (stopped) return;
+          buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+          const lines = buffer.split('\n');
+          buffer = done ? '' : lines.pop();
+          for (const line of lines) {
+            if (!line.trim()) continue;
+            let frame;
+            try { frame = JSON.parse(line); } catch { continue; }
+            thinking += frame.message?.thinking || '';
+            content += frame.message?.content || '';
+            if (frame.done) terminal = true;
+          }
+          /* `live` is what the composer's stop button reads: the words stay
+             on screen after the stream ends, but there is nothing left to
+             stop by then. */
+          setFollowed({ chat, id, content: compose(), live: !(done || terminal) });
+          if (done) break;
+        }
+      } catch (e) {
+        /* A stream that cannot be followed is not a failure worth reporting:
+           the answer still arrives here the ordinary way, by sync. */
+      } finally {
+        reading = false;
+        if (!stopped) setFollowed(previous => (previous && previous.id === id ? { ...previous, live: false } : previous));
+        /* What was heard is kept rather than cleared. The stored copy is
+           usually a moment behind at this point, and blanking the text back to
+           it would be a visible step backwards; `messages` hands over by
+           itself as soon as the real copy is at least as long. */
+      }
+    };
+
+    const look = async () => {
+      if (stopped || reading) return;
+      const answer = await fetchJsonQuietly(`/api/chat/live?chat=${encodeURIComponent(chat)}`).catch(() => null);
+      if (stopped || reading || !answer?.job?.id) return;
+      follow(answer.job.id);
+    };
+    look();
+    const timer = setInterval(look, 4000);
+    return () => { stopped = true; clearInterval(timer); controller.abort(); };
+  }, [currentSessionId, isStorageLoaded, isGenerating]);
+
+  /* "It is done" -- to somebody who is not looking at the screen.
+   *
+   * A picture is ninety seconds and a video several minutes, and the sensible
+   * thing to do with that time is go and do something else. Which is precisely
+   * what this app could not survive: switch tabs or lock the phone and the only
+   * way to learn whether the answer arrived was to come back and check.
+   *
+   * Two moments, because a turn can finish in two places now: here, and on
+   * another device this one is following. Both are the same piece of news.
+   * Nothing is said while the tab is in front -- the answer is already on
+   * screen, and notifying about that is how a feature earns its way into the
+   * list of things people switch off. See src/notify.js.
+   */
+  const lastTurnChatRef = useRef(null);
+  useEffect(() => { if (generatingSessionId) lastTurnChatRef.current = generatingSessionId; }, [generatingSessionId]);
+
+  const announceFinished = (sessionId) => {
+    if (!notifyWhenDone || !unattended()) return;
+    const chat = sessionsRef.current.find(session => String(session.id) === String(sessionId));
+    notify(t('notify.ready'), {
+      // The chat's name is the whole of the useful detail: it says which of
+      // several questions this is the answer to.
+      body: chat?.title || '',
+      // One piece of news per conversation. A batch of four pictures is one
+      // thing that finished, not four notifications to dismiss.
+      tag: `turn:${sessionId}`,
+      data: { url: '/', chat: String(sessionId ?? '') },
+    });
+  };
+
+  const wasFollowingRef = useRef(false);
+  useEffect(() => {
+    const live = !!followed?.live;
+    if (wasFollowingRef.current && !live && followed?.content) announceFinished(followed.chat);
+    wasFollowingRef.current = live;
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [followed?.live]);
+
+  /* Tapping the notification lands in the conversation it was about.
+   *
+   * The worker focuses whatever window is already open -- see
+   * `notificationclick` in public/sw.js -- and then says which chat it was, so
+   * the app can go there rather than leaving the reader on whichever one
+   * happened to be on screen when they walked away. */
+  useEffect(() => {
+    if (typeof navigator === 'undefined' || !navigator.serviceWorker) return undefined;
+    const onMessage = (event) => {
+      if (event.data?.type !== 'OPEN_CHAT' || !event.data.chat) return;
+      const found = sessionsRef.current.find(session => String(session.id) === String(event.data.chat));
+      if (found) setCurrentSessionId(found.id);
+    };
+    navigator.serviceWorker.addEventListener('message', onMessage);
+    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+  }, []);
+
   // How much of a generated picture is shown before someone chooses to see it.
   const safeLevel = useSafeguardLevel();
+
+  /* Whether a finished picture is checked for the parts image models get
+     wrong, and what happens when one is found. Chosen in the Studio, beside
+     the safeguard, and read here because pictures are drawn in both places.
+     The ref is for the tool code, which runs long after the render it was
+     created in -- see `withRetouch`. */
+  const [retouchMode, setRetouchModeState] = useState(() => getRetouchMode());
+  const retouchModeRef = useRef(retouchMode);
+  retouchModeRef.current = retouchMode;
 
   /** Stop a picture this conversation asked for -- in ComfyUI, not just here. */
   const stopDrawing = (id) => {
@@ -2421,6 +3092,8 @@ function App() {
   }, [profileScope]);
 
   const retryingRef = useRef(false);
+  // The held entry being retried, for the send that retries it -- see carryAttempt.
+  const retryOfRef = useRef(null);
   useEffect(() => {
     if (sendQueue.length === 0) return undefined;
 
@@ -2455,7 +3128,9 @@ function App() {
         setInput(due.text);
         setAttachments(due.attachments || []);
         // Cleared optimistically: `handleSend` re-queues on its own if this
-        // attempt fails too, and leaving it would duplicate the entry.
+        // attempt fails too, and leaving it would duplicate the entry. It
+        // re-queues it as *this* entry, attempts and all.
+        retryOfRef.current = { id: due.id, at: due.at, attempts: (due.attempts || 0) + 1 };
         setSendQueue(removeEntry(profileScope, due.id));
         await new Promise(r => setTimeout(r, 60));
         handleSendRef.current?.();
@@ -2478,6 +3153,101 @@ function App() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [sendQueue.length, profileScope]);
 
+  /* The same question again, on a clock.
+   *
+   * "Every morning, summarise today's news into this chat." Everything needed
+   * to answer that was already here -- the tools, the chat, the model -- and
+   * the only missing part was something to say *when*.
+   *
+   * It fires while this app is open, which on the machine running the models
+   * is most of the time, and a missed one is caught up on the next open if it
+   * is still roughly the right time of day. A browser closed all weekend does
+   * not answer anything on Saturday; a turn is assembled in the browser, and
+   * pretending otherwise would be the feature lying about what it does. See
+   * src/schedules.js, including why these belong to a device and do not sync.
+   */
+  const [schedules, setSchedules] = useState(() => loadSchedules(''));
+  const [scheduleDraft, setScheduleDraft] = useState({ prompt: '', every: 'day', at: '08:00' });
+  // The lists `__name__` chooses from, as typed; see src/wildcards.js.
+  const [wildcardLists, setWildcardLists] = useState(() => getSetting('wildcards') || '');
+
+  /* The account's schedules, which live on the server. Read when the account
+     changes and after every change made here; the server is the only copy. */
+  const [serverSchedules, setServerSchedules] = useState([]);
+  const refreshServerSchedules = async () => {
+    if (!accountId) { setServerSchedules([]); return; }
+    try {
+      const data = await api('/api/schedules');
+      setServerSchedules(data.schedules || []);
+    } catch (e) { /* the list stays as it was; the next change reads it again */ }
+  };
+  useEffect(() => { refreshServerSchedules(); /* eslint-disable-next-line react-hooks/exhaustive-deps */ }, [accountId]);
+
+  /* One set of three actions, whichever list is being shown. */
+  const scheduleActions = accountId ? {
+    add: async (fields) => {
+      try { await api('/api/schedules', { method: 'POST', body: fields }); }
+      catch (e) { toast(e.message, 'error', 6000); }
+      refreshServerSchedules();
+    },
+    toggle: async (id, enabled) => {
+      try { await api('/api/schedules/enabled', { method: 'POST', body: { id, enabled } }); } catch (e) { toast(e.message, 'error', 6000); }
+      refreshServerSchedules();
+    },
+    remove: async (id) => {
+      try { await api('/api/schedules/delete', { method: 'POST', body: { id } }); } catch (e) { toast(e.message, 'error', 6000); }
+      refreshServerSchedules();
+    },
+  } : {
+    add: (fields) => setSchedules(list => [...list, newSchedule(fields)]),
+    toggle: (id, enabled) => setSchedules(list => list.map(s => (s.id === id ? { ...s, enabled } : s))),
+    remove: (id) => setSchedules(list => list.filter(s => s.id !== id)),
+  };
+  const shownSchedules = accountId ? serverSchedules : schedules;
+  useEffect(() => { setSchedules(loadSchedules(profileScope)); }, [profileScope]);
+  useEffect(() => { saveSchedules(profileScope, schedules); }, [schedules, profileScope]);
+
+  const firingRef = useRef(false);
+  useEffect(() => {
+    /* A signed-in account's schedules are answered by the server, with or
+       without a browser open (see server/serverSchedules.js), so this runner is
+       the guest's alone. Left running for an account, anything still in this
+       browser's list would be answered twice. */
+    if (!isStorageLoaded || schedules.length === 0 || accountId) return undefined;
+    const tick = async () => {
+      // One turn at a time, and never over one somebody is in the middle of.
+      if (firingRef.current || isGeneratingRef.current) return;
+      const [due] = dueNow(schedules, Date.now());
+      if (!due) return;
+      const chat = sessionsRef.current.find(session => String(session.id) === String(due.chat));
+      if (!chat) {
+        // The conversation it was for is gone. A schedule pointing at nothing
+        // would try for ever, so it goes with it.
+        setSchedules(list => list.filter(s => s.id !== due.id));
+        return;
+      }
+      firingRef.current = true;
+      try {
+        /* Marked as run before it is run, so a failure is not retried every
+           thirty seconds for the rest of the day. */
+        setSchedules(list => noteRun(list, due.id));
+        setCurrentSessionId(chat.id);
+        setInput(due.prompt);
+        addLog(`[schedule] asking: ${due.prompt.slice(0, 60)}`, 'info');
+        // The same pause the retry queue takes: `handleSend` reads the composer
+        // from state, and the state has to have landed first.
+        await new Promise(r => setTimeout(r, 80));
+        handleSendRef.current?.();
+      } finally {
+        firingRef.current = false;
+      }
+    };
+    tick();
+    const timer = setInterval(tick, 30000);
+    return () => clearInterval(timer);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [schedules, isStorageLoaded]);
+
   /* Telling you the answer is here when you are not looking at the page.
    *
    * A local model on a laptop takes long enough that nobody watches it, and
@@ -2485,9 +3255,11 @@ function App() {
    * either. A browser tab has exactly one way to get attention without asking
    * permission first, and it is its own title.
    *
-   * Deliberately not a Notification: that needs a permission prompt, and a
-   * prompt on first use for something nobody asked for is how a site teaches
-   * people to click Block.
+   * The title mark is unconditional because it costs nothing and asks for
+   * nothing. A real notification is the opt-in half of the same news: it needs
+   * a permission prompt, and a prompt on first use for something nobody asked
+   * for is how a site teaches people to click Block -- so it is asked for when
+   * the setting is switched on, and never before. See src/notify.js.
    *
    * The mark is cleared when the tab is looked at again, not on a timer -- the
    * point is to survive until it has been seen.
@@ -2502,6 +3274,10 @@ function App() {
     unseenAnswerRef.current = true;
     document.title = `✅ ${BASE_PAGE_TITLE}`;
     haptic('medium');
+    // And out loud, for a reader who is not in this tab at all. Only when they
+    // have asked for it -- see `announceFinished` and src/notify.js.
+    announceFinished(lastTurnChatRef.current);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isGenerating]);
 
   useEffect(() => {
@@ -2519,6 +3295,46 @@ function App() {
   // this tab a reply is arriving", which is true in every chat and should
   // decorate only one.
   const isThisChatGenerating = isGenerating && generatingSessionId === currentSessionId;
+  /* The same turn, running on another of the reader's devices: a picture being
+     watched (`watchElsewhere`), words being followed (`followElsewhere`), or
+     both -- one turn can be both, since a generation blocks the answer it is
+     part of. Only ever in the conversation it belongs to. */
+  const remotePicture = drawing?.watched && String(drawing.sessionId) === String(currentSessionId)
+    ? drawing : null;
+  const remoteAnswer = followed?.live && followed.chat === String(currentSessionId) ? followed : null;
+  const remoteTurnHere = !isGenerating && !!(remotePicture || remoteAnswer);
+
+  /**
+   * Stop a turn that is running somewhere else.
+   *
+   * Both halves, because a picture in a conversation is part of an answer:
+   * stopping the words and leaving ComfyUI drawing would hold the card for
+   * minutes for a picture nobody will see, and stopping the picture alone
+   * leaves the model writing about one it is not going to get.
+   *
+   * It is the *server* that is told, both times, which is what makes this work
+   * from a device that owns neither: the generation belongs to the machine
+   * running it, and both of these are how that machine finds out it has been
+   * stopped -- the chat stream ends with an error frame, and ComfyUI's job
+   * leaves the queue.
+   */
+  const stopElsewhere = (e) => {
+    if (e) e.preventDefault();
+    if (remoteAnswer) {
+      fetch('/api/chat/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id: remoteAnswer.id }),
+        keepalive: true,
+      }).catch(() => {});
+      setFollowed(previous => (previous ? { ...previous, live: false } : previous));
+    }
+    if (remotePicture) {
+      stopDrawing(remotePicture.id);
+      setDrawing(null);
+    }
+    addLog('Stopped a generation running on another device.', 'info');
+  };
 
   // Read from the `finally` at the end of a turn, which runs long after the
   // closure it lives in was created -- the whole point being that the chat on
@@ -2623,7 +3439,10 @@ function App() {
   const attachPicture = async (item) => {
     if (item.source === 'studio') return attachGeneratedImage(item.job);
     try {
-      const dataUrl = item.full || item.dataUrl;
+      // An attachment is the one place the bytes are really wanted: the model
+      // is sent base64, not a link it cannot follow. A generated picture is
+      // held by address, so this may have to go and fetch it.
+      const dataUrl = await asDataUrl(item.full || item.dataUrl);
       setAttachments(prev => [...prev, {
         name: item.filename || `picture-${Date.now()}.png`,
         type: 'image',
@@ -2671,6 +3490,30 @@ function App() {
     }
   };
 
+  /**
+   * A drawing that produced nothing, asked for again.
+   *
+   * The call is still in the answer -- its prompt, its style, what it was told
+   * not to draw -- so the way back is not to type the request a second time.
+   * It goes through `runPictureAction` like "again" on a finished picture
+   * does, so it is written into the conversation as the drawing it is rather
+   * than happening privately.
+   *
+   * Only the plain draw is offered. An edit or an upscale is *of* a picture,
+   * and the picture it was of is the thing that is not there.
+   */
+  const retryDrawing = (block) => {
+    const prompt = String(block?.content || '').trim();
+    if (!prompt) return;
+    const style = (block.attrs?.style || 'photo').toLowerCase();
+    const negative = block.attrs?.negative || '';
+    return runPictureAction({
+      request: t('picture.req.retry'),
+      call: `<TOOL_GENERATE_IMAGE style="${style}" negative="${tagText(negative)}">${tagText(prompt)}</TOOL_GENERATE_IMAGE>`,
+      work: (signal) => generateImages(1, prompt, style, negative, null, signal, {}),
+    });
+  };
+
   const pictureAction = (kind, picture) => {
     if (!picture?.dataUrl) return;
     if (kind === 'download') return downloadPicture(picture);
@@ -2693,11 +3536,54 @@ function App() {
         work: (signal) => generateImages(1, picture.prompt || '', style, negative, null, signal, { shapeFrom: picture.dataUrl }),
       });
     }
+    /* The offer taken up. Written into the transcript as the region edit it
+       is, rather than a private extra step, so the chat says what was done to
+       the picture and "다시" afterwards means something. */
+    if (kind === 'retouch') {
+      const region = picture.retouchOffer?.region || '';
+      const parts = region.split(',').map(word => ({ region: word.trim() })).filter(part => part.region);
+      if (!parts.length) return;
+      const plan = { region, problem: picture.retouchOffer?.problem || '', parts };
+      const style = pictureStyle(picture);
+      const negative = picture.negative || '';
+      return runPictureAction({
+        request: t('picture.req.retouch', { region: regionLabel(region, t) }),
+        call: `<TOOL_GENERATE_IMAGE from="last_image" region="${tagText(region)}" `
+          + `change="${RETOUCH_DENOISE}" style="${style}">${tagText(retouchPrompt(plan))}</TOOL_GENERATE_IMAGE>`,
+        work: async (signal) => [{
+          ...(await retouchPicture(picture, plan, style, negative, signal)),
+          retouch: { region, problem: plan.problem, showing: 'after', other: picture },
+        }],
+      });
+    }
+    /* Sending a picture to somebody.
+     *
+     * Two routes, and which one is right is not a preference -- it is what
+     * the device can do. On a phone the share sheet is one tap and the
+     * picture lands in the other app as a picture; on a desktop, and on any
+     * plain-http origin, `navigator.share` does not exist at all, so the
+     * answer there is a link anybody can open. The sheet is tried first and
+     * the link is what "unsupported" means, rather than the reader having to
+     * know which of the two their browser is. */
+    if (kind === 'share') {
+      return sharePictureOut(picture);
+    }
     if (kind === 'rmbg') {
       return runPictureAction({
         request: t('picture.req.rmbg'),
         call: '<TOOL_REMOVE_BACKGROUND></TOOL_REMOVE_BACKGROUND>',
         work: async (signal) => [await runPictureOp('rmbg', picture, { signal })],
+      });
+    }
+    /* The shading lifted out. Not a redraw: no sampler runs, so it is seconds
+       and the picture is otherwise untouched. See `removeShadowGraph` for what
+       it can and cannot do -- nothing here removes a real shadow, because
+       what a real shadow covers was never drawn. */
+    if (kind === 'deshadow') {
+      return runPictureAction({
+        request: t('picture.req.deshadow'),
+        call: '<TOOL_REMOVE_SHADOW></TOOL_REMOVE_SHADOW>',
+        work: async (signal) => [await runPictureOp('deshadow', picture, { signal })],
       });
     }
     if (kind === 'upscale') {
@@ -2877,6 +3763,31 @@ function App() {
     return () => query.removeEventListener('change', onChange);
   }, []);
 
+  /* Whether the message toolbar is revealed by tapping rather than by hovering.
+   *
+   * A wider question than `isTouchUi`, and it has to be: `hover: none` is not
+   * true of every device held in a hand. Android with "desktop site" on, a
+   * tablet with a trackpad, a touchscreen laptop -- all report a pointer, and
+   * on those the hover toolbar came back at 390px, where seven buttons do not
+   * fit and the bar hangs 36px below a message with nothing below it.
+   *
+   * The exact same condition is in the stylesheet (see "Message actions where
+   * there is no pointer" in extras.css). They must agree: the CSS decides
+   * whether the bar is `display: none` until `.actions-open`, and this decides
+   * whether anything ever adds that class. Disagreeing in one direction gives
+   * a toolbar nothing can open; in the other, one nothing can close. */
+  const [isTapUi, setIsTapUi] = useState(
+    () => typeof window !== 'undefined'
+      && window.matchMedia?.('(hover: none), (max-width: 640px)').matches === true
+  );
+  useEffect(() => {
+    const query = window.matchMedia?.('(hover: none), (max-width: 640px)');
+    if (!query) return undefined;
+    const onChange = e => setIsTapUi(e.matches);
+    query.addEventListener('change', onChange);
+    return () => query.removeEventListener('change', onChange);
+  }, []);
+
   // --- The drawer, by swipe ---
   //
   // Attached to `document` rather than to the app element so a swipe that
@@ -2912,7 +3823,7 @@ function App() {
   const IGNORE_TAP = 'button, a, input, textarea, select, label, .msg-hover-actions, .code-container, .artifact-card, pre';
 
   const toggleMessageActions = (event, index) => {
-    if (!isTouchUi) return;
+    if (!isTapUi) return;
     if (event.target.closest(IGNORE_TAP)) return;
     if ((window.getSelection?.().toString() || '').length > 0) return;
     setOpenActionsIndex(prev => (prev === index ? null : index));
@@ -3247,17 +4158,39 @@ function App() {
    * sends the tombstone again. Losing data does not self-correct. Keeping it
    * does.
    */
-  const persistSessions = async (list) => {
+  const persistChainRef = useRef(Promise.resolve());
+  const persistSessions = (list) => {
+    const key = storageKeyRef.current;
+    const removed = new Set(removedIdsRef.current);
+    const save = async () => {
     // Drafts are filtered here rather than at every call site, because this
     // is the one door to storage -- and `collectLocal` in syncEngine.js
     // reads that same key, so keeping them out of storage keeps them off
     // the account as well.
-    list = persistable(list);
-    const key = storageKeyRef.current;
+    /* And pictures go in by address, not by value.
+     *
+     * This is the reason a tab that had been open all day got slow, and the
+     * reason it got slower the more pictures had been made in it. A generated
+     * picture was kept in the message as a data URL -- the whole PNG, base64,
+     * around eleven megabytes of string each. This function runs every 400 to
+     * 800 milliseconds for the whole of every reply (see the save timer), and
+     * it reads the entire store, merges it, and writes the entire store back.
+     * Ten pictures made that a hundred and ten megabytes read and a hundred
+     * and ten written, twice a second, through IndexedDB's structured clone,
+     * on the main thread -- for an edit of one message.
+     *
+     * The bytes never needed to be here. They are on the machine serving this
+     * app, which is where `/studio/view` gets them, and that is already how
+     * the Studio's gallery works and how a chat picture reaches another device
+     * (see `withoutPictureBytes`, which this borrows). What is in the store
+     * afterwards is the address, and an `<img src>` cannot tell the two apart.
+     *
+     * A picture the reader attached is left alone: it has no copy anywhere
+     * else, and its own bytes are all there is. */
+    list = persistable(list).map(withoutPictureBytes);
     let stored = [];
     try { stored = (await localforage.getItem(key)) || []; } catch (e) { stored = []; }
 
-    const removed = removedIdsRef.current;
     const merged = new Map();
     for (const chat of stored) {
       if (chat?.id == null || removed.has(String(chat.id))) continue;
@@ -3275,6 +4208,7 @@ function App() {
       await localforage.setItem(key, next);
     } catch (e) {
       console.warn('Failed to save sessions to localforage.', e);
+      return null;
     }
 
     // The upload reads *storage*, not React state -- `collectLocal` in
@@ -3300,6 +4234,10 @@ function App() {
     // of the very thing that just arrived.
     if (chatsSignature(stored) !== chatsSignature(next)) syncRef.current?.schedule();
     return next;
+    };
+    const pending = persistChainRef.current.catch(() => {}).then(save);
+    persistChainRef.current = pending;
+    return pending;
   };
 
   // Save when the chat has been quiet for SAVE_DELAY_MS -- or, whatever
@@ -3776,15 +4714,41 @@ function App() {
     addLog(`Branched a new chat from message #${index + 1}`, 'success');
   };
 
-  const exportSessionMarkdown = (session) => {
+  /**
+   * A chat with its pictures' bytes in hand, for an export that has to stand
+   * alone.
+   *
+   * Pictures live in the chat by address -- the bytes are on the machine
+   * serving this app, and keeping copies of them in storage is what made a
+   * long-lived tab slow. An export is the one case where that is not enough:
+   * a `.html` or `.md` file is opened somewhere else, long after, possibly on
+   * a machine that has never heard of this server, so the bytes have to be
+   * fetched back and embedded. A picture that cannot be fetched is left as it
+   * is, and the export's own filter drops it -- which is what it did before.
+   */
+  const sessionWithPictures = async (session) => {
+    const messages = await Promise.all((session?.messages || []).map(async (message) => {
+      if (!Array.isArray(message?.generated) || !message.generated.length) return message;
+      const generated = await Promise.all(message.generated.map(async (picture) => {
+        const url = String(picture?.dataUrl || '');
+        if (!url || url.startsWith('data:')) return picture;
+        const bytes = await asDataUrl(url).catch(() => '');
+        return bytes ? { ...picture, dataUrl: bytes } : picture;
+      }));
+      return { ...message, generated };
+    }));
+    return { ...session, messages };
+  };
+
+  const exportSessionMarkdown = async (session) => {
     const target = session || currentSession;
     if (!target) return;
-    downloadBlob(`${slugify(target.title)}.md`, sessionToMarkdown(target), 'text/markdown;charset=utf-8');
+    downloadBlob(`${slugify(target.title)}.md`, sessionToMarkdown(await sessionWithPictures(target)), 'text/markdown;charset=utf-8');
     addLog(`Exported "${target.title}" as Markdown.`, 'success');
   };
 
-  const exportAllMarkdown = () => {
-    const body = sessions
+  const exportAllMarkdown = async () => {
+    const body = (await Promise.all(sessions.map(sessionWithPictures)))
       .map(sessionToMarkdown)
       .join('\n\n---\n\n');
     const date = new Date().toISOString().split('T')[0];
@@ -3855,7 +4819,7 @@ function App() {
 
     let descriptor = null;
     try {
-      const data = await fetch('/studio/models', { signal }).then(r => r.json());
+      const data = await fetchJson('/studio/models', { signal }, 'The picture server');
       descriptor = (data?.models || []).find(m => m.id === modelId) || null;
     } catch (e) { /* offline; fall through to the defaults */ }
     if (!descriptor) return {};
@@ -3863,8 +4827,31 @@ function App() {
     const form = restoreForm(descriptor, saved);
     const loras = (form.loras || []).filter(l => l.name);
     return {
-      // Not the prompt, and not the negative: this request has its own, and the
-      // one sitting in the Studio belongs to whatever was being made there.
+      /* Not the subject, and not the negative: this request has its own, and
+         the subject sitting in the Studio belongs to whatever was being made
+         there.
+       *
+       * The three boxes around the subject are a different matter. They are
+       * not about any one picture -- they are the quality tags this install
+       * puts in front of everything, the artists whose style it draws in, and
+       * the modifiers it puts behind. Leaving them out meant the same request
+       * made in the two places produced two different-looking pictures, and
+       * the chat one always looked like the plainer install. See `promptParts`. */
+      parts: {
+        lead: (form.lead || '').trim(),
+        artist: (form.artist || '').trim(),
+        tail: (form.tail || '').trim(),
+        /* The artists go into the prompt, whatever else happens to them.
+         *
+         * They used to be folded in only where the workflow had nowhere better
+         * to put them -- so on Anima, which has an encoder of its own, the
+         * prompt never mentioned the artist at all and neither did the settings
+         * recorded beside the picture. They are still handed to that encoder
+         * as well; this is about the prompt saying what it was drawn like. */
+        foldArtist: true,
+        // And whether the workflow also has an encoder to send them to.
+        hasArtistInput: !!descriptor.has?.artist,
+      },
       size: `${form.width}x${form.height}`,
       steps: form.steps,
       cfg: form.cfg,
@@ -3882,6 +4869,22 @@ function App() {
   };
 
   const drawingLive = useJobStream(drawing?.id || null);
+
+  /* Who this install has been taught to draw.
+   *
+   * Kept in state rather than read when needed, because it is written into the
+   * system message of every turn -- see `characterGuide`. Re-read when the
+   * Studio's lists change, which is what a finished training run and an
+   * arriving sync both announce. */
+  const [characters, setCharacters] = useState([]);
+  useEffect(() => {
+    const look = () => setCharacters(loadCharacters(profileScopeRef.current));
+    look();
+    window.addEventListener('webui:studio-synced', look);
+    return () => window.removeEventListener('webui:studio-synced', look);
+  }, [profileScope]);
+  const charactersRef = useRef(characters);
+  charactersRef.current = characters;
 
   /**
    * Which workflow draws a picture asked for in conversation.
@@ -3910,18 +4913,38 @@ function App() {
     const blob = source instanceof Blob ? source : await (await fetch(source)).blob();
     const form = new FormData();
     form.append('image', blob, name);
-    const up = await fetch('/studio/upload', { method: 'POST', body: form, signal }).then(r => r.json());
+    const up = await postJson('/studio/upload', { method: 'POST', body: form, signal });
     if (!up?.success) throw new Error(up?.error || 'the picture could not be uploaded');
     return up.name;
   };
 
-  /** A finished output's bytes, as a data URL the message can keep. */
-  const outputAsDataUrl = async (url, signal) => {
-    const blob = await fetch(url, { signal }).then(r => {
-      if (!r.ok) throw new Error(`could not read the result (HTTP ${r.status})`);
-      return r.blob();
-    });
-    return blobToDataUrl(blob);
+  /**
+   * A finished output, as something the message can keep and an `<img>` can
+   * show: its address, checked to be readable.
+   *
+   * It used to be the bytes, as a data URL. That is around eleven megabytes of
+   * base64 for one of these pictures, and it was kept three times over -- in
+   * the message, in browser storage, and in the decoded bitmap on screen --
+   * which is why a tab left open while the models ran all day got slower the
+   * longer it stayed open. Storage stopped holding them (see
+   * `persistSessions`), and this is the other half: the tab stops holding them
+   * either. The file is on the machine serving this app, `/studio/view` is how
+   * everything else already reaches it, and an `<img src>` cannot tell an
+   * address from a data URL. Anything that genuinely needs the bytes -- a
+   * vision model, a PNG's own metadata, an export that has to open on another
+   * machine -- fetches them back with `asDataUrl`.
+   *
+   * The check is a GET, because that route is a proxy and answers nothing
+   * else, and the body is cancelled the moment the headers say the file is
+   * there. It is here so a result that cannot be read is reported as the
+   * failure it is, at the point it happened, rather than appearing later as a
+   * broken picture in the transcript with nothing to say why.
+   */
+  const outputAddress = async (url, signal) => {
+    const res = await fetch(url, { signal });
+    if (!res.ok) throw new Error(`could not read the result (HTTP ${res.status})`);
+    try { await res.body?.cancel(); } catch (e) { /* already drained */ }
+    return url;
   };
 
   /**
@@ -3943,13 +4966,20 @@ function App() {
   } = {}) => {
     const deadline = Date.now() + deadlineMs;
     let finished = null;
-    setDrawing({ id, video, prompt, kind, aspect, source, batch });
+    const progress = { id, video, prompt, kind, aspect, source, batch,
+      startedAt: Date.now(), sessionId: currentSessionId };
+    setDrawing(progress);
+    // Persist before the next render. A mobile refresh immediately after the
+    // queue response must not race React's state/effect commit and lose the
+    // only record that connects the conversation to ComfyUI's job id.
+    try {
+      localStorage.setItem(drawingStorageKey, JSON.stringify(progress));
+    } catch (e) { /* storage is best effort; polling still owns the job */ }
     try {
       while (Date.now() < deadline) {
         if (signal?.aborted) throw new Error('stopped');
         await new Promise(r => setTimeout(r, every));
-        const state = await fetch(`/studio/job?id=${encodeURIComponent(id)}`, { signal })
-          .then(r => r.json())
+        const state = await fetchJsonQuietly(`/studio/job?id=${encodeURIComponent(id)}`, { signal })
           .catch(() => null);
         if (state?.state === 'failed') throw new Error(state.error || 'the job failed');
         /* How many are in front of it. ComfyUI runs one prompt at a time, so a
@@ -3959,18 +4989,28 @@ function App() {
         if (typeof state?.ahead === 'number') {
           setDrawing(d => (d && d.ahead !== state.ahead ? { ...d, ahead: state.ahead } : d));
         }
+        /* And whether it has started, by ComfyUI's own queue. The card takes the
+           progress stream's word otherwise, and a stream that has heard nothing
+           said "queued" for a picture ComfyUI was drawing. */
+        if (state?.state === 'running' || state?.state === 'queued') {
+          setDrawing(d => (d && d.polled !== state.state ? { ...d, polled: state.state } : d));
+        }
         if (state?.state === 'done' && (state.outputs?.length || state.texts?.length)) { finished = state; break; }
       }
     } finally {
       // On the way out through a throw as well: a progress bar still on screen
       // after the thing it was measuring gave up is worse than no bar at all.
       setDrawing(null);
+      try { localStorage.removeItem(drawingStorageKey); } catch (e) { /* best effort */ }
       /* And ComfyUI is told. Stop used to stop only the *watching*: the prompt
          stayed queued and the GPU carried on for minutes on a picture nobody
          would see. The Studio's cancel takes it out of the queue or interrupts
          it. Without the signal: it is the thing that has just been aborted, and
          passing it would cancel the cancel. */
-      if (!finished) stopDrawing(id);
+      // A page reload can tear down the watcher without meaning "cancel".
+      // Only an explicit abort should remove the ComfyUI job; otherwise the
+      // restored watcher must be able to pick it up after the reload.
+      if (!finished && signal?.aborted) stopDrawing(id);
     }
     if (!finished) throw new Error('the job did not finish in time');
     return finished;
@@ -3998,7 +5038,22 @@ function App() {
    */
   const generateOneImage = async (prompt, style = 'photo', negative = '', edit = null, signal, opts = {}) => {
     const model = chatImageModel(style);
-    const settings = await studioSettingsFor(model, signal);
+    const { parts: saved, ...settings } = await studioSettingsFor(model, signal);
+    /* The Studio's three standing boxes, unless this request asked to go
+       without them. `opts.plain` is only ever set from a tool call where the
+       reader said so -- see `studio_prompt` in src/tools.js. */
+    const parts = opts.plain ? null : saved;
+
+    /* The model's subject, inside the Studio's prompt.
+     *
+     * `joinPrompt` is the same function the Studio's own generate button uses,
+     * so the two produce the same string from the same boxes -- which is the
+     * whole point: a prompt assembled a second way here would drift from the
+     * one people are looking at while they tune it. */
+    const framed = parts
+      ? joinPrompt({ lead: parts.lead, artist: parts.artist, prompt, tail: parts.tail },
+        { foldArtist: parts.foldArtist })
+      : prompt;
 
     /* The shape, in order of who has the say:
      *
@@ -4038,25 +5093,54 @@ function App() {
     const pinnedSeed = Number.isFinite(Number(opts.seed)) ? Number(opts.seed)
       : (referenceImage && edit.seedModel === model && Number.isFinite(Number(edit.seed)) ? Number(edit.seed) : undefined);
 
-    const queued = await fetch('/studio/generate', {
+    const queued = await postJson('/studio/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         ...settings,
+        /* A stack for this request alone, over the Studio's.
+           Only the character swap sends one: it is the one thing in the chat
+           that is *about* which LoRA is loaded, and inheriting the Studio's
+           would put the wrong person in the picture. */
+        ...(opts.loras ? { loras: opts.loras } : {}),
+        // And to the encoder as well, where the workflow has one. They are in
+        // `framed` either way now.
+        ...(parts && parts.hasArtistInput && parts.artist ? { artist: parts.artist } : {}),
         model,
-        prompt,
+        prompt: framed,
+        /* And the framing, separately, for the one path that rewrites the
+           prompt. See `shapeTags` below: Anima wants a chat prompt as tags and
+           a sentence, and reshaping the *whole* string moved the Studio's lead
+           to the end as prose. Only the subject is written by a model; the
+           boxes around it were typed on purpose and keep their places. */
+        ...(parts && parts.lead ? { lead: parts.lead } : {}),
+        ...(parts && parts.tail ? { tail: parts.tail } : {}),
+        ...(parts ? { subject: prompt } : {}),
         ...(negative ? { negative } : {}),
         ...(referenceImage ? { referenceImage, denoise: edit.change } : {}),
         // Only that part redrawn; see `applyRegionEdit` on the server.
         ...(referenceImage && edit.region && !maskImage ? { region: edit.region } : {}),
         ...(maskImage ? { maskImage, maskGrow: Number(opts.maskGrow) || 0 } : {}),
+        /* How hard the inpainting guide pulls and how far the mask is widened,
+           where the reader has moved either. Nothing at all where they have
+           not -- see `inpaintFields`. Sent for a whole-picture edit too, where
+           the server has nothing to apply them to and ignores them, rather
+           than making this line know what makes an edit a region edit. */
+        ...(referenceImage ? inpaintFields() : {}),
         ...(size ? { size: `${size.width}x${size.height}` } : {}),
         ...(pinnedSeed !== undefined ? { seed: pinnedSeed } : {}),
         // Anima reads tags and a sentence; the server rearranges the prompt into both.
         ...(model === 'anima-base' ? { shapeTags: true } : {}),
+        // The named lists `__poses__` draws from, chosen per picture on the
+        // server; see src/wildcards.js.
+        wildcards: getSetting('wildcards') || '',
+        /* Which conversation it is being drawn for. The server writes it down
+           so the reader's *other* devices can find the job and watch it -- see
+           `/studio/live`, and `watchElsewhere` above for this end of it. */
+        ...(currentSessionId ? { chat: String(currentSessionId) } : {}),
       }),
       signal,
-    }).then(r => r.json());
+    });
     if (!queued?.success) throw new Error(queued?.error || 'the generator refused the job');
     // Said, rather than an edit quietly becoming a redraw of everything.
     for (const warning of queued.warnings || []) addLog(`[studio] ${warning}`, 'warning');
@@ -4073,12 +5157,27 @@ function App() {
       batch: opts.batch || null,
     });
     const output = finalOutput(state.outputs);
-    const dataUrl = await outputAsDataUrl(output.url, signal);
+    const dataUrl = await outputAddress(output.url, signal);
     // The prompt it was actually drawn from, which for Anima is the shaped one,
     // and everything else it was drawn with -- see readSettings on the server.
     return {
-      dataUrl, filename: output.filename, seed: queued.seed, model, prompt: queued.prompt || prompt, style, negative,
+      dataUrl,
+      filename: output.filename,
+      /* Where these bytes live on the machine that made them. Kept so the
+         picture can be uploaded by address rather than by value -- a base64
+         PNG is past the size a single sync record may be, which is why a
+         conversation with a picture in it used to reach no other device at
+         all. See `withoutPictureBytes` in src/syncEngine.js. */
+      url: output.url,
+      seed: queued.seed, model, prompt: queued.prompt || prompt, style, negative,
       ...(queued.settings ? { settings: queued.settings } : {}),
+      // What the tag list corrected before drawing; shown in the settings.
+      ...(queued.corrections?.length ? { corrections: queued.corrections } : {}),
+      /* What an edit started from, so it can be laid against it -- the picture
+         by name and the copy ComfyUI worked from, not the bytes a second time.
+         See `beforeUrlOf`. Not for an extension: its original is a different
+         shape from the result, and a bar across the two lines nothing up. */
+      ...(referenceImage && !edit.blob ? { before: { filename: edit.filename || '', input: referenceImage } } : {}),
     };
   };
 
@@ -4105,15 +5204,26 @@ function App() {
    * Something done to a picture: `rmbg`, `upscale`, or `tag`. Returns the new
    * picture, or for `tag` the tags as one comma-separated string.
    */
-  const runPictureOp = async (op, picture, { factor, signal } = {}) => {
+  const runPictureOp = async (op, picture, { factor, strength, signal } = {}) => {
     const image = await uploadToComfy(picture.dataUrl, `${op}-${Date.now()}.png`, signal);
     const size = op === 'upscale' ? await pictureSize(picture.dataUrl).catch(() => null) : null;
-    const res = await fetch('/studio/op', {
+    const res = await postJson('/studio/op', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ op, image, ...(factor ? { factor } : {}), ...(size || {}), requestId: `${op}-${Date.now()}` }),
+      body: JSON.stringify({
+        op,
+        image,
+        ...(factor ? { factor } : {}),
+        // How far to lift the shadows; only `deshadow` reads it.
+        ...(strength !== undefined ? { strength } : {}),
+        ...(size || {}),
+        requestId: `${op}-${Date.now()}`,
+        // As above: an edit blocks the answer as long as a drawing does.
+        ...(currentSessionId ? { chat: String(currentSessionId) } : {}),
+        ...(picture.prompt ? { prompt: picture.prompt } : {}),
+      }),
       signal,
-    }).then(r => r.json());
+    });
     if (!res?.success) throw new Error(res?.error || 'ComfyUI refused the job');
     if (res.unloaded?.length) addLog(`[vram] unloaded ${res.unloaded.join(', ')} for ${op}`, 'info');
 
@@ -4124,12 +5234,261 @@ function App() {
     if (op === 'tag') return { tags: (state.texts || []).join(', ') };
     const output = finalOutput(state.outputs);
     return {
-      dataUrl: await outputAsDataUrl(output.url, signal),
+      dataUrl: await outputAddress(output.url, signal),
       filename: output.filename,
+      // See `generateOneImage`: the address, so the bytes need not be synced.
+      url: output.url,
       prompt: picture.prompt || '',
       op,
       ...(res.factor ? { factor: res.factor } : {}),
+      // An upscale is judged against the picture it enlarged. See `beforeUrlOf`.
+      ...(op === 'upscale' ? { before: { filename: picture.filename || '', input: image } } : {}),
     };
+  };
+
+  /* ------------------------------------------ checking what was drawn
+
+     A picture can be right in every way that was asked for and still have a
+     hand with six fingers on it. Redrawing the whole thing loses everything
+     that worked; what is wanted is the two hundred pixels that are wrong.
+
+     So the finished picture is shown to a model that can see it, and if that
+     model names a part -- from a fixed list of nouns, see src/retouch.js --
+     that part is found by SAM3 and redrawn inside its own mask, guided by the
+     inpainting LLLite. Which is the region edit that already exists; the only
+     new thing here is who decides where the region is. */
+
+  /** The model to ask about a picture: the one answering, if it sees, else the vision one. */
+  const pickInspector = (active) => inspector({
+    active,
+    activeSees: modelSupportsVision(active),
+    vision: selectedVisionModel,
+    visionSees: modelSupportsVision(selectedVisionModel),
+  });
+
+  /**
+   * What a vision model makes of a finished picture.
+   *
+   * Never throws and never reports a fault it is unsure of: a check that fails
+   * has to leave the picture exactly as it was. An unreachable model, a
+   * refusal, an answer in prose -- all of them mean "nothing to do", because
+   * the expensive mistake is redrawing a hand that was fine.
+   */
+  const inspectPicture = async (picture, model, signal) => {
+    if (!model || !picture?.dataUrl) return { ok: true };
+    // Fetched when the picture is held by address, which is how a chat that
+    // has been reloaded or synced from another device holds all of them.
+    const base64 = await asBase64(picture.dataUrl).catch(() => '');
+    if (!base64) return { ok: true };
+    try {
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: INSPECT_PROMPT, images: [base64] }],
+          stream: false,
+          // Without this a reasoning model spends its whole budget deciding
+          // whether a hand is stylised and answers with nothing at all.
+          think: false,
+          // Nothing creative about this answer. A long one is a model talking
+          // itself into finding a fault, which is the failure that costs a
+          // generation.
+          options: helperOptions({ temperature: 0, num_predict: 200 }),
+        }),
+        signal,
+      });
+      if (!res.ok) return { ok: true };
+      const data = await res.json();
+      return readVerdict(data?.message?.content || '');
+    } catch (e) {
+      return { ok: true };
+    }
+  };
+
+  /**
+   * Whoever is in this picture, redrawn as somebody else.
+   *
+   * Not a new picture and not a retouch. The region edit already here finds
+   * the person with SAM3, grows the mask past their outline and redraws only
+   * that -- so the clothes they are not wearing, the room they are in and the
+   * way the shot is framed all survive, and the likeness does not. What makes
+   * it a *swap* rather than a redraw is the pair of changes in `swapRequest`:
+   * the new character's LoRA is loaded for this one job, and their trigger
+   * replaces the old one in the prompt.
+   *
+   * Written into the transcript as the edit it is, like the retouch beside it,
+   * so the conversation says what happened to the picture.
+   */
+  const swapCharacter = (picture, into, style = '') => {
+    /* Who is in it now. A trained character is known from the LoRA the picture
+       recorded; one that was only ever danbooru tags left no trace in the
+       settings, so `swapTags` carries what the last swap put in -- without it
+       the old character's tags stay in the prompt and the redraw is a blend of
+       the two. */
+    const was = characterOf(loadCharacters(profileScopeRef.current), picture.settings);
+    const plan = swapRequest({
+      picture,
+      into,
+      from: was ? { trigger: was.trigger, character: was } : { tags: picture.swapTags || '' },
+      style,
+    });
+    if (!plan) return undefined;
+    const negative = picture.negative || '';
+    return runPictureAction({
+      request: t('picture.req.swap', { name: into.name }),
+      call: `<TOOL_GENERATE_IMAGE from="last_image" region="${tagText(plan.region)}" `
+        + `change="${plan.denoise}" style="${pictureStyle(picture)}">${tagText(plan.prompt)}</TOOL_GENERATE_IMAGE>`,
+      work: async (signal) => (await generateImages(1, plan.prompt, pictureStyle(picture), negative, {
+        dataUrl: picture.dataUrl,
+        filename: picture.filename || '',
+        change: plan.denoise,
+        region: plan.region,
+        // No seed: a different character drawn from the same seed is the same
+        // face with different hair, which is not what was asked for.
+      }, signal, { loras: plan.loras }))
+        // What went in, so a second swap can take it out again.
+        .map(made => ({ ...made, ...(into.kind === 'tags' ? { swapTags: into.tags } : {}) })),
+    });
+  };
+
+  /** The part a plan names, redrawn inside its own mask. See applyRegionEdit on the server. */
+  const retouchPicture = (picture, plan, style, negative, signal) => generateOneImage(
+    // The part as it should have been drawn, and nothing else: whatever this
+    // names is drawn *inside the mask*. See retouchPrompt.
+    retouchPrompt(plan), style, negative,
+    {
+      dataUrl: picture.dataUrl,
+      filename: picture.filename || '',
+      change: RETOUCH_DENOISE,
+      region: plan.region,
+      // No seed. The same seed is the same mistake; a hand has to be drawn again.
+    },
+    signal,
+  );
+
+  /**
+   * A picture, checked -- and redrawn where the mode says to redraw it.
+   *
+   * Returns what should be shown: the picture untouched, the picture with an
+   * offer on it, or the redrawn one carrying the original beside it so the
+   * reader can keep whichever is better. A redraw that fails is an offer, not
+   * a failure: the check was still right about the hand.
+   */
+  const withRetouch = async (picture, { style, negative, model, signal }) => {
+    const mode = retouchModeRef.current;
+    if (mode === 'off' || !picture?.dataUrl || picture.video) return picture;
+    const plan = retouchPlan(await inspectPicture(picture, model, signal));
+    if (!plan) return picture;
+    addLog(`[retouch] ${plan.region}: ${plan.problem || t('retouch.unnatural')}`, 'info');
+    const offer = { region: plan.region, problem: plan.problem };
+    if (mode === 'suggest') return { ...picture, retouchOffer: offer };
+    try {
+      const fixed = await retouchPicture(picture, plan, style, negative, signal);
+      return { ...fixed, retouch: { ...offer, showing: 'after', other: picture } };
+    } catch (e) {
+      addLog(`[retouch] ${t('picture.failed', { error: e.message })}`, 'warning');
+      return { ...picture, retouchOffer: offer };
+    }
+  };
+
+  /**
+   * A picture, sent somewhere else: the share sheet, or failing that a link.
+   *
+   * The link is published rather than assembled, because "anyone with this can
+   * see the picture" has to be something the owner can take back. It names the
+   * file rather than copying it -- see `createShare` on the server -- so
+   * revoking it stops the bytes too, not merely the page around them.
+   */
+  const sharePictureOut = async (picture) => {
+    if (!picture?.dataUrl) return;
+    const name = picture.filename || (picture.video ? 'video.mp4' : 'picture.png');
+    const sheet = await sharePicture({
+      url: picture.full || picture.dataUrl,
+      filename: name,
+      text: picture.prompt || '',
+    });
+    if (sheet === 'shared' || sheet === 'cancelled') return;
+    if (sheet === 'failed') { toast(t('picture.shareFailed'), 'error', 6000); return; }
+
+    /* The phone has a share sheet and is not allowed to use it, because the
+       page arrived over plain HTTP and `navigator.share` wants a secure
+       context. A link is the wrong answer to that: what was asked for is the
+       picture, in KakaoTalk, and a link arrives there as a line of text.
+       Saving it does arrive as the picture -- it lands in the gallery, and
+       sharing from the gallery is two taps. */
+    if (whyNoSheet() === 'insecure') {
+      await downloadPicture(picture);
+      toast(t('picture.savedForShare'), 'info', 8000);
+      return;
+    }
+
+    // No sheet at all -- a desktop browser. A link, then, which needs an
+    // account to belong to.
+    if (!user) { toast(t('share.signInFirst'), 'info', 7000); return; }
+    const payload = picturePayload(picture);
+    if (!payload) { toast(t('picture.shareFailed'), 'error', 6000); return; }
+    try {
+      const made = await createShare({
+        chatId: currentSessionId,
+        title: (picture.prompt || '').slice(0, 120),
+        picture: payload,
+        expiresInDays: shareExpiryDays,
+      });
+      // Remembered first: this is the only moment the URL exists anywhere.
+      setShareUrls(rememberShareUrl(getSetting, setSetting, made.id, made.url));
+      await copyText(made.url);
+      toast(t('picture.shareLinked'), 'success', 6000);
+      addLog(`[share] published a picture: ${made.url}`, 'success');
+      refreshShares();
+    } catch (e) {
+      toast(t('share.failed', { error: e.message }), 'error', 8000);
+    }
+  };
+
+  /**
+   * Keep the other one.
+   *
+   * An automatic redraw is a judgement made without being asked, so it is
+   * always reversible: the two pictures swap places and the one put aside is
+   * kept beside the other, which means this button works as many times as
+   * somebody presses it.
+   */
+  /* A long clip joined again after a segment was redrawn: the conversation's
+     copy points at the new file. See src/LongStoryboard.jsx. */
+  const replaceLongVideo = (sessionId, index, n, output) => {
+    reviseSession(sessionId, s => {
+      const messages = [...s.messages];
+      const message = messages[index];
+      const list = [...(message?.generated || [])];
+      if (!list[n]) return s;
+      list[n] = {
+        ...list[n],
+        dataUrl: output.url,
+        filename: output.filename,
+        file: { filename: output.filename, subfolder: output.subfolder || '', type: output.type || 'webui' },
+      };
+      messages[index] = { ...message, generated: list };
+      return { ...s, messages };
+    });
+  };
+
+  const swapRetouch = (index, n) => {
+    reviseSession(currentSessionId, s => {
+      const messages = [...s.messages];
+      const message = messages[index];
+      if (!message) return s;
+      const list = [...(message.generated || [])];
+      const shown = list[n];
+      if (!shown?.retouch?.other) return s;
+      const { retouch, ...rest } = shown;
+      list[n] = {
+        ...retouch.other,
+        retouch: { ...retouch, other: rest, showing: retouch.showing === 'after' ? 'before' : 'after' },
+      };
+      messages[index] = { ...message, generated: list };
+      return { ...s, messages };
+    });
   };
 
   /**
@@ -4208,34 +5567,71 @@ function App() {
       const blob = await (await fetch(referenceDataUrl)).blob();
       const form = new FormData();
       form.append('image', blob, `reference-${Date.now()}.png`);
-      const up = await fetch('/studio/upload', { method: 'POST', body: form, signal }).then(r => r.json());
+      const up = await postJson('/studio/upload', { method: 'POST', body: form, signal });
       if (!up?.success) throw new Error(up?.error || 'the reference image could not be uploaded');
       referenceImage = up.name;
     }
 
     const settings = await studioSettingsFor('minimax-h3', signal);
 
-    /* How long: what the model said, else where its timeline ends, else the
-       Studio's length. Then the timeline is made to agree with it -- starting
-       at 0s, without gaps, ending exactly there. See src/videoPrompt.js. */
-    const duration = clampSeconds(opts.duration)
-      ?? clampSeconds(durationFromTimeline(rawPrompt))
-      ?? clampSeconds(settings.duration)
-      ?? VIDEO_SECONDS.fallback;
+    /* How long: five seconds, unless they named a length -- then what the model
+       set, else where its timeline ends. Not the Studio's length: that belongs
+       to whatever was being made there. Then the timeline is made to agree with
+       it -- starting at 0s, without gaps, ending exactly there. See
+       src/videoPrompt.js. */
+    /* Set to a song, the clip is as long as the song, and its segments are
+       whole bars of it -- see segmentSecondsForTempo. */
+    const song = opts.soundtrack || null;
+    const songSeconds = song ? clampSeconds(song.seconds) : null;
+    const duration = songSeconds
+      ?? (opts.lengthAsked
+        ? (clampSeconds(opts.duration)
+          ?? clampSeconds(durationFromTimeline(rawPrompt))
+          ?? VIDEO_SECONDS.fallback)
+        : VIDEO_SECONDS.fallback);
+    const beatSeconds = song ? segmentSecondsForTempo(song.bpm) : null;
     const prompt = normalizeTimeline(rawPrompt, duration);
 
     /* The shape: one they asked for, else the picture being animated -- a
        portrait photo should not come back as a square with its head cut off --
-       else the Studio's. On a grid of 32, which H3's latents divide by. */
-    const area = workflowArea('minimax-h3', settings);
+       else the Studio's. On a grid of 32, which H3's latents divide by. The
+       size: the Studio's area for five seconds, less for a longer clip. */
+    /* A clip longer than one pass is rendered as segments -- so what decides the
+       picture size is a *segment's* length, not the whole clip's. Sizing 60
+       seconds as one pass would draw six ten-second segments at 512x512 for no
+       reason. See segmentPlan and server/h3Motion.js. */
+    const plan = beatSeconds
+      ? { count: Math.ceil(duration / beatSeconds), seconds: beatSeconds, total: duration }
+      : segmentPlan(duration);
+    /* Two ceilings, and the lower one wins.
+     *
+     * The card decides how big a *segment* can be -- H3 holds every frame of
+     * one at once. System RAM decides how big the *clip* can be, because the
+     * segments are all held as decoded frames until they are joined, and the
+     * join copies them again: a minute at 1088x1088 is forty gigabytes of
+     * frames, which on this machine is not an error, it is the computer
+     * stopping. See frameBudgetArea. */
+    /* The RAM ceiling is one *segment's* now. A long clip is rendered a segment
+       per ComfyUI prompt and joined on disk (server/longVideo.js), so what is
+       held at once is one segment's frames whatever the length -- and a
+       ten-minute clip is drawn at the size a ten-second one is. Budgeting the
+       whole clip made two minutes 340x340. */
+    const area = Math.min(
+      videoArea(workflowArea('minimax-h3', settings), plan.seconds),
+      frameBudgetArea(plan.seconds),
+    );
     const ratio = parseAspect(opts.aspect);
     let size = ratio ? sizeForAspect(ratio, area, 32) : null;
     if (!size && referenceDataUrl) {
       const dims = await pictureSize(referenceDataUrl).catch(() => null);
       if (dims) size = sizeForAspect({ w: dims.width, h: dims.height }, area, 32);
     }
+    // A longer clip is smaller even when nothing else chose its shape.
+    if (!size && duration > VIDEO_SECONDS.fallback) {
+      size = sizeForAspect({ w: sizeRatio(settings.size) || 1, h: 1 }, area, 32);
+    }
 
-    const queued = await fetch('/studio/generate', {
+    const queued = await postJson('/studio/generate', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -4245,55 +5641,179 @@ function App() {
         duration,
         ...(size ? { size: `${size.width}x${size.height}` } : {}),
         ...(referenceImage ? { referenceImage } : {}),
+        // A clip that ends where it began. The server refuses it without a
+        // picture to pin to, and says so rather than making an ordinary clip.
+        ...(opts.loop ? { loop: true } : {}),
+        /* A music video's parts: the song it is set to, shots rather than one
+           continuous take, the words on screen, and the upscaler. See
+           server/longVideo.js. */
+        ...(song ? { soundtrack: song.name, songSeconds: song.seconds } : {}),
+        ...(beatSeconds ? { beatSeconds } : {}),
+        ...(opts.cut ? { cut: true, transition: opts.transition || 'fade' } : {}),
+        ...(opts.captions?.length ? { captions: opts.captions } : {}),
+        ...(opts.lyricsCaptions ? { lyricsCaptions: true } : {}),
+        ...(opts.upscale ? { upscale: true } : {}),
+        // As above: so another device can watch the several minutes of it.
+        ...(currentSessionId ? { chat: String(currentSessionId) } : {}),
       }),
       signal,
-    }).then(r => r.json());
+    });
     if (!queued?.success) throw new Error(queued?.error || 'the generator refused the job');
     if (queued.unloaded?.length) addLog(`[vram] unloaded ${queued.unloaded.join(', ')} to make room for the video`, 'info');
 
-    // Fifteen minutes. A video is minutes of work and the ceiling is for
-    // "something is wrong", not for the expected wait.
-    const deadline = Date.now() + 900000;
+    /* Fifteen minutes for one pass, and a segment's worth on top for each
+       segment after the first: six segments is six renders, and a ceiling that
+       does not know that turns a long clip into "the generation did not finish
+       in time" every time. It is still a ceiling for "something is wrong". */
+    const deadline = Date.now() + 900000 * plan.count;
     let output = null;
-    setDrawing({ id: queued.id, video: true, prompt, kind: 'video',
+    const videoProgress = { id: queued.id, video: true, prompt, kind: 'video',
+      startedAt: Date.now(), sessionId: currentSessionId,
       aspect: sizeRatio(size) ?? sizeRatio(settings.size),
       // Animating a picture: that picture is on the card until the clip starts.
       source: referenceDataUrl || null,
-    });
+    };
+    setDrawing(videoProgress);
+    try { localStorage.setItem(drawingStorageKey, JSON.stringify(videoProgress)); } catch {}
     try {
       while (Date.now() < deadline) {
         if (signal?.aborted) throw new Error('stopped');
         await new Promise(r => setTimeout(r, 2500));
-        const state = await fetch(`/studio/job?id=${encodeURIComponent(queued.id)}`, { signal })
-          .then(r => r.json()).catch(() => null);
+        const state = await fetchJsonQuietly(`/studio/job?id=${encodeURIComponent(queued.id)}`, { signal })
+          .catch(() => null);
         if (state?.state === 'failed') throw new Error(state.error || 'the generation failed');
         if (state?.state === 'done' && state.outputs?.length) {
           output = state.outputs.find(o => o.media === 'video') || state.outputs[0];
           break;
         }
+        /* Which segment of a long clip is drawing, on the card as "3/12" --
+           the same place a batch says which picture it is on. Each segment's
+           own bar starts again from nothing, and without this that reads as a
+           clip that keeps restarting. */
+        /* And what the queue says, as the picture path already does: the card
+           believes "running" from here when its stream has not spoken yet. */
+        if (state?.state === 'running' || state?.state === 'queued') {
+          const batch = state.segments > 1 ? { n: state.segment, of: state.segments } : null;
+          setDrawing(current => (current?.id === queued.id
+            && (current.polled !== state.state || (batch && current.batch?.n !== batch.n))
+            ? { ...current, polled: state.state, ...(batch ? { batch } : {}) } : current));
+        }
       }
     } finally {
+      try { localStorage.removeItem(drawingStorageKey); } catch (e) { /* best effort */ }
       setDrawing(null);
       // As above: a stopped video is a stopped video in ComfyUI too.
-      if (!output) stopDrawing(queued.id);
+      if (!output && signal?.aborted) stopDrawing(queued.id);
     }
     if (!output) throw new Error('the generation did not finish in time');
 
-    const blob = await fetch(output.url, { signal }).then(r => {
-      if (!r.ok) throw new Error(`could not read the result (HTTP ${r.status})`);
-      return r.blob();
-    });
-    const dataUrl = await new Promise((resolve, reject) => {
-      const reader = new FileReader();
-      reader.onload = (ev) => resolve(ev.target.result);
-      reader.onerror = () => reject(reader.error);
-      reader.readAsDataURL(blob);
-    });
+    /* By address, as a picture is -- and a film is the stronger case for it.
+       A clip is tens of megabytes, base64 makes it a third bigger again, and a
+       `<video>` given an address streams what it needs for a poster frame
+       instead of decoding the whole thing to show one. */
+    const dataUrl = await outputAddress(output.url, signal);
     // The timeline it was actually made from, which is what the caption shows.
     return {
       dataUrl, filename: output.filename, seed: queued.seed, model: 'minimax-h3', prompt, duration,
+      // A long clip's own id, for its storyboard and for drawing one segment again.
+      ...(/^long-/.test(String(queued.id)) ? { longId: queued.id } : {}),
+      ...(opts.loop ? { loop: true } : {}),
+      // Where ComfyUI keeps it, so its frames can be tagged -- see videoSafety.js.
+      file: { filename: output.filename, subfolder: output.subfolder || '', type: output.type || 'output' },
       ...(queued.settings ? { settings: queued.settings } : {}),
     };
+  };
+
+  /**
+   * A song, from ACE-Step.
+   *
+   * The engine lives in `engines/ace-step` and is started by the server the
+   * first time something asks for a song -- which is minutes of loading the
+   * first time and nothing at all afterwards. That wait is *part of the job*:
+   * answering "the music server is not running" to somebody who has just asked
+   * for a song is answering a question they did not ask.
+   */
+  const generateOneSong = async (job, signal) => {
+    const ask = () => postJson('/music/generate', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      // `chat`, as for a picture: which conversation the song is for, so the
+      // reader's other devices can watch the several minutes of it.
+      body: JSON.stringify({ ...job, ...(currentSessionId ? { chat: String(currentSessionId) } : {}) }),
+      signal,
+    });
+
+    let queued = await ask();
+    if (!queued?.success && queued?.starting) {
+      addLog('[music] ACE-Step is loading; the song is queued behind it', 'info');
+      setDrawing({
+        music: true, kind: 'music', prompt: job.prompt, startedAt: Date.now(), sessionId: currentSessionId,
+        // The engine starting is the first stage of the song, not a wait before it.
+        snapshot: { state: 'running', phase: 'loading', phases: ['loading', 'planning', 'composing', 'performing', 'mixing', 'saving'], fraction: null },
+      });
+      // Ten minutes of loading, asked about every five seconds. It is loading a
+      // DiT, an audio VAE and a language model onto a card that may still be
+      // handing back what the chat model was using.
+      const upBy = Date.now() + 600000;
+      while (Date.now() < upBy && !queued?.success) {
+        if (signal?.aborted) throw new Error('stopped');
+        await new Promise(r => setTimeout(r, 5000));
+        queued = await ask();
+        if (!queued?.success && !queued?.starting) break;
+      }
+    }
+    if (!queued?.success) throw new Error(queued?.error || 'the music server refused the job');
+    if (queued.unloaded?.length) addLog(`[vram] unloaded ${queued.unloaded.join(', ')} to make room for the song`, 'info');
+
+    /* Deliberately without an id. The progress card opens an event stream to
+       ComfyUI for whatever id it is given, and ACE-Step's task ids mean nothing
+       there -- it would hold a socket open for a job that stream will never
+       mention. With none, the card is the clock and the style, which is all
+       there is to say about a song being made. */
+    setDrawing(previous => ({
+      music: true, kind: 'music', prompt: job.prompt,
+      // The clock keeps running from when the engine was asked to start.
+      startedAt: previous?.music ? previous.startedAt : Date.now(),
+      sessionId: currentSessionId,
+      snapshot: { state: 'queued', phase: 'queued', phases: ['loading', 'planning', 'composing', 'performing', 'mixing', 'saving'], fraction: null },
+    }));
+    // Generation runs at roughly real time, so a ceiling of ten times the
+    // song's length is "something is wrong" rather than "this is slow".
+    const deadline = Date.now() + Math.max(300000, (Number(job.duration) || 60) * 10000);
+    try {
+      while (Date.now() < deadline) {
+        if (signal?.aborted) throw new Error('stopped');
+        await new Promise(r => setTimeout(r, 1500));
+        const state = await fetchJsonQuietly(`/music/status?id=${encodeURIComponent(queued.id)}`, { signal })
+          .catch(() => null);
+        if (state?.failed) throw new Error(state.error || 'the song failed');
+        /* Where the song has got to: ACE-Step's own stage and percentage, shaped
+           as the snapshot a picture's progress stream sends, so the same card
+           draws the same track, bar and time left. See musicProgress. */
+        if (state?.progress) {
+          const { phase, phases, fraction } = state.progress;
+          setDrawing(current => (current?.music ? {
+            ...current,
+            snapshot: {
+              state: phase === 'queued' ? 'queued' : 'running',
+              phase, phases, fraction, receivedAt: Date.now(),
+            },
+          } : current));
+        }
+        if (state?.done && state.tracks?.length) {
+          return state.tracks.map(track => ({
+            ...track,
+            audio: true,
+            style: job.prompt,
+            lyrics: track.lyrics && track.lyrics !== '[instrumental]' ? track.lyrics : '',
+            duration: queued.settings?.duration,
+          }));
+        }
+      }
+    } finally {
+      setDrawing(null);
+    }
+    throw new Error('the song did not finish in time');
   };
 
   const mcpFetchNews = async (topic, limit = 8) => {
@@ -4418,9 +5938,30 @@ function App() {
     ...extra,
   });
 
+  /* What a chat has been given of its own.
+   *
+   * A chat could already carry its own system prompt -- `currentSession
+   * .systemPrompt`, which beats the persona and the global box -- and its own
+   * model, remembered as `lastModel`. The two settings that decide as much as
+   * either, how hard the model thinks and how loose its sampling is, were
+   * global and nothing else: set "많이" for a hard question in one chat and
+   * every other chat started thinking for thirty seconds about the weather.
+   *
+   * The same shape as the system prompt, deliberately: `undefined` means the
+   * chat has no opinion and the global setting stands. Nothing is copied into
+   * the global settings on the way in or out, which is what makes an override
+   * an override rather than a thing that leaks into every other chat. */
+  const chatThinkMode = currentSession?.thinkMode ?? thinkMode;
+  const chatTemperature = currentSession?.temperature ?? temperature;
+  const chatOverrides = [
+    currentSession?.systemPrompt !== undefined,
+    currentSession?.thinkMode !== undefined,
+    currentSession?.temperature !== undefined,
+  ].filter(Boolean).length;
+
   const buildOptions = () => {
     const options = {
-      temperature,
+      temperature: chatTemperature,
       num_predict: maxTokens,
       top_p: topP,
       top_k: topK,
@@ -4492,6 +6033,13 @@ function App() {
       const result = await syncFully(profileScope);
       syncStampRef.current = result.rev;
       setSyncInfo(await accountStamp());
+      /* Anything the account would not take. Said rather than swallowed: a
+         record refused here is one that will never reach another device, and
+         "my phone does not have it" is otherwise indistinguishable from "the
+         sync has not run yet". See `applyChanges` on the server. */
+      for (const item of result.refused || []) {
+        addLog(`[sync] ${item.kind}:${item.id} was not stored — ${item.reason}`, 'warning');
+      }
 
       if (result.changedLocally > 0) {
         // Put what arrived on screen rather than asking for it to be put there.
@@ -4862,10 +6410,10 @@ function App() {
 
   // ---- Export ----
 
-  const exportSessionHtml = (session) => {
+  const exportSessionHtml = async (session) => {
     const target = session || currentSession;
     if (!target) return;
-    downloadBlob(`${slugify(target.title)}.html`, sessionToHtml(target), 'text/html;charset=utf-8');
+    downloadBlob(`${slugify(target.title)}.html`, sessionToHtml(await sessionWithPictures(target)), 'text/html;charset=utf-8');
     addLog(`Exported "${target.title}" as HTML.`, 'success');
   };
 
@@ -4882,10 +6430,12 @@ function App() {
    * page's in some browsers, and what would be saved is the app rather than
    * the transcript.
    */
-  const printSession = (session) => {
+  const printSession = async (session) => {
     const target = session || currentSession;
     if (!target) return;
 
+    // Opened before anything is awaited: a window asked for after an `await`
+    // is no longer part of the click that asked for it, and gets blocked.
     const win = window.open('', '_blank');
     if (!win) {
       // Blocked. Worth saying, because nothing at all happened and the reason
@@ -4893,7 +6443,7 @@ function App() {
       toast(t('export.popupBlocked'), 'error', 8000);
       return;
     }
-    win.document.write(sessionToPrintableHtml(target));
+    win.document.write(sessionToPrintableHtml(await sessionWithPictures(target)));
     win.document.close();
     addLog(`Printing "${target.title}".`, 'success');
   };
@@ -5516,8 +7066,11 @@ function App() {
    * place, and there is no event for "the keyboard has finished".
    */
   const handleComposerFocus = () => {
+    // Two separate things. An open toolbar is put away wherever tapping is how
+    // it opened; the scroll is for a keyboard sliding up, which only a real
+    // touch device has.
+    if (isTapUi) setOpenActionsIndex(null);
     if (!isTouchUi) return;
-    setOpenActionsIndex(null);
     window.setTimeout(() => {
       isAutoScrollRef.current = true;
       followTail();
@@ -5526,15 +7079,15 @@ function App() {
 
   // ---- Model management ----
 
+  /* What is in memory: Ollama's language models, then the picture and video
+     models ComfyUI is holding (`/studio/loaded`, shaped like `/api/ps`). One
+     list, because they share one card and the question is what is on it. */
   const fetchRunningModels = async () => {
-    try {
-      const res = await fetch('/api/ps');
-      if (!res.ok) return;
-      const data = await res.json();
-      setRunningModels(data.models || []);
-    } catch (e) {
-      setRunningModels([]);
-    }
+    const read = (url) => fetch(url).then(r => (r.ok ? r.json() : null)).catch(() => null);
+    // And ACE-Step's, when a song engine is up -- the same card, the same question.
+    const [ollama, comfy, music] = await Promise.all([read('/api/ps'), read('/studio/loaded'), read('/music/loaded')]);
+    if (!ollama && !comfy && !music) { setRunningModels([]); return; }
+    setRunningModels([...(ollama?.models || []), ...(comfy?.models || []), ...(music?.models || [])]);
   };
 
   /* What the installed models cost, and in what order to consider them.
@@ -5542,6 +7095,7 @@ function App() {
      space, and alphabetical order answers a question nobody asked. */
   const modelDiskTotal = models.reduce((sum, m) => sum + (m.size || 0), 0);
   const modelsBySize = [...models].sort((a, b) => (b.size || 0) - (a.size || 0));
+
 
   /**
    * Pin documents to a folder, so every chat in it can be asked about them.
@@ -5610,6 +7164,30 @@ function App() {
       setTimeout(fetchRunningModels, 500);
     } catch (e) {
       addLog(`Failed to unload ${name}: ${e.message}`, 'error');
+    }
+  };
+
+  /* ComfyUI lets go of all its models or none. `/studio/cancel` naming no job
+     stops nothing and frees the card only when nothing is being drawn, so a
+     press during a video cannot pull its model out from under it. */
+  const unloadComfyModels = async () => {
+    addLog('Unloading the picture and video models from memory...', 'info');
+    try {
+      const done = await postJson('/studio/cancel', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({}),
+      });
+      if (done?.remaining) {
+        toast(t('models.comfyBusy'), 'info', 6000);
+      } else if (done?.success) {
+        addLog('Unloaded the picture and video models.', 'success');
+      } else {
+        throw new Error(done?.error || 'ComfyUI did not answer');
+      }
+      setTimeout(fetchRunningModels, 500);
+    } catch (e) {
+      addLog(`Failed to unload the picture and video models: ${e.message}`, 'error');
     }
   };
 
@@ -5686,6 +7264,52 @@ function App() {
 
   const hasCapability = (name, capability) => (modelCaps[name] || []).includes(capability);
   const modelSupportsVision = (name) => hasCapability(name, 'vision');
+
+  /* Whether a model is already on the card.
+   *
+   * `/api/ps` is the only thing that knows, and until now it was read in the
+   * Models tab and the monitor -- neither of which is open at the moment
+   * somebody is choosing. It is the fact that decides the choice: one of these
+   * answers in a second and the rest are a twenty-gigabyte read first. */
+  const modelIsLoaded = (name) => runningModels.some(m => m.name === name && !m.source);
+
+  /* What a model is, in the three numbers already sitting unused in
+     `/api/tags`: how many parameters, how hard it is squeezed, and what it
+     weighs. A list of bare names says none of it, and the names are the one
+     part that is often unreadable -- `hf.co/unsloth/gemma-4-31B-it-GGUF:Q8_0`
+     is mostly punctuation. */
+  const modelFacts = (model) => [
+    model?.details?.parameter_size,
+    /* Ollama answers `unknown` for a model whose quantisation it cannot read
+       off the file. Printing that is worse than printing nothing: it reads as
+       a fact about the model rather than a gap in the metadata. */
+    /unknown/i.test(model?.details?.quantization_level || '') ? '' : model?.details?.quantization_level,
+    // A cloud model weighs nothing here, and "0.0GB" is not a size.
+    model?.size > 50 * 1024 * 1024 ? `${(model.size / 1e9).toFixed(1)}GB` : '',
+  ].filter(Boolean).join(' · ');
+
+  /* The picker's list, filtered by whatever has been typed.
+   *
+   * Matched against the name and against what the model *is* -- "31b", "q8",
+   * "gemma" all find the same row -- because the part of a name people
+   * remember is rarely the part at the front of it. Order is left alone: a
+   * list that rearranges itself under a finger on a phone is how the wrong
+   * model gets chosen.
+   *
+   * Below `modelFacts` and not above it, which is not a matter of taste: this
+   * runs during render and reads that function, so declared earlier it is a
+   * `ReferenceError` -- and only on the render where something has been typed,
+   * because an empty box returns before ever calling it. See the note at the
+   * top of README.md about the three crashes of exactly this shape. */
+  const shownModels = (() => {
+    const wanted = modelQuery.trim().toLowerCase();
+    if (!wanted) return models;
+    const words = wanted.split(/\s+/);
+    return models.filter((model) => {
+      const hay = `${model.name} ${modelFacts(model)}`.toLowerCase();
+      return words.every(word => hay.includes(word));
+    });
+  })();
 
   /* The embedder the recall tier uses.
      Normalised here rather than in convMemory.js, because `embedTexts` returns
@@ -6045,6 +7669,11 @@ function App() {
         setAttachments(prev => [...prev, {
           name: bigFile.name, type: 'indexing', data: '', chars: text.length,
         }]);
+        /* Kept for this one too, and for the same reason -- more so, in fact: a
+           document long enough to be indexed is one whose extracted text is the
+           least like the document. The store is keyed by name, so this covers
+           it while it is indexing, once it is indexed, and after it is sent. */
+        keepOriginal({ name: bigFile.name }, bigFile);
         try {
           const { doc, library } = await ingestDocument(bigFile, {
             userId: profileScopeRef.current,
@@ -6079,15 +7708,89 @@ function App() {
           addLog(`[knowledge] could not index ${bigFile.name}: ${err.message}`, 'error');
           setAttachments(prev => prev
             .filter(a => !(a.name === bigFile.name && a.type === 'indexing'))
-            .concat([{ name: bigFile.name, type: 'text', data: safeHead(text, MAX_ATTACHMENT_CHARS), truncated: true }]));
+            .concat([(() => {
+              const excerpt = { name: bigFile.name, type: 'text', data: safeHead(text, MAX_ATTACHMENT_CHARS), truncated: true };
+              keepOriginal(excerpt, bigFile);
+              return excerpt;
+            })()]));
           toast(t('attach.indexFailed', { name: bigFile.name, kept: MAX_ATTACHMENT_CHARS.toLocaleString() }), 'info', 10000);
         }
         continue;
       }
 
-      setAttachments(prev => [...prev, { name: file.name, type: 'text', data: text, truncated: false }]);
+      const attachment = { name: file.name, type: 'text', data: text, truncated: false };
+      // The document itself, so opening the attachment shows the document.
+      keepOriginal(attachment, file);
+      setAttachments(prev => [...prev, attachment]);
     }
   };
+
+  /* The original bytes of an attached document, for as long as this tab is
+   * open.
+   *
+   * A PDF is attached as the text pulled out of it, because text is what a
+   * model can read. Opening the attachment then showed that text, which is the
+   * document with everything that made it a document removed -- the layout,
+   * the tables, the figures, the page breaks.
+   *
+   * So the file itself is kept here and the viewer shows it. Here, and not on
+   * the attachment: an attachment goes into the message, the message goes into
+   * storage and then to every other device, and a ten megabyte PDF travelling
+   * that road is the weight problem pictures already had. A blob URL is also
+   * meaningless to any other tab, so putting one in a message would be storing
+   * a dead string.
+   *
+   * After a reload the map is empty and the text is what is shown, which is
+   * what was shown before this existed. */
+  const originals = useRef(new Map());
+  /* By name alone, because the *type* changes when the message is sent.
+   *
+   * In the composer a document is `type: 'text'`; once sent it is folded into
+   * the message text and read back out of it as `type: 'file'` -- or `indexed`,
+   * for one too long to send whole. Keying on both meant every key missed the
+   * moment the message left the composer, so a PDF opened as the document
+   * before sending and as its own extracted text afterwards, which is the one
+   * the reader complained about.
+   *
+   * Two files of the same name in one session therefore share a key: the newer
+   * replaces the older, which is what re-attaching an edited file means. */
+  const keyOfAttachment = (att) => String(att?.name || '').trim();
+
+  const keepOriginal = (att, file) => {
+    if (typeof URL?.createObjectURL !== 'function') return;
+    const key = keyOfAttachment(att);
+    const had = originals.current.get(key);
+    if (had) URL.revokeObjectURL(had);
+    try { originals.current.set(key, URL.createObjectURL(file)); } catch (e) { /* no blob URLs here */ }
+  };
+
+  const originalOf = (att) => originals.current.get(keyOfAttachment(att)) || '';
+
+  /* Which attachments are worth opening in the browser's own reader.
+   *
+   * Reported: a .json file opened on a white page with white text on it -- a
+   * blank rectangle. The reader is an `<iframe>` with `background: #fff`, which
+   * is right for a PDF (a page of paper) and wrong for everything else: Chrome
+   * renders a plain-text document with the page's own colour scheme, so in dark
+   * mode it drew light text onto the white this stylesheet had forced under it.
+   *
+   * A PDF is the only case the reader was ever for. It is attached as the text
+   * pulled out of it, so opening it should show the document; a .json, .csv,
+   * .md or .txt *is* its text, and the viewer below already shows that -- in
+   * this app's own colours, wrapped, and with a copy button. Nothing was gained
+   * by handing those to the browser.
+   *
+   * It also closes something that was never meant to be open: an attached
+   * .html went into that iframe from a blob URL, which is script from a file
+   * somebody was handed, running in a frame of this app's page. */
+  const readableAsDocument = (att) => /\.pdf$/i.test(String(att?.name || ''));
+
+  useEffect(() => () => {
+    for (const url of originals.current.values()) {
+      try { URL.revokeObjectURL(url); } catch (e) { /* already gone */ }
+    }
+    originals.current.clear();
+  }, []);
 
   const handleFileChange = (e) => {
     addFiles(Array.from(e.target.files));
@@ -6620,6 +8323,9 @@ function App() {
   };
 
   const handleSend = async (e = null, customMessages = null, overrideModel = null) => {
+    // Whether this send is a retry of a held question. Taken once, by the send it was meant for.
+    const retryOf = customMessages ? null : retryOfRef.current;
+    if (!customMessages) retryOfRef.current = null;
     /* Two models, on purpose. `chosenModel` is what the reader asked for and
        is what the chat remembers; `activeModel` is what actually answers,
        which a routing rule may change for this one message. Collapsing them
@@ -6673,6 +8379,8 @@ function App() {
     const turnStartedAt = performance.now();
     // The same moment on the wall clock, which is what message times are in.
     const turnBegan = Date.now();
+    let chatJobId = globalThis.crypto?.randomUUID?.()
+      || `${turnBegan}-${Math.random().toString(36).slice(2)}`;
     let firstTokenAt = null;
 
     setIsGenerating(true);
@@ -6680,6 +8388,7 @@ function App() {
     // chat that asked, whichever one is on screen by the time the answer
     // arrives.
     setGeneratingSessionId(currentSessionId);
+    rememberGeneration(currentSessionId, turnBegan, chatJobId);
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
 
@@ -6690,6 +8399,7 @@ function App() {
     // Declared out here so the catch block below can still see them.
     let initialMessages;
     let newMessageIndex;
+    let flushPartial = null;
 
     try {
       let finalInputText = originalInput;
@@ -6743,6 +8453,18 @@ function App() {
        * ComfyUI, which the phone opening the same conversation cannot reach and
        * which ComfyUI will eventually tidy away regardless. */
       const turnImages = [];
+      /* Which drawing call in the finished message each picture belongs to.
+       *
+       * A turn can draw, say something about it, and draw again -- and every
+       * picture used to be appended to the bottom of the message whatever order
+       * it was asked for in, so the second picture sat under the sentence about
+       * the third. Each one now carries the number of the call that made it,
+       * counted over the drawing tags in the message text, and the transcript
+       * puts it back where that call was. See `picturesByCall`. */
+      let drawCallsBefore = 0;
+      // Songs made this turn. Their own list rather than `generated`: a song is
+      // not a picture, it has no frames to check and nothing to open.
+      const turnSongs = [];
 
       // Process Attachments (synchronous)
       if (currentAttachments.length > 0) {
@@ -6810,7 +8532,8 @@ function App() {
           tempUserMessage.paint = paint;
           finalInputText += '\n\n[They painted over the part of the picture to change. Call generate_image '
             + 'with from="last_image" now; only the painted area is redrawn and the rest stays exactly as it '
-            + 'is. Describe the whole finished picture as it should look, in English, with change 0.9.]';
+            + 'is. In English, describe the subject and what the painted area should now show -- not other '
+            + 'things in the picture, which would be drawn into the area a second time -- with change 0.65.]';
         }
         
         initialMessages = [...messages, tempUserMessage];
@@ -6835,6 +8558,7 @@ function App() {
              ...(routedBy ? { routedBy } : {}),
            }]
         });
+        rememberGeneration(startedIn, turnBegan, chatJobId, newMessageIndex);
       } else {
         initialMessages = customMessages;
         newMessageIndex = initialMessages.length;
@@ -6843,6 +8567,7 @@ function App() {
            updatedAt: Date.now(),
            lastModel: activeModel
         });
+        rememberGeneration(startedIn, turnBegan, chatJobId, newMessageIndex);
       }
 
       let initialAssistantContent = '';
@@ -6899,6 +8624,15 @@ function App() {
             topK: ragTopK,
             chatId: currentSessionId,
             folderId: currentFolderId,
+            hybrid: ragHybrid,
+            rerank: ragRerank,
+            /* The model that is about to answer, rather than a setting of its
+               own. A judge weaker than the model reading its verdict is a
+               filter that removes passages the answer would have used; a
+               judge stronger than it is a second model loaded into VRAM
+               before every message, which on this hardware is the pause the
+               feature was supposed to be worth. */
+            rerankModel: chosenModel,
             signal,
           });
           if (hits.length > 0) {
@@ -6912,7 +8646,15 @@ function App() {
             const block = `--- [Knowledge] Passages from your documents, most relevant first ---\n${formatContext(hits)}\n--- Cite these as [1], [2] ... when you use them. If they do not answer the question, say so instead of guessing. ---`;
             finalInputText += `\n\n${block}`;
             initialAssistantContent += `<think>\n${block}\n</think>\n\n`;
-            addLog(`[knowledge] ${hits.length} passages from ${new Set(hits.map(h => h.docName)).size} document(s)`, 'success');
+            /* Which retriever found what, because "5 passages" is the same
+               line whether the lexical half is working or silently returning
+               nothing, and those are very different situations. */
+            const byWords = hits.filter(h => h.found?.includes('lexical')).length;
+            const detail = [
+              ragHybrid && byWords ? `${byWords} by exact words` : null,
+              ragRerank && hits.some(h => h.rerank !== undefined) ? 'reranked' : null,
+            ].filter(Boolean).join(', ');
+            addLog(`[knowledge] ${hits.length} passages from ${new Set(hits.map(h => h.docName)).size} document(s)${detail ? ` (${detail})` : ''}`, 'success');
           } else {
             addLog('[knowledge] nothing relevant enough to include', 'info');
           }
@@ -7239,7 +8981,10 @@ function App() {
          turns, and those have nowhere else to go. */
       const wantsSystem = effectiveSystemPrompt || profileBlock || memoryBlock
         || memoryContext?.summary || (memoryContext?.recalled || []).length > 0;
-      if (wantsSystem && !conversation.find(m => m.role === 'system')) {
+      /* The picture workflow can change in Studio settings between turns.
+         Rebuild this system message so a turn that now uses Krea 2 cannot
+         inherit Anima's tag-only candidate guide from an earlier turn. */
+      if (wantsSystem) {
         let mcpPrompt = '';
         const mcpToolCallsInTurnForSystem = thisTurn.filter(isToolResult).length;
 
@@ -7255,14 +9000,57 @@ function App() {
            danbooru tags and captions and reads both best; Krea 2 reads plain
            English. Which one draws is the Studio's setting for chat. */
         const pictureModel = readChatPictureModel(profileScopeRef.current);
-        const tagsAdvice = 'write the prompt as danbooru tags first — e.g. 1girl, solo, short hair, bob cut, '
-          + 'sailor collar, smile, looking at viewer — spelled with spaces, not underscores, then one plain '
-          + 'English sentence for what tags cannot say: mood, light, composition';
-        const promptAdvice = pictureModel === 'anima-base'
+        const tagsAdvice = 'for Anima only, write the prompt in two parts: first a comma-separated list of '
+          + 'danbooru tags — e.g. 1girl, solo, short hair, bob cut, sailor collar, smile, looking at viewer — '
+          + 'spelled with spaces, not underscores; then finish with exactly one or two complete, natural '
+          + 'English sentences for what tags cannot say, such as mood, lighting, atmosphere, interaction and '
+          + 'composition. Do not put natural-language prose before the tag list, and do not turn the ending '
+          + 'into another tag list. Krea 2 and MiniMax keep their existing all-natural-language prompting rules.';
+        const drawAdvice = pictureModel === 'anima-base'
           ? `Every picture is drawn by Anima, an anime model: ${tagsAdvice}.`
           : pictureModel === 'krea2-turbo'
             ? 'Every picture is drawn by Krea 2, which reads plain descriptive English: write a description, not tags.'
             : `With style="anime" the picture is drawn by Anima: ${tagsAdvice}. With style="photo" write plain descriptive English.`;
+
+        /* Who is in the picture, and a different one each time.
+         *
+         * Both halves are the same fault seen twice: a prompt that says nothing
+         * about how somebody looks does not draw an unspecified person, it
+         * draws the model's default person -- and the default person is the
+         * same on Tuesday as she was on Monday. "여캐 그려줘" was coming back as
+         * `1girl, solo` and then as the identical girl the second time.
+         *
+         * The cue is picked here rather than asked for, because sampling from a
+         * list is the one thing a random number does better than a language
+         * model; see src/characterDesign.js. Only on a turn that asks for a
+         * picture: it changes every turn, and the system prompt sits in front
+         * of the whole conversation in the cache. */
+        const lookAdvice = ' Always say what they look like. Even when the request describes nobody — '
+          + '"여캐 그려줘", "draw a girl", "아무나 그려줘" — the prompt must give hair colour and cut, eye '
+          + 'colour, the whole outfit, the expression, the pose and framing, and where they are. '
+          + '"1girl, solo" is not a description of anybody: the gap is filled by whatever that model draws '
+          + 'by default, which is the same face every time. Designing the character is the work being asked '
+          + 'for, so do it in the prompt. If a design cue is supplied, treat its hair colour and hairstyle '
+          + 'as the character design to preserve verbatim unless the user requested a different one; do not '
+          + 'silently replace unusual colours or styles with black/brown hair, long hair, a bob, or a ponytail.';
+        let cueAdvice = '';
+        if (asksForPicture(thisTurn[0]?.content) && pictureModel === 'anima-base') {
+          let candidates = [];
+          try {
+            const data = await fetchJson('/studio/design-tags', undefined, 'The Danbooru tag list');
+            candidates = Array.isArray(data?.tags) ? data.tags : [];
+          } catch (e) {
+            addLog(`[design] candidate tags unavailable: ${e.message}`, 'error');
+          }
+          cueAdvice = `\n  When they leave the design to you, choose the character design yourself from `
+            + `the full CSV-backed Danbooru candidate vocabulary below. It contains every tag with `
+            + `more than 1,000 posts; tags at or below 1,000 posts are intentionally excluded.\n`
+            + `${designCue(candidates)}\nChoose suitable tags directly from this vocabulary and write `
+            + `the chosen tags into the Anima prompt. Do not mention the candidate list. Anything the `
+            + `user actually asked for overrides it, and a character already in this conversation stays `
+            + `as they are — this is for a new one.`;
+        }
+        const promptAdvice = `${drawAdvice}${lookAdvice}${cueAdvice}`;
 
         /* The shape rule, said once for both protocols. */
         const shapeAdvice = 'When they ask for a shape or orientation — 16:9, 9:16, 1:1, 가로, 세로, '
@@ -7274,33 +9062,143 @@ function App() {
            a turn about anything else pays for it for nothing. */
         const videoGuide = asksForVideo(thisTurn[0]?.content) ? `\n\n${H3_GUIDE}` : '';
 
+        /* Who this install has been taught to draw, named for the model.
+         *
+         * Without this the swap tool is unusable: it takes a name, and the
+         * model has no way to know which names exist. With it, "루나로 바꿔줘"
+         * is a complete request. Left out entirely when nothing has been
+         * trained, so a turn does not pay for a tool that cannot work. */
+        const characterGuide = `\n\n  <TOOL_SWAP_CHARACTER style="watercolor">who</TOOL_SWAP_CHARACTER>\n`
+          + `      Redraws whoever is in the newest picture as somebody else, keeping their\n`
+          + `      clothes, the setting and the framing. "who" is either one of the taught\n`
+          + `      names below, or danbooru tags for any character these models already\n`
+          + `      know, written as danbooru writes them with the brackets escaped —\n`
+          + `      "hoshino \\(blue archive\\)", "ganyu \\(genshin impact\\)". \`style\` is\n`
+          + `      optional and only when they asked for one.`
+          + (charactersRef.current.length
+            ? `\n      Taught here (prefer these when the name matches — they are trained\n`
+              + `      likenesses rather than tags):\n`
+              + charactersRef.current
+                .map(one => `        ${one.name} — ${one.kind === 'style' ? 'a drawing style' : 'a character'}`)
+                .join('\n')
+            : '');
+
+        /* Numbers, drawn.
+         *
+         * Not a tool: nothing is fetched and nothing is generated, so there is
+         * no round trip and no waiting. A fenced block with JSON in it becomes
+         * a chart where it stands -- see src/chart.js -- which means it works
+         * the same for a model with structured tool calls and one without.
+         *
+         * Kept short deliberately. The whole of the format is one example, and
+         * the one rule that matters is the last line: a comparison is worth
+         * drawing and a single number is not. */
+        const chartGuide = `
+
+Charts and graphs
+  A fenced \`\`\`chart block is drawn where it stands:
+
+  \`\`\`chart
+  {"type":"bar","title":"Monthly sales","unit":"만원","labels":["1월","2월","3월"],"data":[120,340,280]}
+  \`\`\`
+
+  \`type\` is bar, line, area or pie. Several series:
+  \`"series":[{"name":"A","data":[1,2]},{"name":"B","data":[3,4]}]\`, and
+  \`"stacked":true\` to pile them up. A missing point is \`null\`, not 0.
+
+  An equation is drawn from the equation itself, not from a table of points you
+  work out first:
+
+  \`\`\`chart
+  {"type":"function","fn":"r = 4cos(3θ)","title":"r = 4cos3θ"}
+  \`\`\`
+
+  \`r = …\` is drawn in polar coordinates and \`y = …\` in cartesian;
+  \`"domain":[-5,5]\` sets the interval, and a polar curve defaults to one full
+  turn. Several on one pair of axes: \`"functions":["y = sin(x)","y = cos(x)"]\`.
+  It knows + - * / ^, brackets, pi, e, and sin cos tan asin acos atan sinh cosh
+  tanh sqrt abs exp ln log log2 floor ceil round sign — and nothing else, so
+  write the equation plainly and leave out anything it would not recognise.
+
+  An equation, a curve, a function or a set of numbers is drawn like this and
+  never as a picture: "r = 4cos3θ를 그려줘", "그래프 그려줘", "plot y = x^2",
+  "차트로 보여줘" all mean this block, not a drawing tool. The drawing tools are
+  for pictures of things.
+
+  Use it when the answer compares numbers -- over time, between things, as
+  shares of a whole -- and write the numbers in the text as well, because a
+  chart is not quotable. Do not draw a single number, and do not draw a table
+  that is already readable as a table.`;
+
+        /* The conversation's character, when one has been chosen. Said here so
+           the model stops writing her at all: the tags are added to every
+           picture regardless, and a model that also writes its own version
+           of her is how the wrong series got into the prompt. */
+        const pinnedCharacter = (sessionsRef.current.find(s => s.id === startedIn)?.character || '').trim();
+        const characterPinnedGuide = pinnedCharacter
+          ? `\n\n  This conversation's character is fixed as: ${pinnedCharacter}\n`
+            + '  Those tags are put in front of every picture automatically. Do not write\n'
+            + '  any character, series or appearance tags for them yourself -- write only the\n'
+            + '  scene: pose, expression, clothing changes, place, framing, lighting.'
+          : '';
         const drawPrompt = `Pictures and video
   <TOOL_GENERATE_IMAGE style="photo|anime" negative="what must not appear"
-                       from="none|last_image" change="0.1-1.0" region="hair" count="1-4" aspect="16:9">
+                       from="none|last_image" change="0.1-1.0" region="hair" count="1-4" aspect="16:9"
+                       studio_prompt="keep|off">
   the finished picture, described
   </TOOL_GENERATE_IMAGE>
+  <TOOL_REMOVE_SHADOW strength="0-2"></TOOL_REMOVE_SHADOW>  the newest picture, with its shading lifted
   <TOOL_REMOVE_BACKGROUND></TOOL_REMOVE_BACKGROUND>        the newest picture, cut out on transparency
   <TOOL_UPSCALE_IMAGE factor="2|4"></TOOL_UPSCALE_IMAGE>   the newest picture, bigger and sharper
   <TOOL_EXTEND_IMAGE direction="left|right|up|down|horizontal|vertical|all" amount="0.1-1">
   the whole finished picture, described, including what the new margins show
   </TOOL_EXTEND_IMAGE>
-  <TOOL_GENERATE_VIDEO from="last_image|none" duration="5-20" aspect="16:9">
+  <TOOL_GENERATE_VIDEO from="last_image|none" duration="5-600" aspect="16:9" loop="true|false"
+                       soundtrack="last_song" cut="true|false" transition="fade|none" captions="lyrics" upscale="true|false">
   [0s-2s] what happens first  [2s-5s] what happens next
-  </TOOL_GENERATE_VIDEO>
+  </TOOL_GENERATE_VIDEO>${characterGuide}${characterPinnedGuide}
 
   ${promptAdvice}
   ${shapeAdvice}
   The prompt goes between the opening and the closing tag, exactly as shown —
-  not as a prompt="…" attribute and not in a self-closing <TOOL_… />. Quote
-  every attribute value.
+  not as a prompt="…" attribute and not in a self-closing <TOOL_… />, and the
+  closing tag is always written. Quote every attribute value.
+  A character tag is written the way danbooru writes it, and the brackets are
+  escaped: \`ganyu \\(genshin impact\\)\`. Unescaped, \`(genshin impact)\` is not
+  part of her name at all -- to the image model brackets mean *emphasis*, so it
+  draws somebody else with two words shouted behind them.
+  Put a series in brackets ONLY when you are certain that exact danbooru tag
+  exists. If you are not sure, write the name on its own — that is the normal
+  case, not a failure. A guessed series is not a harmless extra:
+  \`\\(blue archive\\)\` pulls the whole picture towards that game's characters and
+  art, which is not what was asked for. Every tag is checked against danbooru's
+  own list before the picture is drawn and a bracket that is not in it is
+  removed, so guessing buys you nothing and costs the reader a picture of the
+  wrong person.
+  A picture is the one kind of tool you do not have to stop for. Its result is
+  only "it worked", so keep writing after the closing tag if you have more to
+  say, and ask for a second picture further down if the answer wants one: each
+  appears exactly where its tag is, so write the words around them in the order
+  the reader should meet them. Never describe a picture you asked for — they can
+  see it — and never repeat its prompt.
+  \`studio_prompt="off"\` drops the quality tags, artists and modifiers this
+  install adds to every picture -- only when they ask for the picture without
+  them ("태그 다 빼고", "그냥 순수하게"), never on your own judgement.
   \`count\` makes several with different seeds — only when they ask for a few or
-  for options. "배경 지워줘" is TOOL_REMOVE_BACKGROUND, "더 크게/고화질로" is
+  for options. A video is 5s: set \`duration\` only when they name a length, and
+  a longer one is rendered smaller. "배경 지워줘" is TOOL_REMOVE_BACKGROUND, "더 크게/고화질로" is
   TOOL_UPSCALE_IMAGE, "옆으로 늘려줘/전신이 보이게" is TOOL_EXTEND_IMAGE.
 
   When they ask for a picture — "그림 그려줘", "draw me one", an illustration, a
   mock-up — emit the tag. Do not describe the picture in words instead: that is
   not an answer to the request, and the tag is what puts an actual image in
   front of them.
+
+  "그려줘" is not always a picture. An equation, a function, a curve or a set of
+  numbers — "r = 4cos3θ를 그려줘", "sin 그래프 그려줘", "plot y = x^2", "차트로
+  보여줘" — is a \`\`\`chart block, which is drawn immediately and exactly; these
+  tools would draw a picture of what a graph looks like, which is not the
+  answer to any of them.
 
   Emit it once. One picture is the whole answer; do not draw a second unless
   they ask for another.
@@ -7315,7 +9213,10 @@ function App() {
   To *change* a picture they can already see — "머리를 파랗게", "make it night",
   "fix her hand" — set \`from="last_image"\` rather than drawing a new one. The
   app finds the picture; the prompt then describes the whole finished picture as
-  it should now be, not only the part that changes. \`change\` is how far to go,
+  it should now be, not only the part that changes -- except with \`region\`:
+  then describe only the subject and what that part should become, and leave
+  out everything else, because whatever the prompt names is drawn inside the
+  region (a toy she already holds comes back as a second one). \`change\` is how far to go,
   and these numbers were measured rather than guessed: 0.5 retouches and keeps
   the colours; 0.65 restyles clothing and details; 0.8 is what it takes to
   change a colour — hair, eyes — while keeping the pose. Above 0.85 it is a
@@ -7325,7 +9226,9 @@ function App() {
   the background — also set \`region\` to that part as a short English noun
   ("hair", "eyes", "clothes", "background"; up to three, comma-separated, e.g.
   "hair, shoulders" for hair that gets longer). Only that part is redrawn and
-  everything else stays exactly as it was, so \`change\` can be high (0.9).
+  everything else stays exactly as it was. Use \`change\` 0.4–0.65 for detail or
+  identity-preserving edits; 0.85–1.0 only for replacing an outfit or hairstyle.
+  Keep the subject’s identifying features in the prompt. Lower values are honored.
   Leave \`region\` out only for changes to the whole picture: style, lighting,
   time of day, pose.
 
@@ -7335,16 +9238,19 @@ function App() {
 
         if (!mcpEnabled && !useNativeTools && mcpToolCallsInTurnForSystem === 0) {
           mcpPrompt = `[Tools]
-You can call a tool by emitting one tag. Emit exactly one, then stop; the result
-comes back in a <TOOL_RESULT> block and you continue from there.
+You can call a tool by emitting one tag. For a tool whose *answer* you need,
+emit exactly one and then stop; the result comes back in a <TOOL_RESULT> block
+and you continue from there. Pictures are the exception — see below.
 
-${drawPrompt}`;
+${drawPrompt}${chartGuide}`;
         }
 
         if (mcpEnabled && !useNativeTools && mcpToolCallsInTurnForSystem === 0) {
           mcpPrompt = `[Agent tools enabled]
-You can call tools by emitting one tag. Emit exactly one tag, then stop; the
-result comes back in a <TOOL_RESULT> block and you continue from there.
+You can call tools by emitting one tag. For a tool whose *answer* you need — a
+search, a page, a file — emit exactly one and then stop; the result comes back
+in a <TOOL_RESULT> block and you continue from there. Pictures are the
+exception, because their result is only that they worked: see Pictures below.
 
 Web
   <TOOL_WEB_SEARCH>search query</TOOL_WEB_SEARCH>
@@ -7371,7 +9277,7 @@ Environment
   <TOOL_LIST_MODELS></TOOL_LIST_MODELS>   Models installed in this Ollama.
   <TOOL_SYSTEM_INFO></TOOL_SYSTEM_INFO>   CPU, memory and GPU usage.
 
-${drawPrompt}
+${drawPrompt}${chartGuide}
 
 Rules
 1. Use a tool whenever the answer depends on current facts, on this machine, or
@@ -7403,7 +9309,11 @@ Rules
             + `drawing a new one, and when only one part changes (hair, eyes, clothes, `
             + `background) set region to that part so the rest stays exactly as it is. `
             + `To cut the picture out, enlarge it, or show more around it, call remove_background, `
-            + `upscale_image or extend_image. Never call any of them unasked.
+            + `upscale_image or extend_image. Never call any of them unasked. But "그려줘" about `
+            + `an equation, a function, a curve or a set of numbers — "r = 4cos3θ를 그려줘", `
+            + `"sin 그래프 그려줘", "plot y = x^2" — is a chart block as described below, not a `
+            + `picture: generate_image would draw a picture of what a graph looks like, which `
+            + `answers none of them.
 ${promptAdvice}
 ${shapeAdvice}
 A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the clip's duration.${videoGuide}
@@ -7416,7 +9326,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 + `enough, answer and cite the URLs you used.
 `
               : '')
-            + `If a tool reports a failure, say so plainly rather than inventing the answer.`;
+            + `If a tool reports a failure, say so plainly rather than inventing the answer.`
+            /* The chart block belongs here as much as in the tag prompt: it is
+               not a tool, so nothing in the schemas mentions it, and a model
+               that has never been told about it answers "그래프 그려줘" with
+               the only drawing it knows about -- which is generate_image. */
+            + chartGuide;
         }
 
         const finalSystemPrompt = [
@@ -7434,16 +9349,36 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           mcpPrompt,
           `[System Instructions]\n${effectiveSystemPrompt}`,
         ].filter(Boolean).join('\n\n');
-        conversation = [{ role: 'system', content: finalSystemPrompt }, ...conversation];
+        conversation = [
+          { role: 'system', content: finalSystemPrompt },
+          ...conversation.filter(m => m.role !== 'system'),
+        ];
       }
 
       const targetModel = activeModel;
       addLog(`Sending message to ${targetModel}...`, 'info');
 
+      rememberGeneration(startedIn, turnBegan, chatJobId, newMessageIndex, initialAssistantContent, targetModel);
+      // The server may finish after this tab is gone. Persist its destination
+      // before starting the request, including a just-promoted draft.
+      await persistSessions(sessionsRef.current.map(session => session.id === startedIn
+        ? promoted({ ...session, messages: [...initialMessages, {
+          role: 'assistant', content: initialAssistantContent, model: targetModel, at: turnBegan,
+        }], updatedAt: Date.now(), lastModel: targetModel }) : session));
+      signal.throwIfAborted();
       // 4. Send to Ollama
       const askOllama = (think) => fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: {
+          'Content-Type': 'application/json',
+          'X-Chat-Job-Id': chatJobId,
+          /* Which conversation the answer belongs to, so the reader's other
+             devices can find it being written and follow it as it is typed
+             rather than a sync behind. `startedIn`, not whatever is on screen:
+             a reply is written to the chat that asked for it. See
+             `/api/chat/live`. */
+          'X-Chat-Conversation': String(startedIn),
+        },
         signal: abortControllerRef.current.signal,
         body: JSON.stringify({
           model: targetModel,
@@ -7461,7 +9396,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         })
       });
 
-      const wanted = thinkField(thinkMode);
+      const wanted = thinkField(chatThinkMode);
       let res = await askOllama(wanted);
 
       /* A level is not something every model — or every version of Ollama —
@@ -7472,6 +9407,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         const why = await res.clone().text().catch(() => '');
         if (/think|effort|level/i.test(why) || res.status === 400) {
           addLog(`${targetModel} does not take a thinking level; asking for thinking without one.`, 'info');
+          chatJobId = globalThis.crypto?.randomUUID?.() || `${Date.now()}-retry`;
+          rememberGeneration(startedIn, turnBegan, chatJobId, newMessageIndex, initialAssistantContent, targetModel);
           res = await askOllama({ think: true });
         }
       }
@@ -7481,7 +9418,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         throw new Error(`Ollama returned HTTP ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`);
       }
 
-      const reader = res.body.getReader();
+      const reader = resumableChatReader(res, chatJobId, signal);
       const decoder = new TextDecoder();
 
       // Ollama >= 0.9 streams reasoning in a separate `message.thinking`
@@ -7567,9 +9504,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       const flushNow = () => {
         flushHandle = null;
         lastCommitAt = Date.now();
+        const committedContent = assistantContent;
         reviseSession(currentSessionId, s => {
           const msgs = [...s.messages];
-          msgs[newMessageIndex] = { ...msgs[newMessageIndex], content: assistantContent, isMcpFetching: false };
+          msgs[newMessageIndex] = { ...msgs[newMessageIndex], content: committedContent, isMcpFetching: false };
           return { ...s, messages: msgs };
         });
       };
@@ -7590,6 +9528,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         if (flushHandle === null) return;
         cancelAnimationFrame(flushHandle);
         flushHandle = null;
+      };
+
+      flushPartial = () => {
+        cancelFlush();
+        assistantContent = composeContent(true);
+        flushNow();
       };
 
       while (true) {
@@ -7645,7 +9589,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             if (delta.content) speakAsItArrives(false);
           }
 
-          if (parsed.done) {
+          if (parsed.error) throw new Error(parsed.error);
+          if (parsed.done && !legMetrics) {
             cancelFlush();
             assistantContent = composeContent(true);
             /* The footer's three numbers, and why each has a fallback.
@@ -7726,11 +9671,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             pendingVariantsRef.current = null;
             truncated = wasTruncated(parsed);
 
+            const completedContent = assistantContent;
             reviseSession(currentSessionId, s => {
               const msgs = [...s.messages];
               const base = {
                 ...msgs[newMessageIndex],
-                content: assistantContent,
+                content: completedContent,
                 // When it finished, which a regeneration keeps with its variant.
                 at: Date.now(),
                 // prompt_eval_count is the tokeniser's own count of everything sent;
@@ -7744,6 +9690,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 // Only when there are any, so an ordinary answer carries no
                 // empty array into storage and over the sync.
                 ...(turnImages.length ? { generated: turnImages } : {}),
+                ...(turnSongs.length ? { songs: turnSongs } : {}),
                 // What was left out of the prompt. On the message rather than
                 // in a log, because a model that has forgotten turn nine while
                 // the screen still shows turn nine is a bug nobody can
@@ -7769,6 +9716,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       // would otherwise lose the last batch to the cancelled callback.
       // Metrics set by `done` survive because the flush only rewrites content.
       flushNow();
+      flushPartial = null;
       addLog(`Received response`, 'success');
 
       /* A stream that ended without a `done` frame.
@@ -7886,6 +9834,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         // loop hands on, so a turn that drew and then kept talking does not
         // lose the picture when the next request replaces the message array.
         ...(turnImages.length ? { generated: turnImages } : {}),
+        ...(turnSongs.length ? { songs: turnSongs } : {}),
         ...(memoryNote ? { memoryNote } : {}),
       });
 
@@ -8061,8 +10010,14 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             pattern: new RegExp(`<TOOL_GENERATE_IMAGE${TAG_ATTRS}\\s*>([\\s\\S]*?)<\\/TOOL_GENERATE_IMAGE>`),
             run: async (m) => {
               const attrs = tagAttrs(m[1]);
-              const prompt = (m[2] || '').trim();
+              /* The conversation's own character, in front and exactly as it
+                 was chosen, whatever the model wrote about her. See
+                 `withPinnedCharacter`. */
+              const pinned = sessionsRef.current.find(s => s.id === startedIn)?.character || '';
+              const prompt = withPinnedCharacter(pinned, (m[2] || '').trim());
               const style = (attrs.style || 'photo').toLowerCase();
+              // The Studio's standing boxes, off for this one picture.
+              const plain = String(attrs.studio_prompt || '').toLowerCase() === 'off';
               /* Written by the model, because what must not appear depends on
                  what is being drawn: a portrait wants "extra fingers, deformed
                  hands" and a landscape wants "people, text, watermark". */
@@ -8090,22 +10045,16 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   .slice(0, 3).join(', ');
                 edit = {
                   dataUrl: picture.dataUrl,
+                  // Which of this conversation's pictures it was, for the before-and-after.
+                  filename: picture.filename || '',
                   region,
                   /* The seed the picture was drawn with, so what is redrawn is
                      drawn the same way. Only meaningful to the model that drew it. */
                   seed: picture.seed,
                   seedModel: picture.model,
-                  /* Clamped: 1.0 ignores the picture completely, which is not
-                     an edit, and 0 returns it untouched. The default is 0.65
-                     because 0.5 was measured to change almost nothing — the
-                     reference dominates, and a request to make the hair blue
-                     came back blonde.
-
-                     With a region the rest of the picture is untouched whatever
-                     this says, so the region itself can be redrawn outright:
-                     long hair does not become a bob by being retouched. */
+                  // Preserve a requested gentle edit; replacing a part can explicitly use 1.0.
                   change: (region || paint)
-                    ? (Number.isFinite(asked) ? Math.min(Math.max(asked, 0.3), 1) : 0.9)
+                    ? (Number.isFinite(asked) ? Math.min(Math.max(asked, 0.1), 1) : 0.65)
                     : (Number.isFinite(asked) ? Math.min(Math.max(asked, 0.1), 0.9) : 0.65),
                 };
               }
@@ -8121,11 +10070,27 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 ...(!edit && attachedNow ? { shapeFrom: asImageDataUrl(attachedNow) } : {}),
               };
               try {
+                // A painted area is grown a little: a brush stroke stops just short of an edge.
+                // By a share of the picture, which is the size the mask is painted at -- see paintedGrow.
+                const grow = paint ? paintedGrow(await pictureSize(edit.dataUrl).catch(() => ({}))) : 0;
                 const pictures = await generateImages(count, prompt, style, negative, edit,
                   abortControllerRef.current?.signal,
-                  // A painted area is grown a little: a brush stroke stops just short of an edge.
-                  { ...shape, ...(paint ? { mask: paint.mask, maskGrow: 12 } : {}) });
-                for (const picture of pictures) turnImages.push({ ...picture, edited: !!edit });
+                  { ...shape, ...(plain ? { plain: true } : {}), ...(paint ? { mask: paint.mask, maskGrow: grow } : {}) });
+                /* Each one checked before it is shown, where the reader has
+                   asked for that. A picture with a malformed hand is finished
+                   in every other way, and the part that is wrong is the only
+                   part worth drawing again -- see `withRetouch`. */
+                for (const picture of pictures) {
+                  turnImages.push({
+                    ...(await withRetouch(picture, {
+                      style,
+                      negative,
+                      model: pickInspector(activeModel),
+                      signal: abortControllerRef.current?.signal,
+                    })),
+                    edited: !!edit,
+                  });
+                }
                 return `${pictures.length > 1 ? `${pictures.length} images were` : 'The image was'} generated `
                   + `and ${pictures.length > 1 ? 'are' : 'is'} already displayed to the user beneath your `
                   + `reply. Do not describe ${pictures.length > 1 ? 'them' : 'it'}, do not link to `
@@ -8175,6 +10140,72 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               }
             },
           },
+          /* Somebody else in the picture they are looking at.
+           *
+           * This was a button, and a button was the wrong shape for it: the
+           * request is already in the sentence -- "이 그림 루나로 바꿔줘" -- and
+           * reading that sentence is what the model is for. What it cannot do
+           * is know who exists, so the names are in the system message and
+           * this refuses anything that is not one of them rather than guessing
+           * at a likeness nobody trained.
+           *
+           * Which picture is resolved here rather than asked of the model, for
+           * the same reason `generate_image` resolves it: a model asked to
+           * re-describe an image describes a different one. */
+          {
+            name: 'TOOL_REMOVE_SHADOW',
+            pattern: new RegExp(`<TOOL_REMOVE_SHADOW${TAG_ATTRS}\\s*>([\\s\\S]*?)<\\/TOOL_REMOVE_SHADOW>`),
+            run: async (m) => {
+              const attrs = tagAttrs(m[1]);
+              const picture = latestPictureInChat();
+              if (!picture || picture.video) {
+                return 'There is no picture in this conversation to work on. Draw one first, '
+                  + 'or ask them to attach the picture they mean.';
+              }
+              const asked = Number(attrs.strength);
+              try {
+                turnImages.push(await runPictureOp('deshadow', picture, {
+                  ...(Number.isFinite(asked) ? { strength: asked } : {}),
+                  signal: abortControllerRef.current?.signal,
+                }));
+                return 'The shadows were lifted out of the picture and the result is already '
+                  + 'displayed beneath your reply. Say at most one short sentence about it.';
+              } catch (e) {
+                return `IMAGE TOOL FAILED: ${e.message}. Say so plainly.`;
+              }
+            },
+          },
+          {
+            name: 'TOOL_SWAP_CHARACTER',
+            pattern: new RegExp(`<TOOL_SWAP_CHARACTER${TAG_ATTRS}\\s*>([\\s\\S]*?)<\\/TOOL_SWAP_CHARACTER>`),
+            run: async (m) => {
+              const attrs = tagAttrs(m[1]);
+              const asked = ((m[2] || '').trim() || attrs.into || '').trim();
+              if (!asked) return 'Error: swap_character needs the name of the character to swap in.';
+              /* A taught character if the name is one, and danbooru tags if it
+                 is not. There is no failure case for a name nobody recognises:
+                 these models were trained on danbooru, so an unknown name is
+                 simply tags they may or may not know -- and refusing it would
+                 rule out every character that has ever been tagged, which is
+                 most of them. */
+              const into = swapTarget(charactersRef.current, asked);
+              if (!into) return 'Error: swap_character needs the name of the character to swap in.';
+              const picture = latestPictureInChat();
+              if (!picture || picture.video) {
+                return 'There is no picture in this conversation to change. Draw one first, '
+                  + 'or ask them to attach the picture they mean.';
+              }
+              try {
+                await swapCharacter(picture, into, (attrs.style || '').trim());
+                return `The person in the picture was redrawn as ${into.name}`
+                  + `${into.kind === 'tags' ? ' (from danbooru tags, with no trained LoRA)' : ''}, `
+                  + 'and the result is already displayed beneath your reply. Say at most one '
+                  + 'short sentence about it.';
+              } catch (e) {
+                return `IMAGE TOOL FAILED: ${e.message}. Say so plainly.`;
+              }
+            },
+          },
           {
             name: 'TOOL_EXTEND_IMAGE',
             pattern: new RegExp(`<TOOL_EXTEND_IMAGE${TAG_ATTRS}\\s*>([\\s\\S]*?)<\\/TOOL_EXTEND_IMAGE>`),
@@ -8201,6 +10232,38 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               }
             },
           },
+          /* Making a song.
+           *
+           * The lyrics are the body of the tag and the style is an attribute,
+           * because lyrics have newlines in them and section markers on their
+           * own lines, and an attribute cannot hold either. */
+          {
+            name: 'TOOL_GENERATE_MUSIC',
+            pattern: new RegExp(`<TOOL_GENERATE_MUSIC${TAG_ATTRS}\\s*>([\\s\\S]*?)<\\/TOOL_GENERATE_MUSIC>`),
+            run: async (m) => {
+              const attrs = tagAttrs(m[1]);
+              const lyrics = (m[2] || '').trim();
+              const style = (attrs.style || '').trim();
+              if (!style && !lyrics) return 'Error: generate_music needs a style, and lyrics unless it is instrumental.';
+
+              addLog(`[tool] generate music: ${style.slice(0, 80)}`, 'info');
+              try {
+                const songs = await generateOneSong({
+                  prompt: style,
+                  lyrics,
+                  instrumental: String(attrs.instrumental || '').toLowerCase() === 'true',
+                  language: attrs.language || (/[가-힣]/.test(lyrics) ? 'ko' : 'en'),
+                  duration: Number(attrs.duration) || undefined,
+                }, abortControllerRef.current?.signal);
+                turnSongs.push(...songs);
+                return `The song was generated and is already playing beneath your reply. Do not `
+                  + `repeat the lyrics or describe the sound. Say at most one short sentence about it.`;
+              } catch (e) {
+                return `MUSIC GENERATION FAILED: ${e.message}. This is a tooling failure — say so `
+                  + `plainly rather than describing a song that does not exist.`;
+              }
+            },
+          },
           /* Making something move.
            *
            * `from="last_image"` is the request people actually make — "이걸
@@ -8220,12 +10283,20 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               const from = (attrs.from || 'none').toLowerCase();
               if (!prompt) return 'Error: generate_video needs a prompt describing the shot.';
 
+              const loop = String(attrs.loop || '').toLowerCase() === 'true';
               let reference = null;
-              if (from === 'last_image') {
+              if (from === 'last_image' || loop) {
                 reference = latestImageInChat();
                 if (!reference) {
-                  return 'There is no picture in this conversation to animate. Ask them to '
-                    + 'attach one, or offer to generate one first.';
+                  /* A loop is pinned to a frame at both ends, so without a
+                     picture there is nothing to come back to -- and a "loop"
+                     that quietly rendered an ordinary clip would be the worst
+                     of the three possible answers. */
+                  return loop && from !== 'last_image'
+                    ? 'A looping video has to start and end on the same picture, and there is none '
+                      + 'in this conversation. Offer to draw one first, then animate that.'
+                    : 'There is no picture in this conversation to animate. Ask them to '
+                      + 'attach one, or offer to generate one first.';
                 }
               }
               /* Made from nothing, but asked for alongside a picture they just
@@ -8235,11 +10306,40 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 ? await pictureSize(asImageDataUrl(attachedNow)).then(d => `${d.width}:${d.height}`).catch(() => '')
                 : '');
 
-              addLog(`[tool] generate video: ${prompt.slice(0, 80)}`, 'info');
+              /* A music video: the song just made in this turn, or the newest in
+                 the conversation; shots or one take; words on screen. */
+              const wantsSong = String(attrs.soundtrack || '').toLowerCase() === 'last_song';
+              const earlierSongs = (messagesRef.current || []).slice().reverse().flatMap(msg => (msg.songs || []).slice().reverse());
+              const lastSong = wantsSong
+                ? (turnSongs.length ? turnSongs[turnSongs.length - 1] : earlierSongs.find(s => s?.name))
+                : null;
+              if (wantsSong && !lastSong?.name) {
+                return 'There is no song in this conversation to set the video to. Make one with generate_music '
+                  + 'first, then call generate_video again with soundtrack="last_song".';
+              }
+              const { timeline, captions } = splitCaptions(prompt);
+              const captionsAttr = String(attrs.captions || '').toLowerCase();
+
+              addLog(`[tool] generate video: ${timeline.slice(0, 80)}`, 'info');
               try {
-                const film = await generateOneVideo(prompt, reference, abortControllerRef.current?.signal, {
+                const film = await generateOneVideo(timeline, reference, abortControllerRef.current?.signal, {
                   duration: attrs.duration,
+                  // Their words decide whether there is a length, not the model's.
+                  lengthAsked: namesLength(thisTurn[0]?.content),
                   aspect,
+                  loop,
+                  ...(lastSong ? {
+                    soundtrack: {
+                      name: lastSong.name,
+                      seconds: Number(lastSong.metas?.duration) || Number(lastSong.duration) || 0,
+                      bpm: Number(lastSong.metas?.bpm) || Number(lastSong.bpm) || 0,
+                    },
+                  } : {}),
+                  cut: String(attrs.cut || '').toLowerCase() === 'true',
+                  transition: String(attrs.transition || '').toLowerCase() === 'none' ? 'none' : 'fade',
+                  captions,
+                  lyricsCaptions: captionsAttr === 'lyrics' && !captions.length && !!lastSong,
+                  upscale: String(attrs.upscale || '').toLowerCase() === 'true',
                 });
                 turnImages.push({ ...film, video: true });
                 return `The video was generated and is already displayed to the user beneath `
@@ -8295,6 +10395,15 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             .map(match => ({ tool, match })))
           .sort((a, b) => a.match.index - b.match.index);
 
+        /* Where the drawing tags are in this leg's text, whether or not this
+           turn will run them. Counted from the *text* rather than from what
+           ran, because the transcript counts from the text too -- a tag that
+           was refused or dropped is still a block on screen, and a picture
+           numbered against the ones that ran would land a place too early. */
+        const drawnHere = [...toolSource.matchAll(/<(TOOL_[A-Z_]+)(?=[\s/>])/g)]
+          .filter(match => DRAWING_TAGS.has(match[1]))
+          .map(match => match.index);
+
         if (invocations.length > 0) {
           /* What the turn has spent so far.
            *
@@ -8317,6 +10426,20 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   + 'rather than guessing. Do not emit any more tool tags.\n</TOOL_RESULT>',
               },
             ];
+            /* The reader pressed stop.
+             *
+             * A turn that calls a tool carries on in a *new* `handleSend`, and
+             * that one makes an AbortController of its own -- so the signal
+             * cancelled a moment ago is not the one the next leg would run
+             * with, and stopping a picture stopped only the picture while the
+             * model went on to talk about it.
+             *
+             * What has already been said stays said. What does not happen is
+             * another leg. */
+            if (signal.aborted) {
+              addLog('[tool] stopped by the reader; the turn ends here', 'info');
+              return;
+            }
             setTimeout(() => handleSend(null, nextMessages, activeModel), 100);
             return;
           }
@@ -8336,17 +10459,56 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           const results = [];
           const picturesBefore = turnImages.length;
           for (const invoked of running) {
+            /* Nothing more after a stop. One leg can carry several calls, and
+               pressing stop during the first of them should not leave the
+               other two to run. */
+            if (signal.aborted) break;
             let text;
+            const picturesBeforeThisCall = turnImages.length;
+            const songsBeforeThisCall = turnSongs.length;
             try {
               text = await invoked.tool.run(invoked.match);
             } catch (e) {
               text = `Error running ${invoked.tool.name}: ${e.message}`;
               addLog(`[tool] ${invoked.tool.name} failed: ${e.message}`, 'error');
             }
+            /* Whatever it drew is stamped with which call drew it, so the
+               transcript can put it back where the call was rather than at the
+               bottom of the message. One call can make several -- `count`. */
+            if (DRAWING_TAGS.has(invoked.tool.name)) {
+              const at = drawnHere.indexOf(invoked.match.index);
+              const call = drawCallsBefore + (at === -1 ? drawnHere.length : at);
+              for (let n = picturesBeforeThisCall; n < turnImages.length; n += 1) {
+                turnImages[n] = { ...turnImages[n], call };
+              }
+              // A song too, so it is played where it was asked for.
+              for (let n = songsBeforeThisCall; n < turnSongs.length; n += 1) {
+                turnSongs[n] = { ...turnSongs[n], call };
+              }
+            }
             // The marker is what makes the budget countable above, and it also
             // tells the model which answer belongs to which request.
             results.push(`--- ${invoked.tool.name} ---\n${text}`);
           }
+
+          /* The card back to the language model, now rather than when the next
+             leg asks for it.
+           *
+           * A picture takes the model off the card -- it has to; a 22GB model
+           * and an image model do not share one -- and until now it came back
+           * only when something next asked it a question. With a picture that
+           * can sit in the middle of a reply, that wait landed in the middle of
+           * the reply too. Asked for here, once the last picture is finished
+           * and checked, so the loading happens behind whatever the app does
+           * next. Never waited for: the answer is not held up by it. */
+          if (turnImages.length > picturesBefore) {
+            fetch('/api/vram/warm', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ model: activeModel }),
+            }).catch(() => {});
+          }
+
           if (dropped.length > 0) {
             results.push(`--- SKIPPED ---\nThe tool budget did not stretch to `
               + `${dropped.map(d => d.tool.name).join(', ')}. Ask again next turn if you still need them.`);
@@ -8382,7 +10544,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               const msgs = [...s.messages];
               if (!msgs[newMessageIndex]) return s;
               msgs[newMessageIndex] = {
-                ...msgs[newMessageIndex], content, generated: pictures, isMcpFetching: false,
+                ...msgs[newMessageIndex], content, isMcpFetching: false,
+                ...(pictures.length ? { generated: pictures } : {}),
+                // A song ends the turn the same way, and was not written down here.
+                ...(turnSongs.length ? { songs: [...turnSongs] } : {}),
               };
               return { ...s, messages: msgs };
             });
@@ -8412,6 +10577,20 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               { role: 'user', content: `<TOOL_RESULT>\n${toolResultText}${suffix}\n</TOOL_RESULT>` },
             ];
 
+            /* The reader pressed stop.
+             *
+             * A turn that calls a tool carries on in a *new* `handleSend`, and
+             * that one makes an AbortController of its own -- so the signal
+             * cancelled a moment ago is not the one the next leg would run
+             * with, and stopping a picture stopped only the picture while the
+             * model went on to talk about it.
+             *
+             * What has already been said stays said. What does not happen is
+             * another leg. */
+            if (signal.aborted) {
+              addLog('[tool] stopped by the reader; the turn ends here', 'info');
+              return;
+            }
             setTimeout(() => handleSend(null, nextMessages, activeModel), 100);
             return; // Keep isGenerating true
           }
@@ -8447,6 +10626,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       }
 
     } catch (err) {
+      flushPartial?.();
       if (err.name === 'AbortError' || err.message.includes('abort')) {
         addLog('Generation stopped by user.', 'info');
         // Stopping mid-thought leaves an unterminated <think>, which would
@@ -8470,31 +10650,47 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
            on its own when the network comes back -- the moment connectivity
            returns being exactly when nobody is watching. */
         addLog(`[queue] ${err.message} — the question is kept and will be retried`, 'info');
-        const queued = enqueue(profileScopeRef.current, makeEntry({
+        const entry = carryAttempt(makeEntry({
           sessionId: currentSessionId,
           model: activeModel,
           text: originalInput,
           attachments: currentAttachments,
-        }));
+        }), retryOf, err);
+        const queued = enqueue(profileScopeRef.current, entry);
         setSendQueue(queued);
         // The half-written assistant bubble is removed rather than left saying
         // nothing: the queue is what represents this turn now.
         if (initialMessages) {
           updateCurrentSession({ messages: initialMessages.slice(0, -1) });
         }
-        toast(t('queue.held'), 'info', 8000);
+        /* Said once, with the reason, when it is first held -- and once more if
+           the retries run out. Not on every retry: that was a notice every few
+           seconds saying the same thing. */
+        if (!retryOf) {
+          toast(t('queue.heldBecause', { reason: t(`queue.why.${heldReason(err)}`) }), 'info', 9000);
+        } else if ((entry.attempts || 0) >= MAX_ATTEMPTS) {
+          toast(t('queue.gaveUp', { error: t(`queue.why.${heldReason(err)}`) }), 'error', 9000);
+        }
       } else {
         addLog(`Error: ${err.message}`, 'error');
         if (initialMessages) {
-          updateCurrentSession({
-             messages: [...initialMessages, { role: 'assistant', content: `**Error:** ${err.message}` }]
+          reviseSession(startedIn, session => {
+            const msgs = [...session.messages];
+            const previous = msgs[newMessageIndex] || { role: 'assistant', content: '' };
+            msgs[newMessageIndex] = { ...previous, content: `${previous.content || ''}\n\n**Error:** ${err.message}`, isMcpFetching: false };
+            return { ...session, messages: msgs };
           });
         }
       }
     } finally {
-      markAnswered(startedIn, turnBegan);
-      setIsGenerating(false);
-      setGeneratingSessionId(null);
+      flushSync(() => {
+        markAnswered(startedIn, turnBegan);
+        setIsGenerating(false);
+        setGeneratingSessionId(null);
+      });
+      // Keep replay available until the final React commit reaches IndexedDB.
+      const persisted = await persistSessions(sessionsRef.current);
+      if (persisted) forgetGeneration(chatJobId);
       /* Deliberately not awaited. The summary is for the next question, so
          making this turn wait for it would pay the cost now for a benefit
          later -- and the composer would sit disabled while it ran. */
@@ -8518,13 +10714,127 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
   // calling the very first render's copy for the life of the tab.
   handleSendRef.current = handleSend;
 
+  /* How tall the header is, for anything that has to sit clear of it.
+   *
+   * On a phone the notices are pinned under the header -- the bottom of the
+   * screen is the composer, and a notice over the composer is a notice over
+   * the send button (measured: it made the model picker unpressable). "Under
+   * the header" needs a number, and the header has not got a fixed one: the
+   * in-chat search opens a second row inside it.
+   *
+   * A callback ref rather than an effect, because an effect with no
+   * dependencies runs once and on that render there is no header -- the
+   * sign-in screen is what is on screen. React calls this with the element the
+   * moment the header exists and with null when it goes, which is the two
+   * moments the observer cares about.
+   *
+   * And a ResizeObserver rather than one reading, because the height changes
+   * with the search, with a model name long enough to wrap, and with every
+   * rotation. */
+  /* The composer, for the notices at the bottom right of a desktop.
+   *
+   * With the conversation column wide enough, the composer's right end runs
+   * under that corner, and a notice that stays up -- the one about which
+   * address keeps the chats -- sat on the send button. The stack now starts
+   * above the composer. A ResizeObserver here, unlike the header's case: the
+   * composer grows with every line typed, and nothing else says so. When the
+   * composer goes (the studio, the gallery) the offset goes with it. */
+  const composerObserver = useRef(null);
+  const composerWrite = useRef(null);
+  const measureComposer = useCallback((node) => {
+    composerObserver.current?.disconnect();
+    composerObserver.current = null;
+    composerWrite.current = null;
+    const root = document.documentElement;
+    if (!node) { root.style.removeProperty('--composer-h'); return; }
+    const write = () => {
+      const box = node.getBoundingClientRect();
+      // Only when it is at the bottom: on an empty chat it sits mid-screen,
+      // clear of that corner, and lifting the notices would put them on the
+      // starter cards instead.
+      const fromBottom = Math.round(window.innerHeight - box.top);
+      if (box.height > 0 && box.bottom > window.innerHeight - 48) root.style.setProperty('--composer-h', `${fromBottom}px`);
+      else root.style.removeProperty('--composer-h');
+    };
+    write();
+    composerWrite.current = write;
+    if (typeof ResizeObserver === 'function') {
+      composerObserver.current = new ResizeObserver(write);
+      composerObserver.current.observe(node);
+    }
+  }, []);
+
+  const headerEl = useRef(null);
+  const measureHeader = useCallback((node) => {
+    headerEl.current = node;
+    if (node) {
+      const height = Math.round(node.getBoundingClientRect().height);
+      if (height > 0) document.documentElement.style.setProperty('--header-h', `${height}px`);
+    }
+  }, []);
+
+  /* Measured again whenever it could have changed.
+   *
+   * A ResizeObserver would say this more directly and cannot be checked here:
+   * in headless Chrome it never fires, not even the initial callback that
+   * `observe()` is specified to make, so a fix built on it is one nobody can
+   * watch working. These three are the whole list anyway -- the header is one
+   * row of controls, it becomes two when the in-chat search opens, and it
+   * re-flows when the window changes width or the phone is turned.
+   *
+   * A layout effect, so the value is in place before the frame that needs it
+   * is painted and the notices do not start over the header and jump. */
+  useLayoutEffect(() => {
+    const write = () => {
+      const node = headerEl.current;
+      if (!node) return;
+      const height = Math.round(node.getBoundingClientRect().height);
+      if (height > 0) document.documentElement.style.setProperty('--header-h', `${height}px`);
+    };
+    write();
+    window.addEventListener('resize', write);
+    window.addEventListener('orientationchange', write);
+    return () => {
+      window.removeEventListener('resize', write);
+      window.removeEventListener('orientationchange', write);
+    };
+  }, [searchOpen, isNarrow]);
+
+  /* The composer moves without changing size -- from the middle of an empty
+     chat to the bottom of one with messages -- and a size observer does not
+     see a move. So it is measured again when that can happen. */
+  const composerAtRest = (currentSession?.messages?.length || 0) > 0;
+  useLayoutEffect(() => {
+    const write = () => composerWrite.current?.();
+    write();
+    window.addEventListener('resize', write);
+    return () => window.removeEventListener('resize', write);
+  }, [currentSessionId, composerAtRest, sidebarPlace]);
+
   const stopGeneration = (e) => {
     if (e) e.preventDefault();
+    try {
+      const saved = JSON.parse(localStorage.getItem(generationStorageKey) || 'null');
+      if (saved?.jobId) {
+        fetch('/api/chat/cancel', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ id: saved.jobId }),
+          keepalive: true,
+        }).catch(() => {});
+      }
+    } catch (error) { /* best effort */ }
     if (abortControllerRef.current) {
       abortControllerRef.current.abort();
     }
+    if (drawing?.restored) {
+      stopDrawing(drawing.id);
+      try { localStorage.removeItem(drawingKeyFor(drawing.sessionId || currentSessionId)); } catch {}
+      setDrawing(null);
+    }
     setIsGenerating(false);
     setGeneratingSessionId(null);
+    forgetGeneration();
     addLog('User requested to stop generation.', 'info');
   };
 
@@ -8573,6 +10883,20 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
   /** The attachment being looked at, or null. */
   const [viewingAttachment, setViewingAttachment] = useState(null);
   const attachmentDialogRef = useDialog(!!viewingAttachment);
+
+  /* The picture the model drew that is open in the Studio's viewer, by its
+     gallery key (`session:message:n`), or null. Every picture and film in the
+     conversation is a step of the viewer's arrows, in the order they were made. */
+  const [viewingPicture, setViewingPicture] = useState(null);
+  // Left open in one chat, it would open again on coming back to it.
+  useEffect(() => { setViewingPicture(null); }, [currentSessionId]);
+
+  /* Which upscaled or edited pictures are showing the before-and-after bar, by
+     `message:n`, and every picture in this chat -- what an edit's original is
+     looked up among. See `beforeUrlOf`. */
+  const [comparingPictures, setComparingPictures] = useState({});
+  useEffect(() => { setComparingPictures({}); }, [currentSessionId]);
+  const chatDrawn = useMemo(() => messages.flatMap(message => message.generated || []), [messages]);
 
   /* The passage behind a citation the reader pressed, or null.
      One listener on the transcript rather than a handler per marker: the
@@ -8664,15 +10988,21 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       });
     };
 
+    // Clicking elsewhere collapses the selection; this is what dismisses it.
+    // Named rather than inline, because `selectionchange` fires on every
+    // caret movement and a copy of this left behind by a remount would keep
+    // running -- and keep answering for a bar that is no longer on screen.
+    const dismiss = () => {
+      if (!(window.getSelection?.().toString() || '').trim()) setSelectionBar(null);
+    };
+
     document.addEventListener('mouseup', settle);
     document.addEventListener('touchend', settle);
-    // Clicking elsewhere collapses the selection; this is what dismisses it.
-    document.addEventListener('selectionchange', () => {
-      if (!(window.getSelection?.().toString() || '').trim()) setSelectionBar(null);
-    });
+    document.addEventListener('selectionchange', dismiss);
     return () => {
       document.removeEventListener('mouseup', settle);
       document.removeEventListener('touchend', settle);
+      document.removeEventListener('selectionchange', dismiss);
     };
   }, []);
 
@@ -8712,12 +11042,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     // The nearest question above this answer, which is the one it answers.
     let question = '';
     for (let i = index - 1; i >= 0; i--) {
-      if (messages[i]?.role === 'user') { question = messages[i].content || ''; break; }
+      if (messages[i]?.role === 'user') { question = asWritten(messages[i].content); break; }
     }
 
     const body = shareBody({
       question,
-      answer: cleanForExport(msg.content || ''),
+      // The same rule as copy: a chip on screen is not text to paste.
+      answer: asWritten(cleanForExport(msg.content || '')),
       model: msg.model || '',
     });
 
@@ -8772,6 +11103,20 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       box.setSelectionRange(box.value.length, box.value.length);
     }, 0);
   };
+
+  /* What pressing copy on a message means.
+   *
+   * An attachment is not text in the message. It is folded into the text that
+   * goes to the model and unwrapped again for the transcript, which draws a
+   * chip with a filename -- so what is on screen is one line and what went to
+   * the clipboard was the whole file: eleven thousand lines of JSON pasted into
+   * somebody's chat app behind the sentence they meant to send.
+   *
+   * Stripped with the one function that knows every marker -- see
+   * src/attachMarkers.js -- which the transcript, the export, the share link
+   * and the voice all already use. Copy and share were the two readers that
+   * did not. */
+  const asWritten = (content) => stripAttachments(content || '').trim();
 
   const copyToClipboard = async (text, index) => {
     // Awaited, and the tick only shown if it worked. The old version called
@@ -9524,16 +11869,25 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           });
           setSessions([...sessions, ...toAdd]);
           addLog(`Successfully imported ${toAdd.length} sessions.`, 'success');
+          // Said where it was done. The log is two tabs away, and an import
+          // that gave no sign either way got tried twice.
+          toast(t('data.imported', { n: toAdd.length }), 'success');
+        } else {
+          toast(t('data.importNotChats'), 'error');
         }
       } catch (err) {
         addLog(`Import failed: ${err.message}`, 'error');
+        toast(t('data.importFailed', { error: err.message }), 'error');
       }
     };
     reader.readAsText(file);
+    // The same file again is a real second import, and an input that still
+    // holds it fires no change.
+    e.target.value = '';
   };
 
   const clearAllChats = () => {
-    if (window.confirm('Are you sure you want to delete ALL chat history? This cannot be undone.')) {
+    if (window.confirm(t('data.confirmClearAll'))) {
       const freshSession = { id: nextSessionId(), title: 'New Chat', messages: [], createdAt: Date.now(), updatedAt: Date.now(), lastModel: '' };
       // Every one of them, deliberately, so the merge does not put them back.
       for (const chat of sessionsRef.current) removedIdsRef.current.add(String(chat.id));
@@ -10003,11 +12357,16 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
   useEffect(() => {
     const wantsModels = showSettings && settingsTab === 'models';
-    if (!wantsModels && !showSystemMonitor) return undefined;
+    /* And while the picker is open. Which models are already on the card is
+       the single most useful thing to know when choosing one -- it is the
+       difference between an answer that starts now and twenty gigabytes read
+       off a disk first -- and it was only ever asked for in two panels most
+       people never open. */
+    if (!wantsModels && !showSystemMonitor && !showModelMenu) return undefined;
     fetchRunningModels();
     const timer = setInterval(fetchRunningModels, 5000);
     return () => clearInterval(timer);
-  }, [showSettings, settingsTab, showSystemMonitor]);
+  }, [showSettings, settingsTab, showSystemMonitor, showModelMenu]);
 
   // Close the regenerate menu when clicking elsewhere.
   useEffect(() => {
@@ -10394,7 +12753,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       {/* Main Chat Area */}
       <div className={`claude-main${messages.length === 0 ? ' is-blank' : ''}`}>
         {/* Top Navigation */}
-        <div className="main-header">
+        <div className="main-header" ref={measureHeader}>
           <button
             className="toggle-sidebar"
             aria-label={isSidebarOpen ? t('sidebar.close') : t('sidebar.open')}
@@ -10685,6 +13044,41 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             }}
           />
         )}
+        {viewingPicture && (() => {
+          const shown = chatPictures([currentSession]);
+          const at = shown.findIndex(item => item.key === viewingPicture);
+          if (at < 0) return null;
+          const pictureAt = (n) => messages[shown[n].index]?.generated?.[shown[n].n];
+          const act = (kind) => (n) => pictureAction(kind, pictureAt(n));
+          return (
+            <StudioLightbox
+              items={shown.map(item => ({
+                url: item.full,
+                filename: item.filename,
+                video: item.video,
+                prompt: item.prompt,
+                model: item.model,
+                seed: item.seed,
+                // Judged and revealed as SafePicture judges it in the message.
+                file: item.video ? videoFileOf(item.file || { filename: item.filename }) : null,
+                duration: item.duration,
+                revealKey: cacheKey(item.full),
+                ...(item.before ? { before: item.before } : {}),
+              }))}
+              index={at}
+              onIndex={n => setViewingPicture(shown[n].key)}
+              onClose={() => setViewingPicture(null)}
+              onCopy={copyText}
+              onDownload={act('download')}
+              tools={[
+                { id: 'redraw', icon: <RefreshCcw size={16} />, label: t('picture.redraw'), when: item => !item.video && !!item.prompt, disabled: isGenerating, run: act('redraw') },
+                { id: 'paint', icon: <Brush size={16} />, label: t('picture.paint'), when: item => !item.video, disabled: isGenerating, run: act('paint') },
+                { id: 'upscale', icon: <Maximize2 size={16} />, label: t('picture.upscale'), when: item => !item.video, disabled: isGenerating, run: act('upscale') },
+              ]}
+              t={t}
+            />
+          );
+        })()}
         {viewingAttachment && (
           <div className="attachment-viewer" onClick={() => setViewingAttachment(null)}>
             <div className="attachment-viewer-box" role="dialog" aria-modal="true"
@@ -10732,6 +13126,17 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   <img src={viewingAttachment.preview || viewingAttachment.data} alt={viewingAttachment.name} />
                 ) : viewingAttachment.type === 'video' ? (
                   <video src={viewingAttachment.preview} controls autoPlay loop playsInline className="attachment-viewer-video" />
+                ) : originalOf(viewingAttachment) && readableAsDocument(viewingAttachment) ? (
+                  /* The document as a document. Only a PDF, and only while
+                     this tab still holds the file it was attached from -- see
+                     `originals` and `readableAsDocument`. The browser has a PDF
+                     reader of its own and this is it; there is no reader here
+                     and there should not be one. */
+                  <iframe
+                    className="attachment-viewer-doc"
+                    src={originalOf(viewingAttachment)}
+                    title={viewingAttachment.name}
+                  />
                 ) : (
                   <pre>{viewingAttachment.data || indexedPreview(viewingAttachment) || t('attach.nothingToShow')}</pre>
                 )}
@@ -10815,19 +13220,14 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         {sidebarPlace === 'gallery' && (
           <div className="studio-place gallery-place">
             <PictureGallery
+              // Whose gallery, for the search index it builds and caches.
+              scope={profileScope}
               sessions={sessions}
               studioJobs={loadStudioHistory(profileScope)}
               thumbOf={thumbOf}
               t={t}
-              /* A film opens and plays in the same viewer a picture does. It
-                 used to be handed to the download instead, which is not what
-                 pressing on something in a gallery means. */
-              onOpen={(item) => setViewingAttachment({
-                name: item.filename || item.prompt,
-                type: item.video ? 'video' : 'image',
-                preview: item.full,
-                data: !item.video && String(item.full || '').startsWith('data:') ? String(item.full).split(',')[1] : '',
-              })}
+              /* Pictures and films open in the Studio's viewer, which the
+                 gallery keeps itself. */
               onGoTo={(item) => {
                 setCurrentSessionId(item.sessionId);
                 setSidebarPlace('home');
@@ -10842,10 +13242,25 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           <div className="studio-place" hidden={sidebarPlace !== 'studio'}>
             <StudioPanel
               scope={profileScope}
+              /* Mounted is not open: the wrapper hides it rather than
+                 unmounting it, and a panel nobody can see should not be
+                 asking ComfyUI what is in its queue every two seconds. */
+              open={sidebarPlace === 'studio'}
+              /* The check is one setting for both places pictures are made, so
+                 it is chosen once -- here, beside the safeguard -- and the chat
+                 reads the same value. See src/retouch.js. */
+              retouchMode={retouchMode}
+              onRetouchMode={setRetouchModeState}
+              /* Which model can look at a picture at all -- '' when none can.
+                 A mode that silently does nothing is worse than one that says
+                 why it cannot. */
+              inspectModel={pickInspector(selectedModel)}
               onAttachToChat={(job) => {
                 attachGeneratedImage(job);
                 setSidebarPlace('home');
               }}
+              // The same two routes out as a picture in a conversation has.
+              onSharePicture={sharePictureOut}
             />
           </div>
         )}
@@ -10902,6 +13317,343 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   }
                 }
 
+                /* The blocks of this answer, and where its pictures go among
+                   them.
+                 *
+                 * Hoisted out of the render below because two separate places
+                 * need them: the words, and the pictures that belong between
+                 * the words. A picture used to be appended under the whole
+                 * message however early it had been asked for -- so an answer
+                 * that drew a diagram, explained it, and drew a second one put
+                 * both pictures below the explanation of the second.
+                 *
+                 * Each picture carries the number of the drawing call that made
+                 * it (see `drawCallsBefore` in the executor). Walking the
+                 * blocks gives the same numbering, so a picture can be dropped
+                 * back into the gap its call was written in. A picture from
+                 * before this existed has no number and falls to the bottom,
+                 * which is where it has always been. */
+                const streamingNow = isThisChatGenerating && i + group.length - 1 >= messages.length - 1;
+                const allBlocks = [];
+                /* How many drawing calls the answer had written before each of its
+                   messages began. A turn that draws and carries on is several
+                   messages -- one per leg -- and each numbers its own calls from
+                   zero, so a picture's place in the whole answer is its call
+                   number plus the calls of the legs before it. */
+                const drawsBeforeMessage = [];
+                if (msg.role === 'assistant') {
+                  let draws = 0;
+                  group.forEach((gMsg, n) => {
+                    drawsBeforeMessage[n] = draws;
+                    if (gMsg.role === 'user' && gMsg.content.trim().startsWith('<TOOL_RESULT>')) {
+                      const match = gMsg.content.match(/<TOOL_RESULT>([\s\S]*?)<\/TOOL_RESULT>/i);
+                      if (match) allBlocks.push({ type: 'tool_result', content: match[1] });
+                    } else {
+                      const blocks = parseAssistantMessage(gMsg.content, {
+                        // Only the message still arriving can hold a half-written call.
+                        streaming: streamingNow && n === group.length - 1,
+                      });
+                      const written = blocks.filter(b => b.type === 'tool_call' && DRAWING_TAGS.has(b.tool)).length;
+                      /* A call made natively leaves nothing in the text: the model
+                         returns `tool_calls`, and a turn that goes on talking keeps
+                         only its words. Reported as the reply to a song printed
+                         above the song -- the message that made it was "" with the
+                         song stamped call 0, so there was no call in the text to put
+                         the song after, and it fell below the next leg's words. What
+                         the message made says what it called, so the missing calls
+                         are put back, at the end of the message that made them. */
+                      const madeHere = [...(gMsg.generated || []), ...(gMsg.songs || [])]
+                        .map(item => item?.call).filter(Number.isInteger);
+                      const highest = madeHere.length ? Math.max(...madeHere) : -1;
+                      for (let call = written; call <= highest; call += 1) {
+                        const song = (gMsg.songs || []).some(item => item?.call === call);
+                        const film = (gMsg.generated || []).find(item => item?.call === call)?.video;
+                        blocks.push({
+                          type: 'tool_call',
+                          tool: song ? 'TOOL_GENERATE_MUSIC' : film ? 'TOOL_GENERATE_VIDEO' : 'TOOL_GENERATE_IMAGE',
+                          attrs: {},
+                          content: '',
+                          native: true,
+                        });
+                      }
+                      draws += Math.max(written, highest + 1);
+                      allBlocks.push(...blocks);
+                    }
+                  });
+                }
+                /* Every picture, film and song of the answer, from whichever leg
+                   made it, with the message it lives in -- every action on one is
+                   addressed by that message and its place in that message's list.
+                   Only the first message used to be read, so a song made in one
+                   leg and a video in the next showed the song and lost the video. */
+                const mediaOf = (key) => group.flatMap((gMsg, g) => (gMsg[key] || []).map((item, n) => ({
+                  item, n, mi: i + g,
+                  call: Number.isInteger(item?.call) ? item.call + (drawsBeforeMessage[g] || 0) : null,
+                })));
+                const groupPictures = mediaOf('generated');
+                const groupSongs = mediaOf('songs');
+                const picturesOf = groupPictures.map(x => x.item);
+                /* How many drawing calls had been written by the time each text
+                   block starts. The last entry is the total, which is what the
+                   pictures after the final paragraph are measured against. */
+                const drawsByText = [];
+                let drawsSoFar = 0;
+                for (const block of allBlocks) {
+                  if (block.type === 'text') drawsByText.push(drawsSoFar);
+                  else if (block.type === 'tool_call' && DRAWING_TAGS.has(block.tool)) drawsSoFar += 1;
+                }
+                const placedPictures = groupPictures.map(({ item, n, mi, call }) => ({ picture: item, n, mi, call }));
+                const placedSongs = groupSongs.map(({ item, n, mi, call }) => ({ song: item, n, mi, call }));
+                /* A drawing that was asked for and produced nothing.
+                 *
+                 * ComfyUI goes down, a model file is missing, the card is full,
+                 * the budget ran out -- and until now the answer simply had no
+                 * picture in it, with the reason folded away in the steps
+                 * dropdown and the only way forward being to type the request
+                 * again. The call is still in the text, with its prompt and its
+                 * style, so it can be offered back.
+                 *
+                 * Found by subtraction rather than by pairing failures with
+                 * calls: a call that produced no picture is one that did not
+                 * happen, whatever the reason, and that is exactly the set
+                 * worth offering. A chat from before pictures carried their
+                 * call number is left alone -- there every call would look
+                 * like a failure. */
+                const drawingCalls = [];
+                {
+                  let ordinal = 0;
+                  for (const block of allBlocks) {
+                    if (block.type === 'tool_call' && DRAWING_TAGS.has(block.tool)) {
+                      drawingCalls.push({ block, ordinal });
+                      ordinal += 1;
+                    }
+                  }
+                }
+                const numbered = placedPictures.filter(({ call }) => Number.isInteger(call));
+                const numberedSongs = placedSongs.filter(({ call }) => Number.isInteger(call));
+                const knowsPlaces = numbered.length > 0 || numberedSongs.length > 0 || picturesOf.length === 0;
+                const emptyCalls = !knowsPlaces ? [] : drawingCalls.filter(({ ordinal }) =>
+                  !numbered.some(({ call }) => call === ordinal) && !numberedSongs.some(({ call }) => call === ordinal));
+                /* The calls written in the gap after paragraph `textIndex`, and
+                   -- as `textIndex` -1 -- the ones written before any words at
+                   all. That second gap is the common one: asked to draw, a model
+                   usually calls the tool first and talks after, and a picture
+                   with no paragraph before it used to fall to the bottom of the
+                   answer, under the words that came after it. */
+                const inGap = (textIndex) => (call) => {
+                  const from = textIndex < 0 ? 0 : drawsByText[textIndex];
+                  const next = drawsByText[textIndex + 1];
+                  const until = next === undefined ? Infinity : next;
+                  return Number.isInteger(call) && call >= from && call < until;
+                };
+                const picturesAfterText = (textIndex) => placedPictures.filter(({ call }) => inGap(textIndex)(call));
+                const songsAfterText = (textIndex) => placedSongs.filter(({ call }) => inGap(textIndex)(call));
+                // The ones that failed in the gap they were asked for in, beside
+                // where their picture would have been.
+                const emptyAfterText = (textIndex) => emptyCalls.filter(({ ordinal }) => inGap(textIndex)(ordinal));
+                // Anything with no place of its own: an older chat, or a
+                // picture whose call is no longer in the text.
+                const placedKey = ({ mi, n }) => `${mi}:${n}`;
+                const gaps = [-1, ...drawsByText.map((_, textIndex) => textIndex)];
+                const picturesInline = new Set(gaps.flatMap(g => picturesAfterText(g).map(placedKey)));
+                const songsInline = new Set(gaps.flatMap(g => songsAfterText(g).map(placedKey)));
+                const picturesLeft = placedPictures.filter(x => !picturesInline.has(placedKey(x)));
+                const songsLeft = placedSongs.filter(x => !songsInline.has(placedKey(x)));
+
+                /* One picture, drawn wherever it belongs.
+                 *
+                 * A function rather than the block it used to be, because there
+                 * are two places it is wanted now: in the gap its call was
+                 * written in, and at the bottom for a picture that has no gap of
+                 * its own. `n` stays the index within this message's own list,
+                 * because every action here is addressed by it -- comparing,
+                 * the retouch swap, the settings panel. */
+                const messageIndexOfHead = i;
+                /* A song, where it was made: the player, and its lyrics folded
+                   away under it -- they are long, and what was sung is worth
+                   having but not worth scrolling past every time. */
+                const renderSong = (song, key) => (
+                  <figure className="msg-song" key={key}>
+                    <audio src={song.url} controls preload="metadata" />
+                    <figcaption title={song.style}>{song.style}</figcaption>
+                    {song.lyrics && (
+                      <details className="msg-song-lyrics">
+                        <summary>{t('song.lyrics')}</summary>
+                        {/* Decoded here too, for a song saved before its lyrics were. */}
+                        <pre>{decodeByteFallback(song.lyrics)}</pre>
+                      </details>
+                    )}
+                  </figure>
+                );
+                const renderPicture = (picture, n, i = messageIndexOfHead) => {
+                              // What it was upscaled or edited from; '' when it was drawn from nothing.
+                              const beforeUrl = picture.video ? '' : beforeUrlOf(picture, chatDrawn);
+                              const comparing = !!beforeUrl && !!comparingPictures[`${i}:${n}`];
+                              return (
+                              <figure key={picture.filename || n}>
+                                {/* A film plays where a picture would open, and is
+                                    judged by its frames rather than its prompt
+                                    alone. */}
+                                <SafePicture
+                                  src={picture.dataUrl}
+                                  prompt={picture.prompt}
+                                  t={t}
+                                  video={!!picture.video}
+                                  file={picture.video ? videoFileOf(picture.file || { filename: picture.filename }) : null}
+                                  duration={picture.duration}
+                                  // For a still, what ComfyUI called it, so the tagger can read it.
+                                  filename={picture.filename || ''}
+                                >
+                                {/* Opened in the Studio's viewer, as in the
+                                    Studio and the gallery. A film plays where it
+                                    is and opens from the corner of its player,
+                                    because a click on the film is its own. */}
+                                {picture.video ? (
+                                  <>
+                                    <video src={picture.dataUrl} controls loop playsInline />
+                                    <button type="button" className="picture-expand"
+                                      onClick={() => setViewingPicture(`${currentSession.id}:${i}:${n}`)}
+                                      title={t('studio.view.open')} aria-label={t('studio.view.open')}>
+                                      <Maximize2 size={15} />
+                                    </button>
+                                  </>
+                                ) : comparing ? (
+                                  /* The original on the left of a bar, the
+                                     result on the right, the bar dragged to
+                                     compare -- in place of the picture. */
+                                  <BeforeAfter before={beforeUrl} after={picture.dataUrl} t={t} />
+                                ) : (
+                                <button
+                                  type="button"
+                                  onClick={() => setViewingPicture(`${currentSession.id}:${i}:${n}`)}
+                                  title={t('studio.view.open')}
+                                >
+                                  <img src={picture.dataUrl} alt={picture.prompt || ''} loading="lazy" />
+                                </button>
+                                )}
+                                </SafePicture>
+                                {/* The prompt it was actually drawn from, which
+                                    is not the sentence the reader typed and is
+                                    the only way to tell a good result from a
+                                    lucky one. */}
+                                <figcaption title={picture.prompt}>{picture.prompt}</figcaption>
+                                {picture.video && picture.longId && (
+                                  <LongStoryboard
+                                    longId={picture.longId}
+                                    t={t}
+                                    onNewVersion={(output) => replaceLongVideo(currentSession.id, i, n, output)}
+                                  />
+                                )}
+                                {/* What can be done with it from here, without
+                                    having to find the words for it. */}
+                                <div className="picture-actions">
+                                  {/* First, because it is what someone looking
+                                      at an upscale or an edit wants to do next. */}
+                                  {beforeUrl && (
+                                    <button
+                                      type="button"
+                                      className={comparing ? 'is-on' : ''}
+                                      aria-pressed={comparing}
+                                      onClick={() => setComparingPictures(open => ({ ...open, [`${i}:${n}`]: !open[`${i}:${n}`] }))}
+                                      title={t(picture.op === 'upscale' ? 'compare.upscale' : 'compare.edit')}
+                                    >
+                                      <SquareSplitHorizontal size={13} /><span>{t('compare.toggle')}</span>
+                                    </button>
+                                  )}
+                                  {/* A part that was redrawn without being
+                                      asked, and the way back. The judgement was
+                                      made by a model looking at the picture, so
+                                      it is always the reader who keeps it: the
+                                      two swap places and neither is thrown
+                                      away. See `swapRetouch`. */}
+                                  {picture.retouch && (
+                                    <button
+                                      type="button"
+                                      className={picture.retouch.showing === 'before' ? 'is-on' : ''}
+                                      onClick={() => swapRetouch(i, n)}
+                                      title={picture.retouch.problem
+                                        || t('retouch.found', { region: regionLabel(picture.retouch.region, t) })}
+                                    >
+                                      <Undo2 size={13} />
+                                      <span>{t(picture.retouch.showing === 'after' ? 'retouch.keepOriginal' : 'retouch.keepFixed')}</span>
+                                    </button>
+                                  )}
+                                  {/* Found, and not acted on: the offer. */}
+                                  {picture.retouchOffer && !picture.video && (
+                                    <button
+                                      type="button"
+                                      className="is-offer"
+                                      disabled={isGenerating}
+                                      onClick={() => pictureAction('retouch', picture)}
+                                      title={picture.retouchOffer.problem
+                                        || t('retouch.found', { region: regionLabel(picture.retouchOffer.region, t) })}
+                                    >
+                                      <Wand2 size={13} />
+                                      <span>{t('retouch.fix', { region: regionLabel(picture.retouchOffer.region, t) })}</span>
+                                    </button>
+                                  )}
+                                  {!picture.video && (
+                                    <>
+                                      <button type="button" onClick={() => pictureAction('redraw', picture)}
+                                        disabled={isGenerating || !picture.prompt} title={t('picture.redraw')}>
+                                        <RefreshCcw size={13} /><span>{t('picture.redraw')}</span>
+                                      </button>
+                                      <button type="button" onClick={() => pictureAction('paint', picture)}
+                                        disabled={isGenerating} title={t('picture.paint')}>
+                                        <Brush size={13} /><span>{t('picture.paint')}</span>
+                                      </button>
+                                      <button type="button" onClick={() => pictureAction('rmbg', picture)}
+                                        disabled={isGenerating} title={t('picture.rmbg')}>
+                                        <Scissors size={13} /><span>{t('picture.rmbg')}</span>
+                                      </button>
+                                      {/* The shading out of it, which is a
+                                          colour change rather than a redraw --
+                                          seconds, and nothing else moves. */}
+                                      <button type="button" onClick={() => pictureAction('deshadow', picture)}
+                                        disabled={isGenerating} title={t('picture.deshadow')}>
+                                        <Sun size={13} /><span>{t('picture.deshadow')}</span>
+                                      </button>
+                                      <button type="button" onClick={() => pictureAction('upscale', picture)}
+                                        disabled={isGenerating} title={t('picture.upscale')}>
+                                        <Maximize2 size={13} /><span>{t('picture.upscale')}</span>
+                                      </button>
+                                      <button type="button" onClick={() => pictureAction('tags', picture)}
+                                        title={t('picture.tags')}>
+                                        <Tags size={13} /><span>{t('picture.tags')}</span>
+                                      </button>
+                                    </>
+                                  )}
+                                  {/* What it was made with. See PictureSettings. */}
+                                  <button
+                                    type="button"
+                                    className={shownSettings[`${i}:${n}`] ? 'is-on' : ''}
+                                    aria-expanded={!!shownSettings[`${i}:${n}`]}
+                                    onClick={() => setShownSettings(open => ({ ...open, [`${i}:${n}`]: !open[`${i}:${n}`] }))}
+                                    title={t('picset.title')}
+                                  >
+                                    <SlidersHorizontal size={13} /><span>{t('picset.title')}</span>
+                                  </button>
+                                  {/* Sent somewhere else: the share sheet on a
+                                      phone, a link anybody can open otherwise.
+                                      Beside Download, because they are the two
+                                      ways a picture leaves this app. */}
+                                  {/* A film as readily as a picture. It was left
+                                      out, which made the thing that takes
+                                      longest to make the one thing that could
+                                      not be sent to anybody. */}
+                                  <button type="button" onClick={() => pictureAction('share', picture)}
+                                    title={t('picture.share')}>
+                                    <Share2 size={13} /><span>{t('picture.share')}</span>
+                                  </button>
+                                  <button type="button" onClick={() => pictureAction('download', picture)} title={t('picture.download')}>
+                                    <Download size={13} /><span>{t('picture.download')}</span>
+                                  </button>
+                                </div>
+                                {shownSettings[`${i}:${n}`] && <PictureSettings picture={picture} t={t} />}
+                              </figure>
+                              );
+                };
+
                 return (
                 <div
                   key={i}
@@ -10911,7 +13663,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   // than a ref array: rows come and go as the transcript grows
                   // and a ref array would have to be kept in step with it.
                   data-message-index={i}
-                  onClick={isTouchUi ? (e => toggleMessageActions(e, i)) : undefined}
+                  onClick={isTapUi ? (e => toggleMessageActions(e, i)) : undefined}
                 >
                   {/* Whose answer this is. Two chats with two personas should
                       not look like the same assistant twice. */}
@@ -10927,21 +13679,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     {msg.role === 'assistant' ? (
                       <>
                         {(() => {
-                          const allBlocks = [];
-                          const streamingNow = isThisChatGenerating && i + group.length - 1 >= messages.length - 1;
-                          group.forEach((gMsg, n) => {
-                            if (gMsg.role === 'user' && gMsg.content.trim().startsWith('<TOOL_RESULT>')) {
-                              const match = gMsg.content.match(/<TOOL_RESULT>([\s\S]*?)<\/TOOL_RESULT>/i);
-                              if (match) {
-                                allBlocks.push({ type: 'tool_result', content: match[1] });
-                              }
-                            } else {
-                              allBlocks.push(...parseAssistantMessage(gMsg.content, {
-                                // Only the message still arriving can hold a half-written call.
-                                streaming: streamingNow && n === group.length - 1,
-                              }));
-                            }
-                          });
+                          // Worked out above, where the pictures are placed too.
                           const drewInGroup = group.some(g => (g.generated || []).length > 0);
 
                           const internalBlocks = allBlocks.filter(b => b.type !== 'text');
@@ -10962,31 +13700,6 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                   are what makes the citations checkable. */}
                               {msg.research && <ResearchTrace research={msg.research} />}
                               {msg.chainRun && <ChainTrace run={msg.chainRun} />}
-
-                              {/* A picture being drawn for this answer.
-                                  It blocks the turn -- the answer is not ready
-                                  until the picture is -- so without this the
-                                  whole two minutes is three dots that mean
-                                  "thinking", which is what they also mean when
-                                  the GPU has fallen over. */}
-                              {isStreamingRow && drawing && (
-                                <JobProgress
-                                  // A card per job, so a batch's next picture
-                                  // starts with its own clock and frame.
-                                  key={drawing.id}
-                                  snapshot={drawingLive}
-                                  jobId={drawing.id}
-                                  queuedAhead={drawing.ahead || 0}
-                                  t={t}
-                                  compact
-                                  kind={drawing.kind || (drawing.video ? 'video' : 'image')}
-                                  prompt={drawing.prompt}
-                                  aspect={drawing.aspect}
-                                  source={drawing.source}
-                                  batch={drawing.batch}
-                                  veil={shouldVeil(promptSignal(drawing.prompt), safeLevel)}
-                                />
-                              )}
 
                               {isStreamingRow && !drawing && textBlocks.length === 0 && !isFetching && !isThinkingOnly && !msg.research && !msg.chainRun && (
                                 <div className="stream-dots" aria-label={t('msg.thinking')}>
@@ -11064,6 +13777,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                                     prompt in monospace under it. */}
                                                 {part.tool === 'TOOL_GENERATE_IMAGE' && t('tool.drawImage')}
                                                 {part.tool === 'TOOL_GENERATE_VIDEO' && t('tool.drawVideo')}
+                                                {part.tool === 'TOOL_GENERATE_MUSIC' && t('tool.makeMusic')}
                                                 {part.tool === 'TOOL_REMOVE_BACKGROUND' && t('picture.rmbg')}
                                                 {part.tool === 'TOOL_UPSCALE_IMAGE' && t('picture.upscale')}
                                                 {part.tool === 'TOOL_EXTEND_IMAGE' && t('picture.extend')}
@@ -11159,7 +13873,37 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                 </div>
                               )}
                               
+                              {/* What was made before a word was written -- the
+                                  call first, the talk after. See `inGap`. */}
+                              {(picturesAfterText(-1).length > 0 || songsAfterText(-1).length > 0) && (
+                                <>
+                                  {songsAfterText(-1).length > 0 && (
+                                    <div className="msg-songs">
+                                      {songsAfterText(-1).map(({ song, n, mi }) => renderSong(song, `${mi}:${n}`))}
+                                    </div>
+                                  )}
+                                  {picturesAfterText(-1).length > 0 && (
+                                    <div className="msg-generated">
+                                      {picturesAfterText(-1).map(({ picture, n, mi }) => renderPicture(picture, n, mi))}
+                                    </div>
+                                  )}
+                                </>
+                              )}
+                              {emptyAfterText(-1).map(({ block, ordinal }) => (
+                                <div className="draw-failed" key={`empty-${ordinal}`}>
+                                  <TriangleAlert size={13} aria-hidden="true" />
+                                  <span className="draw-failed-what" title={block.content}>
+                                    {promptExcerpt(block.content, 80) || t('picture.failedShort')}
+                                  </span>
+                                  {block.tool === 'TOOL_GENERATE_IMAGE' && (
+                                    <button type="button" onClick={() => retryDrawing(block)} disabled={isGenerating}>
+                                      <RefreshCcw size={12} /><span>{t('picture.retry')}</span>
+                                    </button>
+                                  )}
+                                </div>
+                              ))}
                               {textBlocks.map((tb, idx) => (
+                                <React.Fragment key={`para-${idx}`}>
                                 <div
                                   key={`text-${idx}`}
                                   className={`markdown-body ${
@@ -11204,7 +13948,88 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                     {tb.content}
                                   </ReactMarkdown>
                                 </div>
+                                {/* And whatever was drawn between this
+                                    paragraph and the next one. A picture is a
+                                    step in the same stream as the words, so it
+                                    belongs where it was asked for -- see
+                                    `picturesAfterText`. */}
+                                {songsAfterText(idx).length > 0 && (
+                                  <div className="msg-songs">
+                                    {songsAfterText(idx).map(({ song, n, mi }) => renderSong(song, `${mi}:${n}`))}
+                                  </div>
+                                )}
+                                {picturesAfterText(idx).length > 0 && (
+                                  <div className="msg-generated">
+                                    {picturesAfterText(idx).map(({ picture, n, mi }) => renderPicture(picture, n, mi))}
+                                  </div>
+                                )}
+                                {/* And a picture that was asked for here and
+                                    never arrived, with the way to ask again.
+                                    Beside where it would have been, because
+                                    that is where the reader is looking for
+                                    it. */}
+                                {emptyAfterText(idx).map(({ block, ordinal }) => (
+                                  <div className="draw-failed" key={`empty-${ordinal}`}>
+                                    <TriangleAlert size={13} aria-hidden="true" />
+                                    <span className="draw-failed-what" title={block.content}>
+                                      {promptExcerpt(block.content, 80) || t('picture.failedShort')}
+                                    </span>
+                                    {block.tool === 'TOOL_GENERATE_IMAGE' && (
+                                      <button type="button" onClick={() => retryDrawing(block)} disabled={isGenerating}>
+                                        <RefreshCcw size={12} /><span>{t('picture.retry')}</span>
+                                      </button>
+                                    )}
+                                  </div>
+                                ))}
+                                </React.Fragment>
                               ))}
+                              {/* A picture being drawn for this answer.
+                                  It blocks the turn -- the answer is not ready
+                                  until the picture is -- so without this the
+                                  whole two minutes is three dots that mean
+                                  "thinking", which is what they also mean when
+                                  the GPU has fallen over. */}
+                              {(isStreamingRow || (drawing?.restored && i + group.length - 1 >= messages.length - 1)) && drawing
+                                /* And, for another device's job, only in the
+                                   conversation it is being made for -- this one
+                                   is not written down anywhere, so nothing else
+                                   ties it to a chat. */
+                                && (!drawing.watched || String(drawing.sessionId) === String(currentSessionId)) && (
+                                <JobProgress
+                                  // A card per job, so a batch's next picture
+                                  // starts with its own clock and frame.
+                                  key={drawing.id}
+                                  // A song has no stream; its snapshot comes from polling ACE-Step.
+                                  snapshot={drawing.snapshot || drawingLive}
+                                  jobId={drawing.id}
+                                  queuedAhead={drawing.ahead || 0}
+                                  polledState={drawing.polled || ''}
+                                  t={t}
+                                  compact
+                                  kind={drawing.kind || (drawing.video ? 'video' : 'image')}
+                                  prompt={drawing.prompt}
+                                  aspect={drawing.aspect}
+                                  source={drawing.source}
+                                  batch={drawing.batch}
+                                  veil={shouldVeil(promptSignal(drawing.prompt), safeLevel)}
+                                  // Being made on another device -- said on the
+                                  // card, because "80%" with no stop button and
+                                  // no answer being written needs explaining.
+                                  elsewhere={!!drawing.watched}
+                                  /* The same stop as the composer's: the turn, and the job in
+                                     ComfyUI. For another device's job it is `stopElsewhere`,
+                                     which tells the *server* -- the machine running it finds
+                                     out the way it would if somebody had stopped it there. */
+                                  onCancel={drawing.watched ? stopElsewhere : stopGeneration}
+                                />
+                              )}
+                              {/* A long clip's storyboard while it is drawn: the
+                                  segments not yet started can still be rewritten. */}
+                              {(isStreamingRow || (drawing?.restored && i + group.length - 1 >= messages.length - 1)) && drawing
+                                && /^long-/.test(String(drawing.id || '')) && !drawing.watched && (
+                                <LongStoryboard longId={drawing.id} t={t} />
+                              )}
+
                             </>
                           );
                         })()}
@@ -11259,78 +14084,20 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                             image shown at thumbnail size is one nobody can
                             judge — which is the only thing anyone does with a
                             picture they asked for. */}
-                        {(msg.generated || []).length > 0 && (
+                        {/* A song, where a picture would be.
+                            Its own block: an <audio> element is the whole of
+                            what a song needs, and the lyrics are worth having
+                            under it -- they are what was actually sung, and the
+                            model has been told not to repeat them in its
+                            reply. */}
+                        {songsLeft.length > 0 && (
+                          <div className="msg-songs">
+                            {songsLeft.map(({ song, n, mi }) => renderSong(song, `${mi}:${n}`))}
+                          </div>
+                        )}
+                        {picturesLeft.length > 0 && (
                           <div className="msg-generated">
-                            {msg.generated.map((picture, n) => (
-                              <figure key={picture.filename || n}>
-                                {/* A film plays where a picture would open. */}
-                                <SafePicture src={picture.dataUrl} prompt={picture.prompt} t={t}>
-                                {picture.video ? (
-                                  <video src={picture.dataUrl} controls loop playsInline />
-                                ) : (
-                                <button
-                                  type="button"
-                                  onClick={() => setViewingAttachment({
-                                    name: picture.filename || picture.prompt,
-                                    type: 'image',
-                                    preview: picture.dataUrl,
-                                    data: String(picture.dataUrl || '').split(',')[1],
-                                  })}
-                                  title={t('attach.open')}
-                                >
-                                  <img src={picture.dataUrl} alt={picture.prompt || ''} loading="lazy" />
-                                </button>
-                                )}
-                                </SafePicture>
-                                {/* The prompt it was actually drawn from, which
-                                    is not the sentence the reader typed and is
-                                    the only way to tell a good result from a
-                                    lucky one. */}
-                                <figcaption title={picture.prompt}>{picture.prompt}</figcaption>
-                                {/* What can be done with it from here, without
-                                    having to find the words for it. */}
-                                <div className="picture-actions">
-                                  {!picture.video && (
-                                    <>
-                                      <button type="button" onClick={() => pictureAction('redraw', picture)}
-                                        disabled={isGenerating || !picture.prompt} title={t('picture.redraw')}>
-                                        <RefreshCcw size={13} /><span>{t('picture.redraw')}</span>
-                                      </button>
-                                      <button type="button" onClick={() => pictureAction('paint', picture)}
-                                        disabled={isGenerating} title={t('picture.paint')}>
-                                        <Brush size={13} /><span>{t('picture.paint')}</span>
-                                      </button>
-                                      <button type="button" onClick={() => pictureAction('rmbg', picture)}
-                                        disabled={isGenerating} title={t('picture.rmbg')}>
-                                        <Scissors size={13} /><span>{t('picture.rmbg')}</span>
-                                      </button>
-                                      <button type="button" onClick={() => pictureAction('upscale', picture)}
-                                        disabled={isGenerating} title={t('picture.upscale')}>
-                                        <Maximize2 size={13} /><span>{t('picture.upscale')}</span>
-                                      </button>
-                                      <button type="button" onClick={() => pictureAction('tags', picture)}
-                                        title={t('picture.tags')}>
-                                        <Tags size={13} /><span>{t('picture.tags')}</span>
-                                      </button>
-                                    </>
-                                  )}
-                                  {/* What it was made with. See PictureSettings. */}
-                                  <button
-                                    type="button"
-                                    className={shownSettings[`${i}:${n}`] ? 'is-on' : ''}
-                                    aria-expanded={!!shownSettings[`${i}:${n}`]}
-                                    onClick={() => setShownSettings(open => ({ ...open, [`${i}:${n}`]: !open[`${i}:${n}`] }))}
-                                    title={t('picset.title')}
-                                  >
-                                    <SlidersHorizontal size={13} /><span>{t('picset.title')}</span>
-                                  </button>
-                                  <button type="button" onClick={() => pictureAction('download', picture)} title={t('picture.download')}>
-                                    <Download size={13} /><span>{t('picture.download')}</span>
-                                  </button>
-                                </div>
-                                {shownSettings[`${i}:${n}`] && <PictureSettings picture={picture} t={t} />}
-                              </figure>
-                            ))}
+                            {picturesLeft.map(({ picture, n, mi }) => renderPicture(picture, n, mi))}
                           </div>
                         )}
 
@@ -11363,6 +14130,17 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                             used to read the numbers, then blank them a
                             tenth of a second later. See src/turnMetrics.js. */}
                         {(() => {
+                          /* And only once the turn has actually ended.
+                           *
+                           * A turn is several requests when it calls a tool, and
+                           * the numbers were written as soon as the first leg
+                           * finished -- so a turn that drew a picture and then
+                           * carried on writing showed "3.1s · 42 tokens/s"
+                           * under a reply that was still arriving, and then
+                           * changed it. A measurement of something still
+                           * happening is not a measurement. */
+                          const lastGroup = i + group.length - 1 >= messages.length - 1;
+                          if (lastGroup && (isThisChatGenerating || remoteTurnHere)) return null;
                           const spent = turnMetrics(group);
                           if (!spent) return null;
                           const answer = group[group.length - 1];
@@ -11383,12 +14161,23 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                   figure because the server did not. The numbers
                                   used to vanish entirely in that case, which
                                   read as the app losing them. */}
-                              <span title={[
-                                spent.legs > 1 ? t('msg.turnLegs', { legs: spent.legs }) : '',
-                                spent.estimated ? t('msg.metricsEstimated') : '',
-                              ].filter(Boolean).join(' ') || undefined}>
+                              {/* The time, and the way into where it went.
+                                  A turn of several legs is a summary of things
+                                  that each took a while, and "×3" was the whole
+                                  of what could be found out about which. */}
+                              <button
+                                type="button"
+                                className={`metrics-time ${traceFor === i ? 'is-on' : ''}`}
+                                onClick={() => setTraceFor(traceFor === i ? null : i)}
+                                title={[
+                                  spent.legs > 1 ? t('msg.turnLegs', { legs: spent.legs }) : '',
+                                  spent.estimated ? t('msg.metricsEstimated') : '',
+                                  t('trace.open'),
+                                ].filter(Boolean).join(' ')}
+                                aria-expanded={traceFor === i}
+                              >
                                 {spent.estimated ? '~' : ''}{spent.totalTime}s{spent.legs > 1 ? ` ×${spent.legs}` : ''}
-                              </span>
+                              </button>
                               {spent.tokensPerSec && (
                                 <>
                                   <span className="dot">•</span>
@@ -11448,6 +14237,51 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                   )}
                                 </div>
                               )}
+
+                              {/* Where the time went.
+                                  Opened from the time itself, which is the
+                                  number somebody is looking at when they want
+                                  to know. Everything in it was already on these
+                                  messages -- each leg's own figures, the tool
+                                  results, the pictures -- and nothing read it.
+                                  See src/turnTrace.js. */}
+                              {traceFor === i && (() => {
+                                const steps = traceOf(group);
+                                const worst = slowestLeg(steps);
+                                return (
+                                  <ol className="turn-trace">
+                                    {steps.map((step, n) => (step.kind === 'tools' ? (
+                                      <li key={`step-${n}`} className="turn-step is-tools">
+                                        <Wand2 size={11} aria-hidden="true" />
+                                        <span className="turn-step-what">
+                                          {step.tools.map((tool, k) => (
+                                            <span key={k} className={tool.failed ? 'is-failed' : ''}>
+                                              {tool.failed ? `${t(verbKey(tool.name))} · ${t('tool.failed')}` : t(verbKey(tool.name))}
+                                            </span>
+                                          ))}
+                                        </span>
+                                      </li>
+                                    ) : (
+                                      <li key={`step-${n}`} className={`turn-step ${step.leg === worst ? 'is-slowest' : ''}`}>
+                                        <Sparkles size={11} aria-hidden="true" />
+                                        <span className="turn-step-what">{step.model || t('trace.answer')}</span>
+                                        <span className="turn-step-figures">
+                                          {step.seconds != null && (
+                                            <b>{step.estimated ? '~' : ''}{step.seconds.toFixed(1)}s</b>
+                                          )}
+                                          {step.rate != null && <span>{step.rate.toFixed(1)} t/s</span>}
+                                          {step.tokens > 0 && <span>{step.tokens.toLocaleString()} tok</span>}
+                                          {/* Drawn in this leg, which is often
+                                              where a minute of it went. */}
+                                          {step.pictures > 0 && <span>{t('trace.drew', { count: step.pictures })}</span>}
+                                          {step.songs > 0 && <span>{t('trace.sang', { count: step.songs })}</span>}
+                                          {step.unmeasured && <span>{t('trace.unmeasured')}</span>}
+                                        </span>
+                                      </li>
+                                    )))}
+                                  </ol>
+                                );
+                              })()}
                             </div>
                           );
                         })()}
@@ -11574,7 +14408,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           <button className="action-btn" onClick={() => startEdit(i, msg.content)} title={t('msg.edit')}>
                             <Edit size={14} />
                           </button>
-                          <button className="action-btn" onClick={() => copyToClipboard(msg.content, i)} title={t('msg.copy')}>
+                          <button className="action-btn" onClick={() => copyToClipboard(asWritten(msg.content), i)} title={t('msg.copy')}>
                             {copiedIndex === i ? <Check size={14} /> : <Copy size={14} />}
                           </button>
                           <button className="action-btn" onClick={() => branchFromMessage(i)} title={t('msg.branch')}>
@@ -11598,7 +14432,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                               ? <RefreshCcw size={14} className="spin" color="var(--primary)" />
                               : <Volume2 size={14} color={speakingIndex === i ? 'var(--primary)' : 'currentColor'} />}
                           </button>
-                          <button className="action-btn" onClick={() => copyToClipboard(group ? group.map(g => g.content).join('\n\n') : msg.content, i)} title={t('msg.copy')}>
+                          <button className="action-btn" onClick={() => copyToClipboard(group ? group.map(g => asWritten(g.content)).filter(Boolean).join('\n\n') : asWritten(msg.content), i)} title={t('msg.copy')}>
                             {copiedIndex === i ? <Check size={14} /> : <Copy size={14} />}
                           </button>
                           <button className="action-btn" onClick={() => quoteMessage(i)} title={t('msg.quote')}>
@@ -11685,6 +14519,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         {/* Input Area */}
         <div
           className="input-area-wrapper"
+          ref={measureComposer}
           onDragOver={e => { e.preventDefault(); if (!isDragging) setIsDragging(true); }}
           onDragLeave={e => { if (e.currentTarget === e.target) setIsDragging(false); }}
           onDrop={handleDrop}
@@ -12007,7 +14842,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   className={`composer-model-trigger ${showModelMenu ? 'is-open' : ''}`}
                   aria-expanded={showModelMenu}
                   title={t('composer.modelTitle')}
-                  onClick={() => { setShowModelMenu(v => !v); setShowAddMenu(false); }}
+                  onClick={() => { setShowModelMenu(v => !v); setShowAddMenu(false); setModelQuery(''); }}
                 >
                   <span className="composer-model-name">{selectedModel || t('header.selectModel')}</span>
                   {thinkMode !== 'auto' && (
@@ -12016,23 +14851,52 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   <ChevronDown size={13} />
                 </button>
 
-                <Popover open={showModelMenu} onClose={() => setShowModelMenu(false)} className="composer-menu composer-model-menu">
+                <Popover open={showModelMenu} onClose={() => { setShowModelMenu(false); setModelQuery(''); }} className="composer-menu composer-model-menu">
                   <div className="composer-menu-heading">{t('composer.modelHeading')}</div>
                   {models.length === 0 && (
                     <div className="composer-menu-empty">{t('header.noModels')}</div>
                   )}
-                  {models.map(m => (
+                  {/* Typing beats scrolling past five names to reach the sixth,
+                      and a name like `hf.co/unsloth/gemma-4-31B-it-GGUF:Q8_0`
+                      is mostly punctuation to read and three letters to type.
+                      Not shown for a short list, where the field would be one
+                      more thing to look at than there are models. */}
+                  {models.length > 4 && (
+                    <label className="model-find">
+                      <Search size={13} aria-hidden="true" />
+                      <input
+                        type="search"
+                        value={modelQuery}
+                        onChange={(e) => setModelQuery(e.target.value)}
+                        placeholder={t('composer.modelFind')}
+                        aria-label={t('composer.modelFind')}
+                      />
+                    </label>
+                  )}
+                  {shownModels.length === 0 && models.length > 0 && (
+                    <div className="composer-menu-empty">{t('composer.modelNoMatch')}</div>
+                  )}
+                  {shownModels.map(m => (
                     <button
                       key={m.name}
                       type="button"
-                      className={`composer-menu-item ${selectedModel === m.name ? 'is-on' : ''}`}
-                      onClick={() => { modelPickedByHand(m.name); setShowModelMenu(false); }}
+                      className={`composer-menu-item is-model ${selectedModel === m.name ? 'is-on' : ''}`}
+                      onClick={() => { modelPickedByHand(m.name); setShowModelMenu(false); setModelQuery(''); }}
                     >
                       <span className="composer-menu-label">{m.name}</span>
+                      {/* On the card already: the difference between answering
+                          now and reading twenty gigabytes off a disk first. */}
+                      {modelIsLoaded(m.name) && (
+                        <span className="model-hot" title={t('models.loaded')} aria-label={t('models.loaded')}>
+                          <Zap size={11} fill="currentColor" aria-hidden="true" />
+                        </span>
+                      )}
                       {modelSupportsVision(m.name) && (
                         <span className="cap-badge" title={t('model.visionCapable')}>👁</span>
                       )}
                       {selectedModel === m.name && <Check size={14} className="composer-menu-check" />}
+                      {/* Second line, so the name keeps the first one to itself. */}
+                      {modelFacts(m) && <span className="model-facts">{modelFacts(m)}</span>}
                     </button>
                   ))}
 
@@ -12053,16 +14917,60 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       <button
                         key={mode}
                         type="button"
-                        className={thinkMode === mode ? 'active' : ''}
-                        aria-pressed={thinkMode === mode}
+                        className={chatThinkMode === mode ? 'active' : ''}
+                        aria-pressed={chatThinkMode === mode}
                         title={t(`think.${mode}Help`)}
-                        onClick={() => { setThinkMode(mode); haptic('light'); }}
+                        /* Whichever this chat is actually using: its own
+                           setting when it has one, the shared one otherwise.
+                           Setting the shared one from inside a chat that has
+                           an override would change every *other* chat and
+                           leave this one exactly as it was. */
+                        onClick={() => {
+                          if (currentSession?.thinkMode !== undefined) updateCurrentSession({ thinkMode: mode });
+                          else setThinkMode(mode);
+                          haptic('light');
+                        }}
                       >
                         {t(`think.${mode}`)}
                       </button>
                     ))}
                   </div>
+                  {/* Whether that choice belongs to this conversation or to all
+                      of them. A chat could already carry its own system prompt
+                      and its own model; how hard the model thinks was global
+                      and nothing else, so "많이" set for one hard question left
+                      every other chat thinking for thirty seconds about the
+                      weather. */}
+                  <button
+                    type="button"
+                    className={`chat-scope ${currentSession?.thinkMode !== undefined ? 'is-on' : ''}`}
+                    onClick={() => updateCurrentSession({
+                      thinkMode: currentSession?.thinkMode === undefined ? chatThinkMode : undefined,
+                    })}
+                    title={t('chat.onlyHereHelp')}
+                  >
+                    {currentSession?.thinkMode !== undefined ? <Pin size={11} /> : <PinOff size={11} />}
+                    {t(currentSession?.thinkMode !== undefined ? 'chat.onlyHere' : 'chat.followGlobal')}
+                  </button>
                   <div className="composer-menu-note">{t('think.scaleNote')}</div>
+
+                  {/* Who this conversation draws.
+                      Here, beside the model and how hard it thinks, because it
+                      is the same kind of decision -- how this chat's answers
+                      are made -- and it belongs to this chat alone. Written
+                      once as tags; every picture in the chat starts with them
+                      and the model is told not to write its own. See
+                      `withPinnedCharacter`. */}
+                  <div className="composer-menu-heading">{t('character.title')}</div>
+                  <input
+                    className="chat-character"
+                    value={currentSession?.character || ''}
+                    onChange={(e) => updateCurrentSession({ character: e.target.value })}
+                    placeholder={t('character.placeholder')}
+                    aria-label={t('character.title')}
+                    spellCheck={false}
+                  />
+                  <div className="composer-menu-note">{t('character.help')}</div>
                 </Popover>
               </div>
 
@@ -12072,6 +14980,15 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   and the footer says so. */}
               {isThisChatGenerating ? (
                 <button type="button" className="send-btn active" onClick={stopGeneration} title={t('composer.stop')}>
+                  <Square size={14} fill="currentColor" stroke="none" />
+                </button>
+              ) : remoteTurnHere ? (
+                /* The same button for a turn running on another device. One
+                   model answers one question at a time, so there is nothing to
+                   send into this chat until that one is done -- and until now
+                   the only way to stop it was to go and find the machine. */
+                <button type="button" className="send-btn active is-elsewhere" onClick={stopElsewhere}
+                  title={`${t('composer.stop')} · ${t('studio.elsewhere')}`}>
                   <Square size={14} fill="currentColor" stroke="none" />
                 </button>
               ) : (
@@ -12611,6 +15528,131 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       label={t('behaviour.systemStrip')}
                       description={t('behaviour.systemStripHelp')}
                     />
+
+                    {/* Asked for at the moment it is switched on, which is the
+                        only moment it can be asked for: a browser puts the
+                        permission question once, and refused is refused until
+                        somebody goes into site settings. Where the answer is no
+                        -- or where there is no such thing, which is what a page
+                        served over plain HTTP gets -- the switch goes back and
+                        says why rather than sitting on and doing nothing. */}
+                    <SettingToggle
+                      checked={notifyWhenDone}
+                      onChange={async (wanted) => {
+                        if (!wanted) {
+                          setNotifyWhenDone(false);
+                          unsubscribeFromPush();
+                          return;
+                        }
+                        const answer = await askToNotify();
+                        setNotifyWhenDone(answer === 'granted');
+                        if (answer !== 'granted') {
+                          addLog(t(answer === 'unsupported' ? 'notify.unsupported' : 'notify.denied'), 'error');
+                          return;
+                        }
+                        /* And the half that works with the app closed. The
+                           sentence goes with it: the worker that will show it
+                           has no translations of its own. Quiet where the
+                           browser cannot -- plain http has no PushManager --
+                           because the in-page notifications still work there
+                           and saying so twice helps nobody. */
+                        subscribeToPush(t('notify.ready'));
+                      }}
+                      label={t('notify.label')}
+                      description={t('notify.help')}
+                    />
+                  </div>
+
+                  {/* Named choices for `__name__` in a prompt.
+                      One text box, one list per line, because that is how these
+                      lists are written everywhere else and a table editor for
+                      "a name and some words" would be more UI than the lists.
+                      A setting like any other, so the lists travel with the
+                      account. See src/wildcards.js. */}
+                  <div className="settings-group">
+                    <label>{t('wildcards.title')}</label>
+                    <div className="settings-desc">{t('wildcards.help')}</div>
+                    <textarea
+                      className="settings-textarea wildcard-lists"
+                      value={wildcardLists}
+                      onChange={e => { setWildcardLists(e.target.value); setSetting('wildcards', e.target.value); }}
+                      placeholder={'hair: red hair | blue hair | silver hair\nposes: standing | sitting | lying on side'}
+                      spellCheck={false}
+                    />
+                  </div>
+
+                  {/* The same question again, on a clock.
+                   *
+                   * In Settings rather than in the chat because it is a thing
+                   * this device does, not a thing this conversation contains --
+                   * and because the list is the useful view: "what does this
+                   * machine do on its own" has to be answerable in one place.
+                   * See src/schedules.js for what it can and cannot do. */}
+                  <div className="settings-group">
+                    <label>{t('schedule.title')}</label>
+                    {/* Where these run decides what they can do, so it is said
+                        before the list rather than discovered afterwards. */}
+                    <div className="settings-desc">{t(accountId ? 'schedule.helpServer' : 'schedule.help')}</div>
+                    {shownSchedules.length === 0 && (
+                      <div className="settings-desc">{t('schedule.none')}</div>
+                    )}
+                    {shownSchedules.map(item => {
+                      const chat = sessions.find(session => String(session.id) === String(item.chat));
+                      const firing = nextFiring(item);
+                      return (
+                        <div className={`schedule-row ${item.enabled ? '' : 'is-off'}`} key={item.id}>
+                          <Clock size={13} aria-hidden="true" />
+                          <div className="schedule-what">
+                            <span className="schedule-prompt" title={item.prompt}>{item.prompt}</span>
+                            <span className="schedule-when">
+                              {t(`schedule.every.${item.every}`)} {item.at}
+                              {chat ? ` · ${chat.title}` : ` · ${t('schedule.chatGone')}`}
+                              {item.enabled && firing ? ` · ${t('schedule.next', { when: new Date(firing).toLocaleString() })}` : ''}
+                            </span>
+                            {/* Why the last one did not happen, from the server
+                                that tried: a model not running, a chat gone. */}
+                            {item.lastError && <span className="schedule-error">{item.lastError}</span>}
+                          </div>
+                          <Switch
+                            checked={item.enabled}
+                            onChange={(wanted) => scheduleActions.toggle(item.id, wanted)}
+                            label={item.prompt}
+                          />
+                          <button className="icon-btn" title={t('common.delete')}
+                            onClick={() => scheduleActions.remove(item.id)}>
+                            <Trash2 size={13} />
+                          </button>
+                        </div>
+                      );
+                    })}
+                    <div className="schedule-new">
+                      <input
+                        value={scheduleDraft.prompt}
+                        onChange={e => setScheduleDraft(d => ({ ...d, prompt: e.target.value }))}
+                        placeholder={t('schedule.promptPlaceholder')}
+                        aria-label={t('schedule.promptPlaceholder')}
+                      />
+                      <select value={scheduleDraft.every}
+                        onChange={e => setScheduleDraft(d => ({ ...d, every: e.target.value }))}
+                        aria-label={t('schedule.title')}>
+                        {EVERY.map(every => <option key={every} value={every}>{t(`schedule.every.${every}`)}</option>)}
+                      </select>
+                      <input type="time" value={scheduleDraft.at}
+                        onChange={e => setScheduleDraft(d => ({ ...d, at: e.target.value }))}
+                        aria-label={t('schedule.at')} />
+                      <button
+                        className="btn pull-btn"
+                        disabled={!scheduleDraft.prompt.trim() || !currentSessionId}
+                        // The chat on screen, because that is the one whose
+                        // persona, model and history the answer will use.
+                        onClick={() => {
+                          scheduleActions.add({ ...scheduleDraft, chat: String(currentSessionId) });
+                          setScheduleDraft(d => ({ ...d, prompt: '' }));
+                        }}
+                      >
+                        <Plus size={13} /> {t('schedule.add')}
+                      </button>
+                    </div>
                   </div>
 
                   <div className="settings-group">
@@ -12823,17 +15865,36 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>{t('gen.temperature')}: {temperature}</label>
+                    <label>{t('gen.temperature')}: {chatTemperature}</label>
                     <input
                       type="range"
                       min="0" max="2" step="0.1"
-                      value={temperature}
-                      onChange={e => setTemperature(parseFloat(e.target.value))}
+                      value={chatTemperature}
+                      /* The chat's own when it has one. A conversation that is
+                         translating wants 0.2 and one that is brainstorming
+                         wants 1.2, and until now the second one had to be
+                         turned back by hand before the first was any use. */
+                      onChange={e => {
+                        const wanted = parseFloat(e.target.value);
+                        if (currentSession?.temperature !== undefined) updateCurrentSession({ temperature: wanted });
+                        else setTemperature(wanted);
+                      }}
                       style={{ width: '100%', accentColor: 'var(--accent)' }}
                     />
                     <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
                       <span>{t('gen.precise')}</span><span>{t('gen.creative')}</span>
                     </div>
+                    <button
+                      type="button"
+                      className={`chat-scope ${currentSession?.temperature !== undefined ? 'is-on' : ''}`}
+                      onClick={() => updateCurrentSession({
+                        temperature: currentSession?.temperature === undefined ? chatTemperature : undefined,
+                      })}
+                      title={t('chat.onlyHereHelp')}
+                    >
+                      {currentSession?.temperature !== undefined ? <Pin size={11} /> : <PinOff size={11} />}
+                      {t(currentSession?.temperature !== undefined ? 'chat.onlyHere' : 'chat.followGlobal')}
+                    </button>
                   </div>
 
                   <div className="settings-group">
@@ -13197,7 +16258,35 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     {runningModels.length === 0 && (
                       <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{t('models.noneLoaded')}</div>
                     )}
-                    {runningModels.map(m => (
+                    {runningModels.map((m, i) => (m.source === 'ace-step' ? (
+                      <div className="manager-row" key={`ace-${i}`}>
+                        <Music size={14} color="var(--success)" />
+                        <span className="manager-name" title={t('models.aceApproximate')}>{m.name}</span>
+                        <span className="manager-chip">ACE-Step</span>
+                        <span className="manager-meta">{formatBytes(m.size_vram || m.size)}</span>
+                        <button
+                          className="icon-btn bordered"
+                          title={m.busy ? t('models.aceBusy') : t('models.unload')}
+                          disabled={m.busy}
+                          onClick={async () => {
+                            await fetch('/music/unload', { method: 'POST' }).catch(() => null);
+                            fetchRunningModels();
+                          }}
+                        >
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ) : m.source === 'comfyui' ? (
+                      <div className="manager-row" key={`comfy-${m.name}-${i}`}>
+                        <Wand2 size={14} color="var(--success)" />
+                        <span className="manager-name" title={m.approximate ? t('models.comfyApproximate') : m.name}>{m.name}</span>
+                        <span className="manager-chip">ComfyUI</span>
+                        <span className="manager-meta">{formatBytes(m.size_vram || m.size)}</span>
+                        <button className="icon-btn bordered" title={t('models.unload')} onClick={unloadComfyModels}>
+                          <X size={14} />
+                        </button>
+                      </div>
+                    ) : (
                       <div className="manager-row" key={`ps-${m.name}`}>
                         <Server size={14} color="var(--success)" />
                         <span className="manager-name">{m.name}</span>
@@ -13206,7 +16295,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           <X size={14} />
                         </button>
                       </div>
-                    ))}
+                    )))}
                   </div>
 
                   <div className="settings-group">
@@ -13385,6 +16474,21 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)' }}>{t('rag.topKHelp')}</div>
                   </div>
 
+                  <div className="settings-group">
+                    <SettingToggle
+                      checked={ragHybrid}
+                      onChange={setRagHybrid}
+                      label={t('rag.hybrid')}
+                      description={t('rag.hybridHelp')}
+                    />
+                    <SettingToggle
+                      checked={ragRerank}
+                      onChange={setRagRerank}
+                      label={t('rag.rerank')}
+                      description={t('rag.rerankHelp')}
+                    />
+                  </div>
+
                   <KnowledgePanel
                     /* The scope, not the bare account id.
                        These are two different keys once somebody signs in:
@@ -13443,7 +16547,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       )}
                       {memories.map(m => (
                         <div className={`rag-item ${m.enabled === false ? 'is-off' : ''}`} key={m.id}>
-                          <span className="memory-kind">{m.kind}</span>
+                          <span className="memory-kind">{MEMORY_KINDS.includes(m.kind) ? t(`memory.kind.${m.kind}`) : m.kind}</span>
                           <div className="rag-item-meta">
                             <div className="memory-text">{m.text}</div>
                           </div>
@@ -13485,7 +16589,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         onChange={e => setNewMemoryKind(e.target.value)}
                         style={{ flex: 1 }}
                       >
-                        {MEMORY_KINDS.map(k => <option key={k} value={k}>{k}</option>)}
+                        {MEMORY_KINDS.map(k => <option key={k} value={k}>{t(`memory.kind.${k}`)}</option>)}
                       </select>
                     </div>
                     <button
@@ -13546,7 +16650,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           className="settings-input"
                           value={ttsRefAudio}
                           onChange={e => setTtsRefAudio(e.target.value)}
-                          placeholder="C:\\...\\sample.wav"
+                          placeholder={'C:\\voices\\sample.wav'}
                           spellCheck={false}
                         />
                       </div>
@@ -13708,8 +16812,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     <SecurityPanel user={user} onUserChanged={authSession.setUser} toast={toast} />
                   )}
 
+                  {/* Instructions for whoever runs this server -- client IDs,
+                      redirect URIs -- were a full screen of the account tab
+                      for everybody, open by default. Folded, as the profile
+                      is on the general tab. */}
+                  <details className="settings-fold">
+                    <summary><span>{t('auth.socialSetup')}</span></summary>
                   <div className="settings-group">
-                    <label>{t('auth.socialSetup')}</label>
                     <div className="setup-why">{t('auth.whySetup')}</div>
 
                     <ol className="setup-steps">
@@ -13777,6 +16886,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         : 'Leave blank to use .env values instead.'}
                     </div>
                   </div>
+                  </details>
 
                   <div className="settings-group">
                     <label>{t('sync.title')}</label>
@@ -13842,31 +16952,31 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
               {settingsTab === 'data' && (
                 <>
-                  <div className="settings-actions">
-                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
-                      <button onClick={exportSessions} style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', color: 'var(--text-primary)' }}>
-                        {t('data.exportJson')}
-                      </button>
-                      <label style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', textAlign: 'center', color: 'var(--text-primary)' }}>
-                        {t('data.importJson')}
-                        <input type="file" accept=".json" onChange={importSessions} style={{ display: 'none' }} />
-                      </label>
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-                      <button onClick={() => exportSessionMarkdown()} style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', color: 'var(--text-primary)' }}>
-                        {t('data.exportThisMd')}
-                      </button>
-                      <button onClick={exportAllMarkdown} style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', color: 'var(--text-primary)' }}>
-                        {t('data.exportAllMd')}
-                      </button>
-                    </div>
-                    <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '1rem' }}>
-                      <button onClick={() => exportSessionHtml()} style={{ flex: 1, padding: '0.5rem', background: 'var(--bg-primary)', border: '1px solid var(--border-color)', borderRadius: '4px', cursor: 'pointer', color: 'var(--text-primary)' }}>
-                        {t('data.exportThisHtml')}
-                      </button>
-                    </div>
-                    <button className="btn" style={{ backgroundColor: '#EF4444', color: 'white', width: '100%', padding: '0.5rem', border: 'none', borderRadius: '4px', cursor: 'pointer', fontWeight: 600 }} onClick={clearAllChats}>
-                      {t('data.clearAll')}
+                  {/* One grid of equal buttons. They were five inline styles apiece,
+                      and the one that is a <label> (a file input needs one) did
+                      not inherit a button's font, so it rendered a size larger
+                      than its neighbours. */}
+                  <div className="settings-actions data-actions">
+                    <button type="button" className="data-action" onClick={exportSessions}>
+                      <Download size={14} /> {t('data.exportJson')}
+                    </button>
+                    <label className="data-action">
+                      <Upload size={14} /> {t('data.importJson')}
+                      <input type="file" accept=".json" onChange={importSessions} style={{ display: 'none' }} />
+                    </label>
+                    <button type="button" className="data-action" onClick={() => exportSessionMarkdown()}>
+                      <FileText size={14} /> {t('data.exportThisMd')}
+                    </button>
+                    <button type="button" className="data-action" onClick={exportAllMarkdown}>
+                      <FileText size={14} /> {t('data.exportAllMd')}
+                    </button>
+                    <button type="button" className="data-action" onClick={() => exportSessionHtml()}>
+                      <Globe size={14} /> {t('data.exportThisHtml')}
+                    </button>
+                    {/* Destructive, and the last thing in the list -- but not a solid
+                        red slab, which made it the loudest control on the page. */}
+                    <button type="button" className="data-action danger" onClick={clearAllChats}>
+                      <Trash2 size={14} /> {t('data.clearAll')}
                     </button>
                   </div>
 

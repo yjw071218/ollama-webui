@@ -1,6 +1,8 @@
 import localforage from 'localforage';
 import { unzipSync, strFromU8 } from 'fflate';
 import { safeTail, safeSlice } from './textCut.js';
+import { buildLexicalIndex, lexicalSearch, fuseRRF } from './lexical.js';
+import { rerankHits } from './rerank.js';
 
 /**
  * Retrieval over documents the user attaches.
@@ -8,6 +10,21 @@ import { safeTail, safeSlice } from './textCut.js';
  * Everything runs locally: text is extracted in the browser, embedded through
  * Ollama's /api/embed, and the vectors live in IndexedDB. Nothing leaves the
  * machine, and there is no vector database to run.
+ *
+ * Three stages, and each one is switchable because each costs something
+ * different:
+ *
+ *  1. **Dense**, always. The question and every chunk as vectors, ranked by
+ *     cosine. Good at "asked in different words from the document", bad at
+ *     exact strings.
+ *  2. **Lexical**, by default. BM25 over the same chunks, fused with the dense
+ *     ranking by reciprocal rank. Good at exactly what stage 1 is bad at, and
+ *     it costs no round trip at all — see `src/lexical.js` for why this
+ *     matters far more in Korean than the English case suggests.
+ *  3. **Rerank**, off by default. The model reads the shortlist and says which
+ *     passages actually answer the question, dropping the ones that do not.
+ *     One round trip before the answer starts, which is why it is a choice —
+ *     see `src/rerank.js`.
  */
 
 const store = localforage.createInstance({ name: 'ollama-webui', storeName: 'knowledge' });
@@ -313,11 +330,29 @@ export const chunkPages = (pages, { size = CHUNK_CHARS, overlap = CHUNK_OVERLAP 
    Embeddings
    ========================================================================= */
 
+/* How much context an embedding model is loaded with.
+ *
+ * Generously more than any chunk this app makes (see CHUNK_CHARS) and nothing
+ * like a default. It has to be said out loud, because an Ollama request that
+ * omits `num_ctx` does not get a modest default -- it gets
+ * `OLLAMA_CONTEXT_LENGTH`, the server-wide one, and on the machine this was
+ * found on that was set to 1,048,560 tokens.
+ *
+ * What that costs is not theoretical: a KV cache is bytes per token per layer,
+ * so a million-token cache for a small embedding model is still tens of
+ * gigabytes of commit. On a machine whose committed memory already exceeds its
+ * RAM, an allocation like that is the whole system paging to disk -- which is
+ * not an error anybody sees, it is the computer stopping for ten minutes.
+ *
+ * Every other call this app makes pins `num_ctx` for the same reason. This one
+ * was the exception. */
+export const EMBED_NUM_CTX = 8192;
+
 export const embedTexts = async (texts, model = DEFAULT_EMBED_MODEL, signal) => {
   const res = await fetch('/api/embed', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ model, input: texts }),
+    body: JSON.stringify({ model, input: texts, options: { num_ctx: EMBED_NUM_CTX } }),
     signal,
   });
 
@@ -437,39 +472,136 @@ export const visibleDocuments = (docs, { chatId = null, folderId = null } = {}) 
   })
 );
 
+/* The BM25 index, kept for as long as the thing it describes has not changed.
+ *
+ * Only the last one: retrieval runs against the same library over and over
+ * within a conversation, and the case worth avoiding is rebuilding on every
+ * message, not rebuilding after the user switches chat. Holding several would
+ * mean holding every chunk of every scope in memory twice for the sake of a
+ * few milliseconds. */
+let indexCache = null;
+
+/* What the index was built from, cheaply enough to compute per message.
+ *
+ * Document ids and chunk counts, not the text. The text cannot change without
+ * the chunk count changing *or* the document being re-added under a new id —
+ * both of which this catches — and hashing a few megabytes of prose on every
+ * turn to be sure about a case that does not arise is not a trade worth
+ * making. */
+const signatureOf = (chunks, docs) => `${chunks.length}:${docs.map(d => `${d.id}/${d.chunks.length}`).join(',')}`;
+
+const lexicalIndexFor = (chunks, docs) => {
+  const signature = signatureOf(chunks, docs);
+  if (indexCache?.signature === signature) return indexCache.index;
+  const index = buildLexicalIndex(chunks);
+  indexCache = { signature, index };
+  return index;
+};
+
 export const retrieve = async (query, docs, {
   model = DEFAULT_EMBED_MODEL,
   topK = 5,
   minScore = 0.35,
   chatId = null,
   folderId = null,
+  /* Both default to the cheaper answer being on and the expensive one off.
+     Lexical matching costs arithmetic over text already in memory; reranking
+     costs a round trip to the model before the reply starts. */
+  hybrid = true,
+  rerank = false,
+  rerankModel = null,
   signal,
 } = {}) => {
   const active = visibleDocuments(docs, { chatId, folderId })
     .filter(d => Array.isArray(d.chunks) && d.chunks.length);
   if (active.length === 0 || !query.trim()) return [];
 
-  const [queryVector] = await embedTexts([query], model, signal);
-  const normalised = normalise(queryVector);
-
-  const scored = [];
+  /* One flat list of candidates, built once and referred to by identity from
+     here on. Both rankings hand back these same objects, which is what lets
+     the fusion recognise a passage that both retrievers found. */
+  const candidates = [];
   for (const doc of active) {
     for (const chunk of doc.chunks) {
-      if (!chunk.vector) continue;
-      scored.push({
-        score: dot(normalised, chunk.vector),
+      candidates.push({
         docId: doc.id,
         docName: doc.name,
         page: chunk.page,
         text: chunk.text,
+        vector: chunk.vector,
       });
     }
   }
 
-  return scored
+  const [queryVector] = await embedTexts([query], model, signal);
+  const normalised = normalise(queryVector);
+
+  const dense = candidates
+    .filter(c => c.vector)
+    .map(c => ({ candidate: c, score: dot(normalised, c.vector) }))
     .filter(hit => hit.score >= minScore)
-    .sort((a, b) => b.score - a.score)
-    .slice(0, topK);
+    .sort((a, b) => b.score - a.score);
+
+  const strip = ({ vector, ...rest }) => rest;   // the vector is not context
+
+  if (!hybrid) {
+    const hits = dense.slice(0, topK).map(hit => ({ ...strip(hit.candidate), score: hit.score }));
+    return rerank ? await safeRerank(query, hits, { model: rerankModel, topK, signal }) : hits;
+  }
+
+  /* BM25 over the same candidates.
+   *
+   * Note what is *not* here: the dense floor. A passage naming the exact error
+   * code being asked about can sit below `minScore` — that is the failure this
+   * whole path exists for, and applying the cosine's floor to the lexical list
+   * would filter out precisely the results it was added to find. The lexical
+   * side has its own floor, and it is inherent rather than configured: BM25
+   * returns nothing for a passage that contains none of the query's terms, so
+   * a hit here always means a real token matched. */
+  const index = lexicalIndexFor(candidates, active);
+  const lexical = lexicalSearch(index, query, { limit: Math.max(topK * 4, 20) });
+
+  /* More than topK goes into the fusion, because a passage's whole value here
+     may be that it placed eighth on one list and second on the other. */
+  const fused = fuseRRF(
+    [dense.slice(0, Math.max(topK * 4, 20)).map(h => h.candidate), lexical.map(h => h.entry)],
+    { keyOf: (candidate) => candidate },
+  );
+
+  const denseScores = new Map(dense.map(h => [h.candidate, h.score]));
+  const lexicalScores = new Map(lexical.map(h => [h.entry, h.score]));
+
+  const hits = fused.slice(0, topK).map(row => ({
+    ...strip(row.entry),
+    /* `score` stays the cosine wherever there is one, because that is what the
+       citation footer and `formatContext` show and a reciprocal-rank sum is
+       not a number anybody can read. A lexical-only hit has no cosine, so it
+       gets the floor: honest about being below it, and not a fabricated 0.9. */
+    score: denseScores.has(row.entry) ? denseScores.get(row.entry) : minScore,
+    lexical: lexicalScores.get(row.entry) ?? 0,
+    /* Which retrievers found it, so the log line can say so. */
+    found: [denseScores.has(row.entry) && 'dense', lexicalScores.has(row.entry) && 'lexical'].filter(Boolean),
+  }));
+
+  return rerank ? await safeRerank(query, hits, { model: rerankModel, topK, signal }) : hits;
+};
+
+/**
+ * The rerank, with its failures spent rather than passed on.
+ *
+ * A second pass that can leave the caller with nothing is worse than no second
+ * pass. Everything that can go wrong here — no model named, the request
+ * refused, invalid JSON, a model that ignores `format` — is the same outcome:
+ * the ranking that went in comes back out. The one exception is an abort,
+ * which is the user leaving and has to keep propagating.
+ */
+const safeRerank = async (query, hits, options) => {
+  if (!options?.model || hits.length < 2) return hits;
+  try {
+    return await rerankHits(query, hits, options);
+  } catch (e) {
+    if (e?.name === 'AbortError') throw e;
+    return hits;
+  }
 };
 
 /** Formats hits for injection, with citations the model can quote back. */

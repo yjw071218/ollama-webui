@@ -124,6 +124,20 @@ does not pretend otherwise — `num_ctx` is dropped rather than sent as a lie, a
 `/api/show` reports the figure the model was *actually* loaded with, read back off the
 running server, so the composer's context gauge measures against the truth.
 
+## Songs
+
+`generate_music` writes and records one: ACE-Step 1.5 makes the arrangement, the
+vocals and the mix in about as long as the song lasts. Ask for "노래 만들어줘"
+and the model writes the *style* (genre, instruments, tempo, mood — the
+vocabulary a music model was trained on) and the lyrics, with section markers,
+in whatever language it should be sung in. The finished track plays in the
+conversation and is kept under `data/music/`, because a song in a chat from last
+week should still play.
+
+It runs from [`engines/ace-step`](engines/README.md) — inside the project,
+started by the app the first time a song is asked for, parked on the CPU
+between songs so it is not what makes the next picture run out of memory.
+
 ## Pictures and video
 
 Image and video generation runs in [ComfyUI](https://github.com/comfyanonymous/ComfyUI),
@@ -139,6 +153,19 @@ python main.py --listen 127.0.0.1 --port 8188
 Put the checkpoints in `ComfyUI/models/checkpoints/`. The Studio tab reads what is
 actually installed and marks what is not, so a missing file is visible before you spend a
 minute finding out.
+
+**To see the picture and video models in the loaded list**, copy `comfyui/ollama_webui_memory`
+into `ComfyUI/custom_nodes/` and restart ComfyUI. It adds one route, `GET /webui/loaded`,
+that reports each model ComfyUI holds and how much of it is on the GPU, the same two
+figures Ollama gives for a language model. Without it the list shows what ComfyUI holds as
+one total.
+
+It also undoes one thing a VRAM-Manager node (ComfyUI-DistorchMemoryManager) does: that
+node measures what other programs hold on the card when ComfyUI starts and reserves that
+much for the whole session. Started while a language model was loaded, it reserved 13GB of
+a 16GB card, and every picture ran fully offloaded until one crashed. The extension puts
+the reserve back to ComfyUI's own (or your `--reserve-vram`), at start and before each
+prompt.
 
 **Every other checkpoint you already have is offered too**, under `Also installed here`.
 Four described models none of which are downloaded yet is a Studio that can generate
@@ -157,6 +184,35 @@ matching `widgets_values` to names through `/object_info`.
 | **Krea 2 Turbo** | 8 steps, guidance 1, with a built-in LLM prompt refiner. |
 | **Anima Base** | Anime and illustration. Booru tags or a sentence. Non-commercial licence — fine for personal use, not for a product. |
 | **MiniMax H3** | Video with sound, and a reference-image input — which is what makes "turn this picture into a video" work. |
+
+### Longer clips, and clips that loop
+
+H3 makes five to fifteen seconds in one pass — its own tooltip says so, and a
+minute asked for in one pass is a minute of drift: the room changes, the face
+wanders, the sound stops matching. So anything longer is rendered as **segments
+joined at their keyframes**. Segment N is pinned at frame 0 to the last frame
+segment N-1 actually produced, and every segment still carries the reference
+picture: continuity from the pin, identity from the reference. Sixty seconds is
+six renders and takes as long as that sounds.
+
+A **loop** is the same mechanism pointed at itself: first frame and last frame
+are the same picture, so the clip arrives back where it started — a Live2D-style
+idle. Two details decide whether it actually loops or merely nearly loops, and
+both are in [`server/h3Motion.js`](server/h3Motion.js): the picture is scaled to
+the clip's exact size first (the node stretches the first frame and centre-crops
+the last, so an aspect a few pixels out pins two slightly different images), and
+the repeated frame is dropped from what is saved, or a player shows it twice —
+one stutter per lap.
+
+Both need the [`minimax-h3-hybrid-cond`](https://github.com/kitsune123150/minimax-h3-hybrid-cond)
+node in `ComfyUI/custom_nodes/`, which is the one thing that can hold a keyframe
+pin *and* the reference pictures in a single conditioning payload; the stock
+nodes are one or the other. Without it the switch is greyed out with the reason
+beside it rather than quietly making an ordinary clip.
+
+In the Studio: the length slider goes to a minute and there is a **Loop** switch.
+In a conversation: `duration` and `loop="true"` on `generate_video`, which the
+model sets when you ask for a long clip or a loop.
 
 `server/workflows.js` says where each workflow's interesting inputs live, so the Studio
 renders **only the controls that workflow actually has**: Anima gets a negative-prompt box
@@ -239,6 +295,73 @@ seconds. ComfyUI ships with previews off; the app asks for
 them per prompt, so nothing has to be restarted (`COMFYUI_PREVIEW` in `.env`). If the
 stream cannot be opened, the job still completes exactly as before — the progress is
 additive, never on the path between asking for a picture and getting one.
+
+**Only the part that is wrong gets drawn again.** "Make her hair short" used to mean
+handing the sampler the whole picture at a strength high enough to reshape hair, and at
+that strength the collar changes shape and the shoes turn pink too: there is no number
+that is high enough for the hair and low enough for the socks. So an edit that names a
+part redraws only that part — SAM3 finds it from the word ("hair", "clothes", "hands"),
+the sampler is told to move only inside that mask, and everything outside it is the
+original pixel for pixel. What is drawn inside is guided by kohya-ss's inpainting
+ControlNet-LLLite where it is installed (`model_patches/`, Anima only): it is shown the
+picture *around* the mask, so a redrawn arm continues the arm it was attached to rather
+than being invented from the prompt. You can also paint the area yourself.
+
+Two things about that are properties of the picture rather than of the code, so they are
+sliders in the Studio, under **Redrawing one part**: how hard the guide pulls (lower to change
+a part outright, higher when the new part ignores what it is attached to, ×0 to turn the
+guide off) and how far past the outline the mask is widened (higher when a sliver of the
+old picture survives at the edge, lower when the redraw spills into what you did not ask
+about). Both are multipliers on what the app already measures, so clothes stay wider than
+hair at every setting, and at ×1 — where they start — a job is the job it would have been
+before the sliders existed. They apply wherever part of a picture is redrawn: the check
+above, an edit asked for in a conversation, and an area painted over one.
+
+**And it can find the part itself.** A picture is often right in every way that was asked
+for and has one hand with six fingers on it. With **검수** turned on in the Studio toolbar,
+each finished picture is shown to a local model that can see it, asked only about the
+mistakes image models actually make — malformed hands, extra fingers, mismatched eyes,
+clothing that melts — and told to answer with one of a fixed list of nouns, because that
+noun is what SAM3 is given to find. Named parts are then redrawn exactly as above. Three
+settings: no check, check and offer a button, or check and fix. A picture fixed without
+being asked always keeps the one it started from beside it — a bar you drag across the
+two, and a button to keep whichever is better — because a judgement made on your behalf
+has to be one you can reverse by looking. It costs a vision model on the card and several
+seconds per picture, which is why it is off until you turn it on.
+
+**Prompt blocks, kept by name.** A character in forty tags, a lighting recipe, the
+quality words that suit one checkpoint — each of those was rebuilt by hand every time
+or dug out of an old picture's settings, because the Studio remembers only what each
+workflow was *last* set to. Save the boxes under a name and they come back as a chip:
+press it to put them in, press `+` to add them to what is already there. Adding is tag
+by tag, so pressing it twice does nothing the second time — a prompt with its quality
+tags in it twice is not merely untidy, since these models read a repeated tag as a
+heavier one. They belong to the account, so a character written on a phone is on the
+desktop.
+
+**A batch can walk one setting instead of the seed.** The count and what it walks are one
+control in two parts, beside the Generate button — not two, because the second changes
+what the first *means*: ×6 is six seeds, ×6 along Steps is six values of one setting, and
+read left to right they are a phrase. The ordinary batch is the same
+prompt at a different seed each time, which answers "give me some options" and nothing
+else. The question it cannot answer is what a number actually *does*, and finding out
+by hand means eight generations with one field edited between each. Pick a setting —
+steps, guidance, how much to change, or either of the two inpainting dials — and the
+batch becomes that setting moved a step at a time, **at one fixed seed**, which is the
+whole point: two pictures that differ in their seed differ everywhere and nothing can
+be learnt by comparing them. The seed is chosen, used for the whole row and written
+back into the box, so the same row can be swept again along a different axis. Each card
+says which value it is.
+
+**One part of a picture can be redrawn from the Studio too**, not only from a
+conversation: name it (`hair`, `clothes`, `hands`) beside the reference picture and
+everything outside it is kept pixel for pixel.
+
+**A frame of a film is a picture.** A finished video could be watched and nothing else —
+the one shot in it worth keeping could not be got out, while every still this app makes
+can be enlarged, cut out, extended, edited and shared. Scrub to the frame you want and
+take it: it lands in the reference box of the picture workflow, with the prompt. So "the
+third second of this, but her hair is short" stops being a new generation from nothing.
 
 **The prompt is four boxes, not one.** A positive prompt for these models is
 four different things concatenated — the quality words that go first, the
@@ -548,6 +671,20 @@ sounds like a detail and was most of the problem on a phone, where a flick start
 - **The page a reader lands on is not the app.** No composer, no sidebar, no session:
   the route branches before the session provider mounts, so following a link neither
   requires an account nor creates one, and the read is made without credentials
+
+### Share one picture
+- **Two ways out, and the device picks.** *Share* under any picture, in a conversation
+  or in the Studio. On a phone it opens the operating system's share sheet with the
+  picture itself in it, so it lands in KakaoTalk as a picture rather than as a link. On a
+  desktop — and on any plain-http origin, where `navigator.share` does not exist — it
+  publishes a link instead and copies it. Which of the two is not a preference to get
+  wrong; it is what the browser can actually do
+- **The link names the file, it does not carry it.** An 11 MB PNG does not fit in a
+  share row, and a copy of one would outlive the link being revoked. `/api/share/image`
+  is the only address the picture has, so revoking the link stops the bytes and not
+  merely the page around them
+- **The page is the picture and its prompt.** Nothing else: not the seed, not the model,
+  not the LoRA stack. A picture handed to somebody is a picture; the rest is a workbench
 - **Expiry (never / 1 / 7 / 30 days), a view count, and revoke.** Revoking deletes the
   stored copy rather than flagging it, and deleting your account takes every link with
   it — a foreign key, so it cannot be forgotten
@@ -557,6 +694,150 @@ sounds like a detail and was most of the problem on a phone, where a flick start
   again
 - An unknown, revoked and expired link all get the same answer, because telling them
   apart tells a stranger with a guessed token that the guess landed on something real
+### What is in the picture, not what was asked for
+A finished still had two witnesses and both of them can miss. The prompt knows only the
+*request* — "1girl, beach, sitting" is unremarkable and the picture is whatever the model
+made of it — and the classifier is a 224-pixel MobileNet trained on photographs, which on
+a drawing is guessing. So a picture nobody asked to be explicit could be explicit, and
+shown.
+
+ComfyUI's tagger is not guessing: WD14 was trained on precisely the vocabulary these
+prompts are written in, so `nude` from the tagger means what `nude` in a prompt means and
+the same lists judge both. A video has been judged this way for a while; a still is now
+judged the same, with its tags as a list of one. The answer is combined by taking the
+**strongest** of the three, never in place of them — a tagger that is absent, slow or
+lenient cannot uncover anything.
+
+**And it is the witness that is believed.** The three answers used to be combined by
+taking the strongest, which is wrong in the direction nobody notices until it happens to
+them: a witness that cannot be overruled cannot be wrong. The classifier's `hentai` class
+fires on drawn art *as such*, so on an install that makes anime constantly it calls
+ordinary pictures explicit. And a prompt is a *request made before the picture exists*,
+not a description of what arrived — `bottomless` in the request and an oversized shirt
+covering the character completely is a picture that was veiled for a word.
+
+So where the tagger has read the file, it answers, and both of the others step aside.
+They are what there is until it has: the prompt from the moment the job is queued, which
+is the job it is good at, and the classifier while the round trip to ComfyUI is in
+flight. This does not weaken what the safeguard is for — a request for something explicit
+that produced it is a picture the tagger tags `nude`, `nipples`, `pussy`, which are the
+tags it is most confident about. What changed is only the case where the request and the
+result disagree, and there the result is what is on screen.
+
+**A garment is not exposure; "only that garment" is.** `panties`, `bra` and `underwear`
+are filed by the tag dictionary in this repo under 패션 > 언더웨어 — fashion — and they
+were on the suggestive list anyway. Off a prompt that is arguable; off the tagger it is
+wrong, because WD14 reports `panties` when it infers underwear is being *worn*, with
+nothing showing at all. What stays are the tags that name the exposure rather than the
+clothing: `underwear only`, `panty shot`.
+
+Tagging runs in ComfyUI, so it is asked one picture at a time, kept for the session, and
+kept on the server for ever (`picture-tags.json`): a picture is tagged once, ever. The
+lists gained the words the tagger actually uses — `swimsuit`, `breasts out`, `no panties`,
+`areola slip` — while deliberately not gaining `breasts`, which WD14 puts on any clothed
+character. A safeguard that over-veils is one that gets turned off, and that protects
+nothing.
+
+### Picking several pictures at once
+Saving twenty pictures meant twenty presses on twenty buttons, each of which had to be
+found first. *Pick several* in the gallery turns tapping into selecting — a mode entered
+on purpose, not a modifier key, because half of this is used on a phone where there is no
+modifier key, and a grid in which a plain tap sometimes opens and sometimes selects is a
+grid nobody trusts. The whole card is the target. Then save them all, or attach them all
+to the conversation. Saves go one at a time and wait for each: a browser cancels all but
+the first few of a burst of downloads, so firing twenty at once quietly saves three.
+
+### How it moves
+Two curves and three durations, defined once under `Motion` in `src/extras.css`, plus a
+spring and a pointer-follower in `src/motion.css` for the things that came later. One
+system: two panels that open at different speeds read as two apps, and the way that
+happens is a second set of tokens arriving beside the first rather than carelessness.
+`ease` — what a stylesheet gets for free — accelerates and decelerates symmetrically,
+which is the one curve nothing in the physical world follows, so nothing here uses it.
+
+Motion answers an action. Opening a group in the Studio used to insert eight rows of
+controls in a single frame and shove everything below them down the page; now the body
+lifts into place while the row you pressed stays put, so what changed is visible and
+where it came from is obvious. Closing is not animated: a group being folded away is not
+information anybody needs to watch.
+
+**Elevation is three rungs**, and a menu, a popover and a toast are all the same one —
+they had grown up at four different heights. The shadows are tinted with the ink colour
+rather than black: on a paper-white ground a neutral black shadow is grey, and grey on
+cream reads as dirt rather than as shade. (The one thing deliberately off the scale is
+the device mock-up in the preview pane. It is a drawing of a phone, and a handset on a
+desk casts its own shadow, not the app's.)
+
+**Radius is four steps**, chosen by size rather than taste: a curve reads as a proportion
+of the edge it sits on, so a 20-pixel button and a 600-pixel panel curved alike look
+unrelated. Eleven raw values had grown up under the three tokens that existed.
+
+**Every focusable thing shows a focus ring.** The base stylesheet — which describes the
+app's buttons, inputs and selects — had no focus rule at all, so each of them inherited
+whatever the browser draws by default, which on a dark background under a borderless
+button is frequently nothing.
+
+**The safeguard's frosted glass answers being touched.** A surface that a pointer crosses
+with nothing happening is not a cover; it is a picture that failed to load. So rings
+spread from wherever the pointer is, and light gathers under it — but it reveals nothing.
+The ripple is light *on* the glass, never a lens: what is underneath stays exactly as
+blurred, because moving a pointer over a covered picture is not asking to see it. The
+position is two CSS custom properties written straight onto the node, never through
+React — sixty re-renders a second of a picture, and of the classifier under it, to move a
+highlight four pixels is not a trade worth making.
+
+**And all of it stops for `prefers-reduced-motion`.** Off, not shortened: somebody who has
+asked their operating system to stop animating things is often asking because animation
+makes them ill, and a faster version of the thing that makes them ill is still that thing.
+
+### Documents you can ask about
+
+Attach a PDF, a Word file or a folder's worth of notes and the text is extracted in the
+browser, split into chunks, embedded through Ollama's `/api/embed` and kept in IndexedDB.
+Nothing leaves the machine and there is no vector database to run. A question then carries
+the handful of passages it needs, with `[1]`, `[2]` citations you can press.
+
+**Finding the passage is two searches, not one, and they are wrong about different
+things.** The embedding is a summary of meaning, which is exactly the property that makes
+it good at "asked in different words from the document" and unreliable at an *exact*
+string: `ERR_MODULE_NOT_FOUND` and `ERR_MODULE_NOT_FOUND_V2` sit on top of each other in
+vector space, so the paragraph naming the one you asked about is not dependably nearer
+than the paragraph naming the other. Model numbers, error codes, clause numbers, people's
+names and dates all fail this way, and they are a large share of what anybody asks their
+own documents.
+
+BM25 cannot make that mistake, because it never generalises — the token is in the passage
+or it is not. It has the opposite weakness, and running both is the point. The two
+rankings are combined by **reciprocal rank fusion**, which compares positions rather than
+scores: a cosine of 0.71 and a BM25 score of 8.3 are not on the same scale and no amount
+of normalising makes them comparable, whereas "second on both lists" means the same thing
+whatever the numbers were. It costs no extra request — the chunks are already in memory —
+so it is on by default.
+
+**It matters far more in Korean than the English case suggests.** Korean is agglutinative:
+the document says `문서를` and the question says `문서`, which are two whitespace tokens
+and one word, so word matching scores zero on a passage about exactly what was asked. The
+fix needs no morphological analyser and no download — index overlapping character bigrams
+for CJK runs, which is what Lucene has done for twenty years. `문서를` becomes `문서`,
+`서를`, and the question's stem is a token the passage has. The default embedding model
+(`nomic-embed-text`) is an English model, so on a Korean library this second retriever is
+frequently the one doing the work.
+
+**Optionally, the model reads the shortlist before answering.** Retrieval returns the five
+nearest passages; "nearest" is not "answers it", and a passage about the right subject that
+does not contain the fact is an invitation to invent the fact and cite the passage — after
+which the citation makes the invention look checked. So *Let the model pick the passages*
+scores each one 0–3 against a rubric, with `format` pinning the reply to a schema, and
+drops the ones that answer nothing. That includes dropping all of them, which is a verdict
+the cosine floor structurally cannot reach: a floor only knows how close the nearest thing
+was, never whether it was the thing.
+
+It is off by default because it costs a round trip before the reply starts, and because
+every failure it can have is spent rather than passed on — a refused request, invalid
+JSON, a model ignoring the schema, a model scoring everything 0 — all give back the
+ranking that went in. A feature that improves the good case and wrecks the bad one is a
+coin toss with extra steps.
+
 ### Cross-chat memory
 - Facts worth keeping (`profile` / `preference` / `project` / `fact`) are extracted with a
   JSON-Schema-constrained call and injected into the system prompt of later chats
@@ -899,6 +1180,25 @@ Two windows of the same browser on one computer looked instant long before any
 of this, and that is worth knowing when judging whether sync works: they share
 one local database and read each other's writes directly, without the account
 being involved at all. A phone is the honest test.
+
+**The Studio's gallery is one record per picture, not one for the list.** Every
+other list here is a set of choices, where the last choice made is the one that
+stands. A gallery is not: two devices can both be right about it — the phone
+finished three pictures this machine never saw, this machine is running one the
+phone has never heard of — and a single row cannot hold both, because whoever
+uploads last overwrites it. Merging on the way down does not rescue that, since
+the upload in the same request has already replaced the row. Per picture, none
+of it arises: two devices writing about different pictures write to different
+records, one they both know is settled by its own timestamp, and forgetting one
+becomes a tombstone that a list could never have expressed.
+
+**Pictures in a conversation travel by address.** A generated picture is kept in
+the chat as a base64 PNG — around thirteen megabytes, where one sync record may
+be eight — so a conversation with a picture in it could not be uploaded at all.
+The bytes are already on the machine serving this app, so what goes up is the
+`/studio/view` address instead. An `<img src>` and a `fetch()` cannot tell the
+two apart. Pictures the reader *attached* are left alone: those have no copy on
+the server, so there is no address to give.
 
 #### One address, not several
 
