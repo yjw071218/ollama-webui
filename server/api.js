@@ -60,6 +60,7 @@ import { enginesFor, ENGINE_SPECS } from './engines.js';
 import { createMusicRoutes } from './music.js';
 import { createMcpRoutes } from './mcp.js';
 import { readRequestBody } from './requestBody.js';
+import { scanFolder, readFileBytes } from './folderWatch.js';
 import { readChatJob, replayChatJob, cancelChatJob, followChatJob, liveChatJobs } from './chatJobs.js';
 import {
   pushPublicKey, rememberSubscription, forgetSubscription, lastFinished, subscriptionLabel,
@@ -566,6 +567,50 @@ export const createApiRoutes = (env = {}, options = {}) => {
           }
         } catch (e) {
           res.statusCode = 500;
+          res.end(JSON.stringify({ success: false, error: e.message }));
+        }
+      });
+    });
+
+    /* ---- Watched folders ----
+       The server lists a directory and hands over bytes; everything that turns
+       a file into vectors stays in the browser, where it already lives. See
+       server/folderWatch.js for why there is no file watcher here. */
+    route('/localfs/scan',(req, res) => {
+      let body = '';
+      req.setEncoding('utf8');
+      req.on('data', chunk => body += chunk.toString());
+      req.on('end', () => {
+        res.setHeader('Content-Type', 'application/json');
+        try {
+          const { targetPath } = JSON.parse(body || '{}');
+          if (!targetPath) {
+            res.statusCode = 400;
+            return res.end(JSON.stringify({ success: false, error: 'A folder is required' }));
+          }
+          res.end(JSON.stringify({ success: true, ...scanFolder(targetPath) }));
+        } catch (e) {
+          res.statusCode = e.statusCode || 500;
+          res.end(JSON.stringify({ success: false, error: e.message }));
+        }
+      });
+    });
+
+    route('/localfs/bytes',(req, res) => {
+      let body = '';
+      req.setEncoding('utf8');
+      req.on('data', chunk => body += chunk.toString());
+      req.on('end', () => {
+        res.setHeader('Content-Type', 'application/json');
+        try {
+          const { targetPath } = JSON.parse(body || '{}');
+          if (!targetPath) {
+            res.statusCode = 400;
+            return res.end(JSON.stringify({ success: false, error: 'A file is required' }));
+          }
+          res.end(JSON.stringify({ success: true, ...readFileBytes(targetPath) }));
+        } catch (e) {
+          res.statusCode = e.statusCode || (e.code === 'ENOENT' ? 404 : 500);
           res.end(JSON.stringify({ success: false, error: e.message }));
         }
       });

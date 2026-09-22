@@ -48,6 +48,12 @@ export const ingestDocument = async (file, {
   // which is what a document added in Settings is. See `visibleDocuments`.
   chatId = null,
   folderId = null,
+  /* Where the file came from, when it came from a watched folder: the path,
+     its size and its modification time. It is what a later scan compares
+     against to decide whether this document is still current -- and its
+     absence is what marks a document as somebody's own, which is why a folder
+     sync may never delete a document that has none. See src/watchFolders.js. */
+  source = null,
   onProgress,
   signal,
 } = {}) => {
@@ -88,6 +94,7 @@ export const ingestDocument = async (file, {
     // Absent for a library document, so `visibleDocuments` treats it as shared.
     ...(chatId ? { chatId: String(chatId) } : {}),
     ...(folderId ? { folderId: String(folderId) } : {}),
+    ...(source ? { source } : {}),
     chunks: chunks.map((c, i) => ({ page: c.page, text: c.text, vector: vectors[i] })),
   };
 

@@ -838,6 +838,58 @@ JSON, a model ignoring the schema, a model scoring everything 0 — all give bac
 ranking that went in. A feature that improves the good case and wrecks the bad one is a
 coin toss with extra steps.
 
+### Folders the library keeps up with
+
+Dragging files onto a panel is the right way to add a manual and the wrong way to keep up
+with a folder still being written to — and the documents anybody actually wants to ask
+questions about live in a folder that gains a file most weeks. Re-dragging it is a chore
+nobody remembers, so the library goes quietly stale and the answers get worse without
+saying why.
+
+Name a folder in Settings → Knowledge and it is scanned when the app opens and every ten
+minutes while it is running. New files are indexed, changed files re-indexed, deleted files
+dropped.
+
+**There is no file watcher.** `fs.watch` behaves differently on every platform, misses
+changes over network shares, reports a file before the program writing it has finished, and
+would need a process outliving the browser to be worth anything. What it buys is noticing a
+change in two seconds rather than on the next scan. A scan is a directory listing — a few
+milliseconds on a folder of a few thousand files — and it answers the question actually
+being asked: what is here now, and what was here last time. Nothing is read, let alone
+hashed, until the browser asks for a file it has decided is new.
+
+**Changed means size or modification time, and it has to be both.** Time alone re-embeds a
+folder that was copied, restored from a backup, or touched by a cloud sync client, none of
+which changed a byte. Size alone misses an edit that kept the length, which for a text file
+being corrected is most of them. The time is rounded to the second, because Windows and
+network shares report sub-millisecond drift for a file nothing touched, and re-embedding on
+that is minutes of GPU time spent on no change at all.
+
+**A folder that fails to list is left entirely alone.** An unplugged drive, a share that
+dropped, a path that stopped being right after a machine was renamed — all of them look
+exactly like a folder whose every file was deleted. Acting on that reading destroys a
+library that took an hour of GPU time to build, after which the next question is answered
+from nothing with no indication that anything is missing. So a removal is only ever computed
+from a scan that succeeded, and the failure is reported instead.
+
+**A document you added by hand is never removed by a scan**, however much its name
+resembles a file that has gone: only documents carrying the source stamp of *that* folder
+are the sync's to delete. Removing a folder from the list stops it being scanned and keeps
+what it indexed, because a settings row that silently destroys an hour of GPU time is not
+one anybody should press without being told.
+
+The walk skips `node_modules`, `.git`, `__pycache__`, `dist`, hidden files and anything
+that is not a document — a repository sitting under a watched folder is tens of thousands
+of files nobody wants to ask a question about. It stops at 2,000 files and six levels deep
+and says so rather than handing the browser a hundred thousand names, because the path in
+that box can be `C:\`.
+
+Extraction and embedding are the same routine a dragged file goes through — one pipeline,
+so a document indexed from a folder and one dropped on the panel are the same thing. The
+server does only what a browser cannot: list a directory and hand over bytes. Files are
+done one at a time, on the same GPU that is running the model, with a stop button and the
+current filename shown, and one file that fails costs that file and nothing else.
+
 ### Cross-chat memory
 - Facts worth keeping (`profile` / `preference` / `project` / `fact`) are extracted with a
   JSON-Schema-constrained call and injected into the system prompt of later chats

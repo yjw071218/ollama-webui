@@ -68,6 +68,7 @@ import {
 import { KnowledgePanel } from './KnowledgePanel.jsx';
 import { McpPanel } from './McpPanel.jsx';
 import { CanvasPanel } from './CanvasPanel.jsx';
+import { WatchedFolders } from './WatchedFolders.jsx';
 import { looksLikeDocument } from './canvas.js';
 import { ModelCompare } from './ModelCompare.jsx';
 import { loadLibrary, retrieve, formatContext, visibleDocuments, removeDocument, DEFAULT_EMBED_MODEL, extractDocument, renderPdfPages, embedTexts, normalise } from './rag.js';
@@ -16621,6 +16622,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       description={t('rag.rerankHelp')}
                     />
                   </div>
+
+                  <WatchedFolders
+                    userId={profileScope}
+                    embedModel={embedModel}
+                    onLibraryChange={setKnowledge}
+                  />
 
                   <KnowledgePanel
                     /* The scope, not the bare account id.
