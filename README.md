@@ -1189,6 +1189,52 @@ is prevented from colliding with `read_file`. Settings → Tools lists what came
 > browser — a web page that could choose which programs the server spawns would be remote
 > code execution with a settings icon on it, and this app is routinely opened from a phone.
 
+### Finding out whether a change helped
+
+Everything here that alters an answer — the system prompt, the sampling preset, the model,
+the retrieval switches — is adjusted by trying it once and deciding it felt better. On a
+machine where a reply takes forty seconds that is one sample, read once, against a memory
+of the previous answer that is already fading. It is not a measurement, and it is not even
+a fair impression: the answer that was waited for longer is the one remembered as better.
+
+Settings → Tools holds a set of questions you keep. Run it against whatever you have just
+changed and each answer is marked out of 3.
+
+**Marked against an expectation, or not marked at all.** There is a version of this that
+asks a model "how good is this answer, out of ten" with nothing to compare against. It
+produces a column of 7s and 8s that tracks the answer's length and confidence rather than
+its correctness, and a number that does not move when quality moves is worse than no
+number, because it gets believed. So a question carries what a right answer must contain —
+not the prose, which nobody wants to write, but the facts. Marking against that is a
+comparison with both texts in front of the model, which is the task small models are
+markedly better at, and it is the same observation the answer-checker is built on. A
+question with no expectation is still run and still shown, marked *unscored* rather than
+given a number: some questions are worth watching without being gradeable, and a suite
+that refuses them is a suite people stop adding to.
+
+**0–3, with a rubric.** Ask a small judge for 0–100 and the answers are 70, 85 and 90
+whatever is in front of it. Four levels with a sentence each is the most that comes back
+reliably, and the distinction that earns its place is 1 against 0: an answer that is about
+the right thing and gets it wrong is not the same failure as an answer about something
+else, and the two want different fixes. Every mark carries one sentence of reason, which
+is not decoration — on a suite anybody actually writes, several low scores are a wrong
+*expectation* rather than a wrong answer, and only the reason tells them apart.
+
+**Compared with the previous run, not with a threshold.** "2.4 out of 3" means nothing on
+its own; it is a property of how hard the questions are. What means something is that it
+was 2.1 before the system prompt changed, and which four cases moved. Cases are matched by
+id rather than by position, because a suite gains and loses questions between runs and
+comparing the fourth row against the fourth is how one deleted question makes every later
+case look like it moved.
+
+A marking that fails is not a zero — the difference between "this answer is bad" and "the
+marking did not happen" is the difference between a result and a bug, and flattening the
+two is how a suite starts lying. Runs are serial, stoppable, name the question being worked
+on, and the last ten are kept with every answer in them, so a regression can be read rather
+than guessed at from a number that went down. The suite is plain text — a question, then
+what a right answer must contain on a line starting with `>` — because a format that needs
+a UI to produce is a format nobody fills in.
+
 ### Sampling presets
 - **Precise / Balanced / Creative / Repeatable** as starting points, plus any number of
   named snapshots of the whole generation panel

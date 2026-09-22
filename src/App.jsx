@@ -68,6 +68,7 @@ import {
 import { KnowledgePanel } from './KnowledgePanel.jsx';
 import { McpPanel } from './McpPanel.jsx';
 import { CanvasPanel } from './CanvasPanel.jsx';
+import { EvalPanel } from './EvalPanel.jsx';
 import { WatchedFolders } from './WatchedFolders.jsx';
 import { isAudioFile, formatDuration } from './audio.js';
 import { looksLikeDocument } from './canvas.js';
@@ -16754,6 +16755,20 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     config={mcpConfig}
                     loading={mcpLoading}
                     onRefresh={refreshMcpTools}
+                  />
+
+                  <EvalPanel
+                    userId={profileScope}
+                    model={selectedModel}
+                    systemPrompt={systemPrompt}
+                    /* Named where the text matches one in the library, by
+                       comparing the text rather than by remembering which was
+                       clicked -- the same rule the prompt panel follows, so a
+                       run stops claiming "Terse" the moment the box under it
+                       is edited. */
+                    promptName={promptLibrary.find(p => p.body === systemPrompt)?.name || null}
+                    options={buildOptions()}
+                    onToast={(message, kind) => toast(message, kind, 7000)}
                   />
                 </>
               )}
