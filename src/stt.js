@@ -18,6 +18,10 @@
  * browser's recogniser, which is what it used before and still works.
  */
 
+import {
+  decodeToMono, planChunks, quietestPoint, encodeWav, joinTranscripts, TARGET_RATE,
+} from './audio.js';
+
 /** Where the proxy puts it. */
 const ENDPOINT = '/stt-api/v1/audio/transcriptions';
 const MODELS = '/stt-api/v1/models';
@@ -143,4 +147,61 @@ export const recordAndTranscribe = async ({ language = '', model, onError } = {}
       release();
     },
   };
+};
+
+/**
+ * A recording on the disk, turned into a transcript.
+ *
+ * The microphone path above is the same idea over a clip somebody just spoke.
+ * This is the same idea over an hour of it, and the differences are all
+ * consequences of the length: it has to be cut up (see `src/audio.js`), it has
+ * to report progress that moves, it has to be stoppable, and one piece failing
+ * must not cost the other seventeen.
+ *
+ * Returns the text. `onProgress` is called with `{ done, total, seconds }` as
+ * each piece lands, because the only honest answer to "how long will this
+ * take" is to show it happening.
+ */
+export const transcribeFile = async (file, {
+  language = '',
+  model,
+  onProgress,
+  signal,
+} = {}) => {
+  const { samples, sampleRate, duration } = await decodeToMono(await file.arrayBuffer());
+
+  const chunks = planChunks(samples.length, {
+    sampleRate,
+    quietest: (from, to) => quietestPoint(samples, from, to),
+  });
+
+  const parts = [];
+  const failures = [];
+
+  for (let i = 0; i < chunks.length; i++) {
+    if (signal?.aborted) {
+      const err = new Error('cancelled');
+      err.code = 'cancelled';
+      throw err;
+    }
+    onProgress?.({ done: i, total: chunks.length, seconds: duration });
+
+    const { start, end } = chunks[i];
+    const wav = encodeWav(samples.subarray(start, end), sampleRate || TARGET_RATE);
+    try {
+      parts.push(await transcribe(new Blob([wav], { type: 'audio/wav' }), { language, model, signal }));
+    } catch (e) {
+      if (e.name === 'AbortError') throw e;
+      /* One piece, not the recording. A transcript with a gap in it and a note
+         saying where is far more useful than no transcript -- and the note has
+         to be in the text rather than only in a toast, because the text is
+         what the model reads and "there is a minute missing here" changes what
+         it should conclude from the silence. */
+      failures.push(i + 1);
+      parts.push(`[... this part of the recording could not be transcribed: ${e.message} ...]`);
+    }
+  }
+
+  onProgress?.({ done: chunks.length, total: chunks.length, seconds: duration });
+  return { text: joinTranscripts(parts), duration, chunks: chunks.length, failures };
 };

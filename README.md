@@ -583,6 +583,50 @@ sounds like a detail and was most of the problem on a phone, where a flick start
   half second
 - If GPT-SoVITS is not listening, the app asks the dev server to start it and says so
 
+### A recording, read
+
+Speech recognition has been here a while and was wired to exactly one thing: the
+microphone. So the app could hear you *now* and could do nothing at all with the hour of
+audio already on the disk — the lecture, the meeting, the interview, the voice message
+somebody sent instead of typing. Those are the recordings anybody actually wants
+summarised, and they were the one kind that had to go somewhere else first.
+
+Attach an audio file — or a video, because a screen recording of a meeting is the
+commonest way a meeting arrives and the soundtrack is the whole of what is wanted from it
+— and it is transcribed by the same local Whisper the microphone uses, then attached as
+text. Long recordings are indexed rather than truncated, like any long attachment, which
+is exactly the case where retrieving the relevant two minutes beats sending all ninety.
+
+**The file is not posted as it is.** Hand a transcription server a ninety-minute meeting
+and one of three things happens: the upload is refused for size, the request times out, or
+it works and returns nothing for forty minutes behind a spinner that cannot be told apart
+from a crash. So the audio is decoded by the browser's own decoder — which is why mp3,
+m4a, FLAC and the audio track of an mp4 all work without any of those formats appearing in
+the bundle — downmixed to mono at 16 kHz, which is what Whisper resamples to anyway, and
+cut into pieces of about five minutes. That buys a count that moves, a stop button that
+works, and a failure that costs one piece rather than the recording. A piece that fails
+leaves a marked gap *in the text*, not only in a toast, because the text is what the model
+reads and "a minute is missing here" changes what it should conclude from the silence.
+
+**The cut goes where nobody is speaking.** Cutting at exactly five minutes lands in the
+middle of a word about as often as not, and a word cut in half is transcribed as two wrong
+words — one ending a piece and one starting the next, with nothing in the text to say
+either is an artefact. So the boundary is allowed to move half a second either way, to the
+quietest point measured by short-window energy. (By energy, not by the smallest sample: a
+waveform crosses zero hundreds of times a second inside a shouted word, so the smallest
+sample carries no information about whether anybody is speaking.) Overlapping the pieces
+is the other answer and it is worse — the overlap is transcribed twice, imperfectly both
+times, and duplicated sentences in a transcript look like something that was actually
+said.
+
+The transcript is attached under a heading naming the recording and its length, and saying
+that it came from speech recognition, that names are often mis-heard and that speakers are
+not identified. Without that frame a model handed forty minutes of speech treats the
+disfluencies and the mis-hearings as deliberate and answers about them.
+
+None of this is required: with no local transcriber running, an audio file is refused the
+way it always was.
+
 ### Sessions
 - **The model names the chat.** Once the first answer is complete it is asked, in the
   interface language, for a four-or-five-word title, and the first message's opening

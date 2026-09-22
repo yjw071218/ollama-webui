@@ -69,6 +69,7 @@ import { KnowledgePanel } from './KnowledgePanel.jsx';
 import { McpPanel } from './McpPanel.jsx';
 import { CanvasPanel } from './CanvasPanel.jsx';
 import { WatchedFolders } from './WatchedFolders.jsx';
+import { isAudioFile, formatDuration } from './audio.js';
 import { looksLikeDocument } from './canvas.js';
 import { ModelCompare } from './ModelCompare.jsx';
 import { loadLibrary, retrieve, formatContext, visibleDocuments, removeDocument, DEFAULT_EMBED_MODEL, extractDocument, renderPdfPages, embedTexts, normalise } from './rag.js';
@@ -115,7 +116,7 @@ import { promptsFrom, stepHistory, wantsHistory, NOT_BROWSING } from './promptHi
 import { canShare, shareText, shareBody, sharePicture, whyNoSheet } from './share.js';
 import { DRAWING_TAGS, schemasFor, toolCallsIn, nativeCallToTag, tagAttrs, TAG_ATTRS, canonicalToolTags, MCP_TAG } from './tools.js';
 import { parseAssistantMessage } from './messageParts.js';
-import { localSttAvailable, recordAndTranscribe, whisperLanguage } from './stt.js';
+import { localSttAvailable, recordAndTranscribe, whisperLanguage, transcribeFile } from './stt.js';
 import { wantsNavigation, NAV_KEYS, step } from './messageNav.js';
 import {
   loadQueue, enqueue, removeEntry, noteAttempt, nextDue, stalled,
@@ -1727,6 +1728,10 @@ function App() {
     const id = `${Date.now()}-${Math.random()}`;
     setToasts(prev => [...prev, { id, message, type, action }]);
     setTimeout(() => setToasts(prev => prev.filter(t => t.id !== id)), ms);
+    /* Returned so a long-running job can take its own notice down when it
+       finishes, rather than leaving "transcribing…" on screen beside
+       "transcribed". Every existing caller ignores it. */
+    return id;
   }, []);
   const dismissToast = useCallback((id) => setToasts(prev => prev.filter(t => t.id !== id)), []);
 
@@ -7634,6 +7639,81 @@ function App() {
         continue;
       }
 
+      /* A recording is read by listening to it.
+       *
+       * Speech recognition has been here for a while and was wired to exactly
+       * one thing: the microphone. So the app could hear you *now* and could
+       * do nothing at all with the hour of audio already on the disk -- the
+       * lecture, the meeting, the voice message somebody sent instead of
+       * typing -- which is the kind anybody actually wants summarised.
+       *
+       * Everything needed was installed. This is the branch that was missing.
+       * It comes before the extractor because every one of these files is
+       * binary, so the generic path's honest answer to all of them is "this
+       * is not text and nothing here can turn it into any" -- which stopped
+       * being true when a Whisper appeared on port 8000. Where there is no
+       * local transcriber the branch is skipped and that answer stands. */
+      if (isAudioFile(file) && await localSttAvailable()) {
+        const controller = new AbortController();
+        // Long enough to be worth cancelling: a ninety-minute meeting is
+        // twenty minutes of transcription on a small model.
+        const cancelId = toast(t('stt.transcribing', { name: file.name }), 'info', 600000, {
+          label: t('stt.cancel'), onClick: () => controller.abort(),
+        });
+        try {
+          const { text: heard, duration, failures } = await transcribeFile(file, {
+            language: whisperLanguage(lang),
+            model: sttModel || undefined,
+            signal: controller.signal,
+            onProgress: ({ done, total }) => {
+              addLog(`[stt] ${file.name}: ${done}/${total}`, 'info');
+            },
+          });
+          dismissToast?.(cancelId);
+
+          if (!heard.trim()) { toast(t('stt.nothingHeard', { name: file.name }), 'error', 8000); continue; }
+
+          /* Attached as the transcript of a named recording rather than as
+             bare text. A model handed forty minutes of speech with no frame
+             around it treats the disfluencies and the mis-hearings as
+             deliberate, and answers about them. */
+          const header = `Transcript of the recording "${file.name}" (${formatDuration(duration)}), `
+            + 'produced by speech recognition. Expect mis-heard words, especially names, '
+            + 'and speakers are not identified.';
+          const transcript = `${header}\n\n${heard}`;
+
+          toast(
+            failures.length
+              ? t('stt.transcribedPartly', { name: file.name, count: failures.length })
+              : t('stt.transcribed', { name: file.name, duration: formatDuration(duration) }),
+            failures.length ? 'error' : 'success', 8000,
+          );
+
+          /* From here it is a text attachment like any other, which means a
+             long one is indexed rather than truncated -- see below. A
+             ninety-minute meeting is well past that line, and it is exactly
+             the case where retrieving the two relevant minutes beats sending
+             all ninety. */
+          /* Named for the recording rather than after it: `meeting.m4a.txt`
+             is what the chip says and what the knowledge library files it
+             under, so a question six weeks later about "the meeting recording"
+             finds a document whose name still says so. */
+          await attachExtractedText(
+            new File([transcript], `${file.name}.txt`, { type: 'text/plain' }),
+            transcript,
+          );
+          continue;
+        } catch (err) {
+          dismissToast?.(cancelId);
+          if (err.name === 'AbortError' || err.code === 'cancelled') {
+            toast(t('stt.cancelled', { name: file.name }), 'info', 4000);
+          } else {
+            toast(t('stt.failed', { name: file.name, error: err.message }), 'error', 9000);
+          }
+          continue;
+        }
+      }
+
       /* Every file is attempted.
        *
        * There used to be a list of extensions here and it was wrong in both
@@ -7717,6 +7797,21 @@ function App() {
        * actually needs. It was one click away in Settings and the composer
        * never used it. Now the composer does it for you, because "this file is
        * too big" is not a problem anybody wants handed back to them. */
+      await attachExtractedText(file, text);
+    }
+  };
+
+  /* Text pulled out of a file, attached -- indexed if it is long.
+   *
+   * Lifted out of the loop above because there are now two ways to arrive
+   * here. A document gives up its text through the extractor; a recording
+   * gives up its text through speech recognition, and from that point the two
+   * are the same thing and must behave the same way. Inlined, the second would
+   * have been a copy of this that quietly diverged -- and the divergence that
+   * mattered would be the indexing, since a transcript of a long meeting is
+   * exactly the case where retrieving the relevant two minutes beats sending
+   * all ninety. */
+  const attachExtractedText = async (file, text) => {
       if (text.length > MAX_ATTACHMENT_CHARS) {
         const bigFile = file;
         setAttachments(prev => [...prev, {
@@ -7768,14 +7863,13 @@ function App() {
             })()]));
           toast(t('attach.indexFailed', { name: bigFile.name, kept: MAX_ATTACHMENT_CHARS.toLocaleString() }), 'info', 10000);
         }
-        continue;
+        return;
       }
 
       const attachment = { name: file.name, type: 'text', data: text, truncated: false };
       // The document itself, so opening the attachment shows the document.
       keepOriginal(attachment, file);
       setAttachments(prev => [...prev, attachment]);
-    }
   };
 
   /* The original bytes of an attached document, for as long as this tab is
