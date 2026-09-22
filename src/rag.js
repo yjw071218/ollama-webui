@@ -479,23 +479,60 @@ export const visibleDocuments = (docs, { chatId = null, folderId = null } = {}) 
  * message, not rebuilding after the user switches chat. Holding several would
  * mean holding every chunk of every scope in memory twice for the sake of a
  * few milliseconds. */
-let indexCache = null;
+let searchCache = null;
 
-/* What the index was built from, cheaply enough to compute per message.
+/* What the cache was built from, cheaply enough to compute per message.
  *
  * Document ids and chunk counts, not the text. The text cannot change without
  * the chunk count changing *or* the document being re-added under a new id —
  * both of which this catches — and hashing a few megabytes of prose on every
  * turn to be sure about a case that does not arise is not a trade worth
  * making. */
-const signatureOf = (chunks, docs) => `${chunks.length}:${docs.map(d => `${d.id}/${d.chunks.length}`).join(',')}`;
+const signatureOf = (docs) => docs.map(d => `${d.id}/${d.chunks.length}`).join(',');
 
-const lexicalIndexFor = (chunks, docs) => {
-  const signature = signatureOf(chunks, docs);
-  if (indexCache?.signature === signature) return indexCache.index;
-  const index = buildLexicalIndex(chunks);
-  indexCache = { signature, index };
-  return index;
+/**
+ * The passages to search, and the term statistics over them.
+ *
+ * **The candidates are cached with the index, and that is not an optimisation
+ * — it is the correctness condition.** The fusion recognises a passage that
+ * both retrievers found by object identity, which is the only thing that can
+ * identify it: two chunks of one document can hold the same text, and a
+ * position is not stable across a library that has changed.
+ *
+ * Caching the index alone was therefore a bug, and a quiet one. The index
+ * holds references to the candidate objects it was built from; rebuilding the
+ * candidate list on every call while reusing that index left the lexical
+ * results pointing at *last call's* objects and the dense results at this
+ * call's. Nothing merged, so every passage both retrievers agreed on came back
+ * twice — burning two of five slots on one passage and sending the model the
+ * same text twice. It is invisible on the first question asked of a library,
+ * because the cache is cold and both halves then share one set of objects; it
+ * appears on the second and stays until the library changes.
+ *
+ * One entry, not several: retrieval runs against the same library over and
+ * over within a conversation, and the case worth avoiding is rebuilding on
+ * every message rather than rebuilding after switching chat.
+ */
+const searchSetFor = (docs) => {
+  const signature = signatureOf(docs);
+  if (searchCache?.signature === signature) return searchCache;
+
+  const candidates = [];
+  for (const doc of docs) {
+    for (const chunk of doc.chunks) {
+      candidates.push({
+        docId: doc.id,
+        docName: doc.name,
+        page: chunk.page,
+        text: chunk.text,
+        vector: chunk.vector,
+      });
+    }
+  }
+  // Built on first use rather than here: a library searched with the lexical
+  // half switched off should not pay for term statistics nothing reads.
+  searchCache = { signature, candidates, index: null };
+  return searchCache;
 };
 
 export const retrieve = async (query, docs, {
@@ -516,21 +553,12 @@ export const retrieve = async (query, docs, {
     .filter(d => Array.isArray(d.chunks) && d.chunks.length);
   if (active.length === 0 || !query.trim()) return [];
 
-  /* One flat list of candidates, built once and referred to by identity from
-     here on. Both rankings hand back these same objects, which is what lets
-     the fusion recognise a passage that both retrievers found. */
-  const candidates = [];
-  for (const doc of active) {
-    for (const chunk of doc.chunks) {
-      candidates.push({
-        docId: doc.id,
-        docName: doc.name,
-        page: chunk.page,
-        text: chunk.text,
-        vector: chunk.vector,
-      });
-    }
-  }
+  /* One flat list of candidates, referred to by identity from here on. Both
+     rankings hand back these same objects, which is what lets the fusion
+     recognise a passage that both retrievers found -- see `searchSetFor` for
+     why they are cached alongside the index rather than rebuilt here. */
+  const searchSet = searchSetFor(active);
+  const { candidates } = searchSet;
 
   const [queryVector] = await embedTexts([query], model, signal);
   const normalised = normalise(queryVector);
@@ -557,7 +585,8 @@ export const retrieve = async (query, docs, {
    * side has its own floor, and it is inherent rather than configured: BM25
    * returns nothing for a passage that contains none of the query's terms, so
    * a hit here always means a real token matched. */
-  const index = lexicalIndexFor(candidates, active);
+  if (!searchSet.index) searchSet.index = buildLexicalIndex(candidates);
+  const index = searchSet.index;
   const lexical = lexicalSearch(index, query, { limit: Math.max(topK * 4, 20) });
 
   /* More than topK goes into the fusion, because a passage's whole value here

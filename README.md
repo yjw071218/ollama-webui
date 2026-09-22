@@ -17,8 +17,29 @@ npm run lint       # oxlint
 npm test           # every offline test, ending with a smoke test that starts
                    # the built app in a headless browser
 npm run test:smoke # just that last one
-npm run test:live  # artifact pipeline against a live Ollama model
 ```
+
+**The live checks** need something running, and each says so and exits cleanly when
+it is not there, so none of them can fail for being on the wrong machine:
+
+| Command | Needs | Checks |
+| --- | --- | --- |
+| `npm run test:live` | Ollama | the artifact pipeline end to end |
+| `npm run test:rag:live` | Ollama | that each question retrieves the passage that answers it |
+| `npm run test:rerank:live` | Ollama | that BM25 finds what the embedder misses, and that the judge drops passages that answer nothing |
+| `npm run test:evals:live` | Ollama | that the marking pass can tell a fluent, confident, false answer from a correct four-word one |
+| `npm run test:stt:live` | a Whisper on `:8000` | that the WAV this encodes is one a transcriber accepts, and that a recording survives being cut up |
+| `npm run test:mcp` | nothing | the MCP client, against a real server spawned by the test |
+
+`test:stt:live` deliberately asserts nothing about the *words* that come back. Handed
+one byte-identical clip five times, `faster-whisper-small` on CPU returned the right
+answer twice and three different wrong answers otherwise — with the language hint and
+without it. The recogniser is not deterministic, and an assertion on its output would
+fail on a fifth of runs for a reason that has nothing to do with this repository. What
+it does assert is everything that is this code's to get right and *is* deterministic:
+that the encoder round-trips to within one 16-bit step, that the pieces tile the
+recording exactly, that every cut lands in a silence (measured: 0.00 against 0.14 at
+the same boundaries chosen blind), and that a silent piece leaves no gap in the join.
 
 **`npm test` starts the app.** That last step exists because three crashes shipped without
 it, all the same shape — a `const` read before the line declaring it, from a hook's

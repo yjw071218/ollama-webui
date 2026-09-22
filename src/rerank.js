@@ -47,9 +47,19 @@
  * two, by who can do something about them.
  *
  * What this function can answer for, it answers for: an id it never offered, a
- * score outside 0–3, a reply that scored nothing at all, a model that scored
- * every passage 0. Each of those is a judgement that did not happen, and each
- * gives back the ranking that came in.
+ * score outside 0–3, a reply that scored nothing at all. Each of those is a
+ * judgement that did not happen, and each gives back the ranking that came in.
+ *
+ * What is *not* in that list, and was: a model that scored every passage 0.
+ * That guard looked like the same kind of caution and was the opposite of it —
+ * it turned the one verdict this whole pass exists to produce into "keep
+ * everything". Asked about a dishwasher warranty over a library of graphics
+ * card specifications, the judge correctly returned four zeroes and the guard
+ * put all four passages back in front of the model. The guard above it already
+ * covers the case it was reaching for: a reply with no usable scores at all
+ * returns the input, and a passage the model never mentioned keeps its place,
+ * so nothing can be left empty *except* by a complete verdict of "none of
+ * these answer the question".
  *
  * What it cannot — the request refused, the connection dropped, a model
  * ignoring `format` and replying in prose — it throws, because the caller is
@@ -163,17 +173,21 @@ export const rerankHits = async (query, hits, {
     scores.set(id, Math.max(0, Math.min(3, Math.round(raw))));
   }
 
-  /* A reply that scored nothing, or scored everything 0, is a failed judgement
-     rather than a verdict of "your library is irrelevant". Both give back what
-     came in: dropping every passage on the strength of a malformed reply turns
-     a working retrieval into none at all. */
+  /* A reply that scored nothing at all is a failed judgement rather than a
+     verdict, and gives back what came in: dropping every passage on the
+     strength of a malformed reply turns a working retrieval into none at all. */
   if (scores.size === 0) return hits;
+
   const kept = hits
     .map((hit, i) => ({ hit, i, score: scores.has(i) ? scores.get(i) : null }))
     /* A passage the model did not mention keeps its place rather than being
-       dropped — silence is not a zero. */
+       dropped — silence is not a zero. Which is also what makes an empty
+       result trustworthy: it can only happen when every passage was scored and
+       every score was below the floor, and that is the verdict "none of these
+       answer the question" rather than a reply that went wrong. It is returned
+       as such. The caller shows "nothing relevant enough to include", which is
+       a better answer than four passages about something else. */
     .filter(row => row.score === null || row.score >= minScore);
-  if (kept.length === 0) return hits;
 
   return kept
     .sort((a, b) => {

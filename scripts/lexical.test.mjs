@@ -178,11 +178,35 @@ const silent = await rerankHits('q', HITS, {
 check('a passage the model did not mention keeps its place', silent.length === 3);
 check('but the one it praised still moves to the front', silent[0].text === 'the answer is 42');
 
+// This asserted the opposite until a live run caught it. Asked about a
+// dishwasher warranty over a library of graphics card specifications, the judge
+// correctly returned a zero for every passage -- and the guard that was here
+// read that as a model having a bad day and put all four passages back. It
+// turned the one verdict this pass exists to produce into "keep everything".
+//
+// It is safe to trust because of the rule above it: a passage the model did not
+// mention keeps its place, so an empty result can only arise when every passage
+// was scored and every score was below the floor.
 const allZero = await rerankHits('q', HITS, {
   model: 'test', fetchImpl: judge([{ id: 0, score: 0 }, { id: 1, score: 0 }, { id: 2, score: 0 }]),
 });
-check('a verdict of nothing-is-relevant is a failed judgement, not an empty result',
-  allZero.length === 3);
+check('a complete verdict of nothing-is-relevant returns nothing',
+  allZero.length === 0, JSON.stringify(allZero.map(h => h.text)));
+
+// But an incomplete one does not: two zeroes and a passage it never mentioned
+// is not a verdict about that passage.
+const partialZero = await rerankHits('q', HITS, {
+  model: 'test', fetchImpl: judge([{ id: 0, score: 0 }, { id: 1, score: 0 }]),
+});
+check('an unmentioned passage survives a partial sweep of zeroes',
+  partialZero.length === 1 && partialZero[0].text === HITS[2].text,
+  JSON.stringify(partialZero.map(h => h.text)));
+
+// And a reply with no usable scores at all is still a failed judgement.
+const noScores = await rerankHits('q', HITS, {
+  model: 'test', fetchImpl: judge([{ id: 99, score: 0 }]),
+});
+check('a reply scoring nothing it was given keeps the ranking', noScores.length === 3);
 
 // A transport-level failure is thrown rather than swallowed, because only the
 // caller knows whether it is worth a line in the log. `safeRerank` in rag.js is

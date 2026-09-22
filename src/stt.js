@@ -165,6 +165,13 @@ export const recordAndTranscribe = async ({ language = '', model, onError } = {}
 export const transcribeFile = async (file, {
   language = '',
   model,
+  /* How long a piece may be. The default is in src/audio.js and is about the
+     request rather than about accuracy -- Whisper's own window is 30 seconds
+     and it stitches internally. It is an argument because a transcription
+     server behind a proxy with a small upload limit needs a smaller number,
+     and because a test cannot wait five minutes per piece to find out whether
+     the boundaries are right. */
+  chunkSeconds,
   onProgress,
   signal,
 } = {}) => {
@@ -172,6 +179,7 @@ export const transcribeFile = async (file, {
 
   const chunks = planChunks(samples.length, {
     sampleRate,
+    ...(chunkSeconds ? { chunkSeconds } : {}),
     quietest: (from, to) => quietestPoint(samples, from, to),
   });
 

@@ -161,6 +161,43 @@ check('a passage both retrievers found leads', lexicalOnly[0].text === 'about do
 check('no chunk carries its vector into the prompt',
   lexicalOnly.every(h => h.vector === undefined));
 
+// ------------------------------------------------ the same library, twice
+//
+// The bug this guards, which every check above missed because every one of
+// them was the first question asked of its library.
+//
+// The fusion recognises a passage that both retrievers found by object
+// identity. The BM25 index holds references to the candidate objects it was
+// built over, and the index is cached between calls -- so rebuilding the
+// candidate list on each call left the lexical results pointing at the
+// *previous* call's objects and the dense results at this call's. Nothing
+// merged. Every passage both retrievers agreed on came back twice, burning two
+// of five slots on one passage and sending the model the same text twice.
+//
+// Invisible on the first call, because a cold cache means both halves share
+// one set of objects. It appeared on the second and stayed until the library
+// changed, which is to say: for the whole of a conversation.
+const first = await retrieve('cats', DOCS, { topK: 5, minScore: 0.3 });
+const second = await retrieve('cats', DOCS, { topK: 5, minScore: 0.3 });
+check('asking twice returns the same number of passages',
+  first.length === second.length, `${first.length} then ${second.length}`);
+check('and no passage appears twice',
+  new Set(second.map(h => h.text)).size === second.length,
+  JSON.stringify(second.map(h => h.text)));
+check('the second answer still merges both retrievers',
+  second[0].found.length === first[0].found.length, JSON.stringify(second[0].found));
+
+// A library that has changed must not be answered from the old one.
+const grown = [...DOCS, {
+  id: 'c', name: 'extra.md', enabled: true,
+  chunks: [{ page: 1, text: 'cats again, elsewhere', vector: normalise([1, 0, 0]) }],
+}];
+const afterGrowth = await retrieve('cats', grown, { topK: 5, minScore: 0.3 });
+check('a document added since the last question is searched',
+  afterGrowth.some(h => h.docId === 'c'), JSON.stringify(afterGrowth.map(h => h.docName)));
+check('and the fresh answer has no duplicates either',
+  new Set(afterGrowth.map(h => h.text)).size === afterGrowth.length);
+
 // ---------------------------------------------------------------- reranking
 //
 // The second pass is checked in detail in scripts/lexical.test.mjs. What is
