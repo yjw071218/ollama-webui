@@ -15,6 +15,10 @@
  *     by that post's tags. It is the fastest way to describe a picture you have
  *     already found, and the tags are already written, in the vocabulary the
  *     model was trained on.
+ *   * **Pasting a picture.** The same idea for a picture that is not on a
+ *     booru: the tagger reads it and a vision model says what tags cannot, and
+ *     both land in the box. See `src/describeImage.js`. A picture and a link
+ *     are the same gesture — "describe this" — so they are the same paste.
  *
  * ## Why the caret arithmetic is somewhere else
  *
@@ -26,7 +30,8 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { Link2, Loader2 } from 'lucide-react';
-import { tokenAt, replaceToken, looksLikeBooruLink, onWeightKey } from './promptTags.js';
+import { tokenAt, replaceToken, looksLikeBooruLink, booruLinkIn, onWeightKey } from './promptTags.js';
+import { imageOnClipboard, isDescribable } from './describeImage.js';
 
 /* Long enough that a fast typist does not fire a request per keystroke, short
    enough that the list is there by the time they stop to look at it. */
@@ -67,6 +72,10 @@ export const TagPrompt = ({
      them would be in the way. */
   complete = false,
   onBooru,
+  /* Given a pasted or dropped picture. Absent on the boxes that hold settings
+     rather than a subject, so pasting a picture into the artist row does
+     nothing rather than something surprising. */
+  onImage,
   onSubmit,
   disabled = false,
 }) => {
@@ -81,6 +90,11 @@ export const TagPrompt = ({
      tags it just wrote, and without this the reader is handed a dropdown for a
      word they did not type and are not editing. */
   const quiet = useRef(false);
+  /* A paste fires `paste` and then `change`, and on a phone sometimes only
+     the second. Both look at the same link, so the first one to claim it
+     holds this until the post has been fetched -- otherwise the tags are
+     written in twice. */
+  const busy = useRef(false);
   /* Whether the person is typing in this box right now.
 
      The list is for a tag being typed and for nothing else. It used to follow
@@ -152,21 +166,59 @@ export const TagPrompt = ({
     });
   }, [value, caret, onChange]);
 
+  /* Fetching the post, wherever the link was noticed.
+   *
+   * `replace` is the difference between adding a reference and swapping one.
+   * The box having been selected whole is the reader saying "this, instead" --
+   * and so is a link that arrives as the entire new value, which is what a
+   * paste over a full selection produces on the platforms that give no usable
+   * paste event. `rest` is whatever prompt the link was appended to, which
+   * survives. */
+  const fetchBooru = useCallback(async (url, { replace, rest }) => {
+    if (!onBooru || busy.current) return;
+    busy.current = true;
+    setLinkState('loading');
+    quiet.current = true;
+    try {
+      const result = await onBooru(url, { replace, rest });
+      setLinkState(result?.success ? null : { error: result?.error || 'failed' });
+    } catch (e) {
+      setLinkState({ error: String(e.message || e) });
+    } finally {
+      busy.current = false;
+    }
+  }, [onBooru]);
+
   const onPaste = useCallback(async (event) => {
+    /* A picture first, because a clipboard carrying one usually carries a file
+       name or an empty string beside it -- so reading the text first would
+       take the ordinary-paste branch and drop the picture on the floor. */
+    const picture = onImage ? imageOnClipboard(event.clipboardData) : null;
+    if (picture) {
+      event.preventDefault();
+      const el = event.currentTarget;
+      /* The same question a pasted link is asked, and the same answer: the box
+         selected whole is the one gesture that unambiguously means "this,
+         instead of that". An empty box says it quietly. */
+      const all = el.selectionStart === 0 && el.selectionEnd >= String(value || '').length;
+      onImage(picture, { replace: all || !String(value || '').trim() });
+      return;
+    }
+
     if (!onBooru) return;
     const text = event.clipboardData?.getData('text') || '';
     if (!looksLikeBooruLink(text)) return;      // an ordinary paste, left alone
 
     event.preventDefault();
-    setLinkState('loading');
-    quiet.current = true;
-    try {
-      const result = await onBooru(text.trim());
-      setLinkState(result?.success ? null : { error: result?.error || 'failed' });
-    } catch (e) {
-      setLinkState({ error: String(e.message || e) });
-    }
-  }, [onBooru]);
+    /* Whether this paste is meant to replace the prompt or to add to it, asked
+       of the selection it is landing on. Everything selected -- Ctrl+A, or the
+       phone's "Select all" -- is the one gesture that unambiguously means
+       "this, instead of that". An empty box is the same thing said quietly. */
+    const el = event.currentTarget;
+    const all = el.selectionStart === 0 && el.selectionEnd >= String(value || '').length;
+    const rest = all ? '' : String(value || '');
+    fetchBooru(text.trim(), { replace: all || !String(value || '').trim(), rest });
+  }, [onBooru, onImage, value, fetchBooru]);
 
   const onKeyDown = (event) => {
     // Ctrl+↑/↓ weighs the tag under the caret — before the list's own arrows.
@@ -222,14 +274,41 @@ export const TagPrompt = ({
         autoComplete="off"
         writingsuggestions="false"
         onChange={(e) => {
+          const next = e.target.value;
+          /* A link that got in without a paste event -- see `booruLinkIn`.
+             Checked here rather than only in `onPaste` because on a phone this
+             is usually the only place it can be caught. The box is left holding
+             whatever was around the link while the post is fetched; `onBooru`
+             writes the tags when they arrive. */
+          const link = onBooru && !busy.current ? booruLinkIn(next) : null;
+          if (link) {
+            quiet.current = true;
+            onChange(link.rest);
+            fetchBooru(link.url, { replace: link.replaced, rest: link.rest });
+            return;
+          }
           quiet.current = false;
           armed.current = true;
-          onChange(e.target.value);
+          onChange(next);
           setCaret(e.target.selectionStart);
         }}
         onKeyUp={track}
         onClick={track}
         onPaste={onPaste}
+        /* A picture dropped on the box itself. Handled here as well as on the
+           form around it, because a textarea's own default for a dropped file
+           is to insert its *name* as text -- so without this, dropping a
+           picture on the prompt writes `IMG_4831.png` into it. Anything else
+           is left to bubble, so dropping a settings PNG on the box still
+           reaches the form's importer. */
+        onDragOver={(e) => { if (onImage && [...(e.dataTransfer?.items || [])].some(i => i.kind === 'file')) e.preventDefault(); }}
+        onDrop={(e) => {
+          const picture = onImage && [...(e.dataTransfer?.files || [])].find(isDescribable);
+          if (!picture) return;
+          e.preventDefault();
+          e.stopPropagation();
+          onImage(picture, { replace: !String(value || '').trim() });
+        }}
         onKeyDown={onKeyDown}
         // Not on blur: the mousedown that picks a suggestion blurs the box
         // first, so closing here would close the list before the click lands.

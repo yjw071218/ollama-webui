@@ -29,6 +29,7 @@ it is not there, so none of them can fail for being on the wrong machine:
 | `npm run test:rerank:live` | Ollama | that BM25 finds what the embedder misses, and that the judge drops passages that answer nothing |
 | `npm run test:evals:live` | Ollama | that the marking pass can tell a fluent, confident, false answer from a correct four-word one |
 | `npm run test:stt:live` | a Whisper on `:8000` | that the WAV this encodes is one a transcriber accepts, and that a recording survives being cut up |
+| `npm run test:describe:live` | ComfyUI + a model that sees | that an uploaded picture is somewhere the tagger accepts, and that the sentence comes back usable |
 | `npm run test:mcp` | nothing | the MCP client, against a real server spawned by the test |
 
 `test:stt:live` deliberately asserts nothing about the *words* that come back. Handed
@@ -759,6 +760,63 @@ way it always was.
   again
 - An unknown, revoked and expired link all get the same answer, because telling them
   apart tells a stranger with a guessed token that the guess landed on something real
+### A picture, read back as a prompt
+
+"Make me one like this" is the commonest thing anybody wants from a reference, and the
+Studio had no way to hear it. Every other use of a reference hands ComfyUI a file for a
+workflow to *redraw* — img2img, the region edit, a video's first frame — and none of them
+answer "what words would have produced this", which is what you need in order to make a
+*different* picture in the same vein: the same outfit on another character, the same light
+in another place.
+
+Paste a picture into the prompt box, drop one on it, or press **From a picture**. What
+lands in the box is tags followed by a sentence.
+
+**Two models, because neither knows the answer alone.** WD14 was trained on exactly the
+danbooru vocabulary these prompts are written in, so `thighhighs` from the tagger is the
+word the picture model learned that garment under; a language model looking at the same
+picture writes "long socks", which is not a tag and does not draw one. For the tags the
+tagger is not merely better, it is the only one of the two speaking the right language.
+
+It is also the only one that cannot say anything else. A tag list is a set of nouns with
+no relations in it — `1girl, sword, rain, night` does not say she is *holding* the sword,
+or that the rain is lit from behind her. That is the vision model's half, and it is the
+same division [`server/animaPrompt.js`](server/animaPrompt.js) already makes for Anima:
+tags first for what is in the picture, then a sentence for what tags cannot say.
+
+So the sentence is written from the **picture**, not from the tags. Asking a model to turn
+`1girl, sword, rain` into prose produces "a girl with a sword in the rain", which is the
+tag list with joining words in it and adds nothing at all.
+
+**The two halves run one after the other, not together.** The tagger is a ComfyUI job and
+the description is an Ollama one, and this machine takes the language model off the card
+before ComfyUI is given anything (see [`server/vram.js`](server/vram.js)) — asking for both
+at once would be the two of them swapping the card underneath each other. The tagger goes
+first because it is the half worth having: with no model here that can see, the tags still
+land, and the button says so before it is pressed.
+
+**What is dropped.** WD14's rating tags (`general`, `sensitive`, `questionable`,
+`explicit`) are the safeguard's vocabulary, not prompt words — `explicit` in a prompt asks
+for nothing, it just sits there. The file-property tags (`highres`, `official art`,
+`artist name`) are about the *file* rather than its subject, and this app already keeps
+those in the quality rows above and below the subject where they were set once and left
+alone.
+
+**And a tag already in the box is not added again**, which matters more than it sounds:
+the commonest use of this is on a picture made from the prompt that is still in the box,
+and without it `1girl, solo, long hair` becomes `1girl, solo, long hair, 1girl, solo, long
+hair` — every one of those doubling its weight.
+
+Appending is the default, for the same reason a pasted booru link appends: describing a
+second reference should add to what is there, and somebody who did not want that cannot
+un-destroy the prompt they had written. Selecting the whole box first replaces instead,
+which is the one gesture that means "this, instead of that" in every text field there has
+ever been.
+
+A PNG this app wrote still loads its own settings when dropped, as it always has — that is
+a different request and the file says which it is, because trying the import is how you
+find out whether there is a generation block in it.
+
 ### What is in the picture, not what was asked for
 A finished still had two witnesses and both of them can miss. The prompt knows only the
 *request* — "1girl, beach, sitting" is unremarkable and the picture is whatever the model

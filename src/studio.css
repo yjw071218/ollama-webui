@@ -140,7 +140,7 @@
   font-size: var(--step-0);
   font-weight: 500;
   cursor: pointer;
-  transition: background 120ms ease, color 120ms ease;
+  transition: background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
 }
 .studio-model span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .studio-model svg { flex: none; opacity: 0.8; }
@@ -177,7 +177,7 @@
   border: 1px solid var(--hairline-strong);
   border-radius: 12px;
   background: var(--surface-sunken);
-  transition: border-color 120ms ease;
+  transition: border-color var(--dur-fast) var(--ease-out);
 }
 .studio-sheet:focus-within { border-color: rgba(var(--primary-rgb), 0.5); }
 
@@ -200,7 +200,7 @@
   font-size: var(--label);
   font-weight: 500;
   color: var(--text-muted);
-  transition: color 120ms ease;
+  transition: color var(--dur-fast) var(--ease-out);
 }
 .studio-sheet-label em { font-style: normal; font-weight: 400; opacity: 0.75; }
 .studio-prompt-part:focus-within .studio-sheet-label { color: var(--text-primary); }
@@ -285,8 +285,55 @@
 }
 .studio-group-summary span { overflow: hidden; text-overflow: ellipsis; }
 .studio-group[open] .studio-group-summary { visibility: hidden; }
-.studio-group-chevron { color: var(--text-muted); transition: transform 150ms ease; }
+.studio-group-chevron {
+  color: var(--text-muted);
+  transition: transform var(--dur) var(--ease-out);
+}
 .studio-group[open] .studio-group-chevron { transform: rotate(180deg); }
+
+/* ---------------------------------------------------- opening a group
+
+   The one thing in this panel a person does most often, and the one thing
+   that showed them nothing. `<details>` has no open state to transition
+   between -- the browser inserts the content at its full height in a single
+   frame -- so eight rows of controls appeared under the pointer at once and
+   everything below them jumped down the page. Whether you had opened the
+   right group was a question you answered by re-reading the panel.
+
+   Animating it shows what changed and where it came from. The body is what
+   moves; the summary stays exactly where it was, so the row you pressed is
+   the anchor and the chevron turning is the thing that confirms the press.
+
+   `interpolate-size` gives `height: auto` something to animate to, which is
+   what this needed for twenty years. Where a browser does not have it the
+   rule is simply ignored and the group opens as it always did -- the fade and
+   the lift still run, so nothing looks broken, it merely arrives all at once.
+
+   Deliberately not on closing. A group being folded away is not information
+   anybody needs to watch, and half a second of the panel resettling before
+   the next group opens is half a second of nothing happening. */
+
+@keyframes studio-group-open {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--motion-shift, 10px) * -0.5));
+  }
+  to { opacity: 1; transform: none; }
+}
+
+.studio-group-body {
+  animation: studio-group-open var(--dur) var(--ease-out) both;
+}
+
+@supports (interpolate-size: allow-keywords) {
+  :root { interpolate-size: allow-keywords; }
+  .studio-group::details-content {
+    height: 0;
+    overflow: hidden;
+    transition: height var(--dur) var(--ease-out), content-visibility var(--dur) allow-discrete;
+  }
+  .studio-group[open]::details-content { height: auto; }
+}
 
 .studio-group-body {
   display: grid;
@@ -402,7 +449,7 @@
   font: inherit;
   font-size: var(--label);
   cursor: pointer;
-  transition: color 120ms ease, border-color 120ms ease;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
 }
 .studio-lora-add:hover:not(:disabled),
 .studio-upload:hover { color: var(--text-primary); border-color: var(--text-muted); }
@@ -545,7 +592,7 @@
   font-size: var(--step-1);
   font-weight: 600;
   cursor: pointer;
-  transition: filter 120ms ease;
+  transition: filter var(--dur-fast) var(--ease-out);
 }
 .studio-go:hover:not(:disabled) { filter: brightness(1.07); }
 .studio-go:disabled {
@@ -591,7 +638,7 @@
   border: 1.5px dashed var(--lt-frame);
   border-radius: 4px;
   background: var(--lt-well);
-  transition: width 220ms ease, height 220ms ease;
+  transition: width var(--dur) var(--ease-out), height var(--dur) var(--ease-out);
 }
 .studio-canvas-size {
   font-family: var(--font-mono);
@@ -701,13 +748,18 @@
   background: rgba(18, 18, 20, 0.62);
   backdrop-filter: blur(8px);
   opacity: 0;
-  transition: opacity 140ms ease;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 .studio-job:hover .studio-job-actions,
 .studio-job:focus-within .studio-job-actions { opacity: 1; }
 .studio-job-actions .icon-btn { width: 28px; height: 28px; color: #fff; justify-content: center; }
 .studio-job-actions .icon-btn:hover { background: rgba(255, 255, 255, 0.16); }
 .studio-job-actions a.icon-btn { display: inline-flex; align-items: center; }
+/* Something was found in this picture and the reader has not answered yet.
+   The only button on the card that is about this picture in particular, and it
+   goes away the moment it is pressed -- see src/retouch.js. */
+.studio-job-actions .icon-btn.is-offer { color: var(--btn-active); }
+.studio-job-actions .icon-btn.is-offer:hover { background: rgba(217, 119, 87, 0.22); }
 /* While it is still being made, that corner belongs to the progress card's
    stop button. */
 .studio-job.is-starting .studio-job-actions,
@@ -784,9 +836,40 @@
   background: rgba(12, 12, 14, 0.95);
   color: #f2f2f4;
   outline: none;
-  animation: studio-lightbox-in 160ms ease both;
+  animation: studio-lightbox-in var(--dur) var(--ease-out) both;
 }
+/* The backdrop fades and the picture rises into it. Both, because a viewer
+   whose backdrop appears at the same instant as its contents reads as a page
+   replacing another page; staggered by a hair, it reads as something opening
+   over what was already there. */
 @keyframes studio-lightbox-in { from { opacity: 0; } to { opacity: 1; } }
+@keyframes studio-lightbox-rise {
+  from { opacity: 0; transform: scale(0.965); }
+  to   { opacity: 1; transform: none; }
+}
+/* `backwards`, not `both`.
+ *
+ * A filling animation outranks an inline style, so `both` -- which holds the
+ * last keyframe for ever -- meant this rule's `transform: none` beat the zoom
+ * the viewer writes onto the picture. The zoom was computed, applied, and
+ * never painted.
+ *
+ * `backwards` keeps the half that is needed: the opening frame applies during
+ * the 40ms delay, so the picture does not flash at full size before it rises.
+ * When the entrance ends the element is released, which is exactly when its
+ * own transform starts mattering -- and the closing frame is the resting state
+ * anyway, so holding it was buying nothing. See src/zoomPan.js. */
+.studio-lightbox-stage > img,
+.studio-lightbox-stage > video,
+.studio-lightbox-stage > .before-after {
+  animation: studio-lightbox-rise var(--dur-slow) var(--ease-out) 40ms backwards;
+}
+/* Walking the grid with the arrows must not re-run the entrance on every
+   picture: four hundred milliseconds of scaling per press is a viewer that
+   cannot be flicked through. The stage keyframe is keyed to the item, so this
+   is the one place the animation is deliberately not restarted. */
+.studio-lightbox.is-walking .studio-lightbox-stage > img,
+.studio-lightbox.is-walking .studio-lightbox-stage > video { animation: fade-in var(--dur-fast) var(--ease-out) backwards; }
 
 .studio-lightbox-bar {
   display: flex;
@@ -812,7 +895,7 @@
   color: #f2f2f4;
   cursor: pointer;
   text-decoration: none;
-  transition: background 120ms ease;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .studio-lightbox-btn:hover { background: rgba(255, 255, 255, 0.15); }
 
@@ -846,10 +929,13 @@
   width: auto;
   height: auto;
   border-radius: 3px;
-  cursor: zoom-in;
+  /* Not `zoom-in`: a click does not zoom. The wheel does, and the
+     cursor becomes a hand when there is something to drag -- see the
+     inline style in StudioLightbox. */
+  cursor: default;
   user-select: none;
   -webkit-user-drag: none;
-  transition: max-width 180ms ease, max-height 180ms ease;
+  transition: max-width var(--dur) var(--ease-out), max-height var(--dur) var(--ease-out);
 }
 
 /* Filling the screen.
@@ -879,7 +965,7 @@
   background: linear-gradient(rgba(0, 0, 0, 0), rgba(0, 0, 0, 0.62));
   padding-top: 30px;
   opacity: 0;
-  transition: opacity 140ms ease;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 /* The prompt is what the framed view is for; here it is out of the way until
    it is wanted. */
@@ -893,12 +979,15 @@
 .studio-lightbox.is-full .studio-lightbox-stage img {
   max-width: 100%;
   border-radius: 0;
-  cursor: zoom-out;
 }
 
 .studio-lightbox-nav {
   position: absolute;
   top: 50%;
+  /* Above the veil, which is `z-index: 2` inside the same stacking context.
+     Without this the arrows are behind a tint even now that the tint no
+     longer takes their presses. */
+  z-index: 3;
   transform: translateY(-50%);
   width: 44px;
   height: 64px;
@@ -909,7 +998,7 @@
   background: rgba(255, 255, 255, 0.07);
   color: #f2f2f4;
   cursor: pointer;
-  transition: background 120ms ease;
+  transition: background var(--dur-fast) var(--ease-out);
 }
 .studio-lightbox-nav:hover { background: rgba(255, 255, 255, 0.16); }
 .studio-lightbox-nav.is-prev { left: 12px; }
@@ -968,16 +1057,76 @@
 
 /* ------------------------------------------------------------ batches
 
-   How many, beside the button that makes them. */
-.studio-footer { grid-template-columns: 150px 64px minmax(0, 1fr); }
+   How many, and what they differ by, beside the button that makes them.
+
+   The middle column sizes to its content rather than to a fixed 64px: it holds
+   one control on a workflow with nothing to sweep and two on one that has
+   something, and a fixed width can only be right for one of those. The button
+   keeps the rest, so it is still the widest thing in the row -- which is the
+   whole arrangement of this footer, one place the accent is spent. */
+.studio-footer { grid-template-columns: 150px auto minmax(0, 1fr); }
+
+.studio-batch {
+  display: flex;
+  align-items: stretch;
+  height: 40px;
+  min-width: 0;
+}
 .studio-batch .settings-input {
-  width: 100%;
   height: 40px;
   padding: 0 4px;
   text-align: center;
   font-family: var(--font-mono);
   font-variant-numeric: tabular-nums;
 }
+/* Scoped through `.studio-batch` throughout, not written as bare classes.
+   `.studio-form .settings-input` sets `width: 100%` at two classes, and a
+   one-class rule loses to it however far down the file it sits -- which is
+   how a 64-pixel control ends up as wide as the row it is in. */
+.studio-batch .studio-batch-count { width: 64px; flex: 0 0 auto; }
+
+/* The two share an edge, so they read as one control rather than as two that
+   happen to be adjacent. Only the outside corners are round. */
+.studio-batch:has(.studio-batch-axis) .studio-batch-count {
+  border-start-end-radius: 0;
+  border-end-end-radius: 0;
+  border-inline-end: 0;
+}
+.studio-batch .studio-batch-axis {
+  min-width: 0;
+  max-width: 11rem;
+  flex: 1 1 auto;
+  /* The axis is a name, not a number: the monospace face and the tabular
+     figures are for the count next to it. */
+  font-family: inherit;
+  text-align: start;
+  padding-inline: 8px;
+  border-start-start-radius: 0;
+  border-end-start-radius: 0;
+}
+/* Lit while it is doing something, because "×6" and "×6 along Steps" are
+   different jobs and the difference is one word in a dropdown. */
+.studio-batch.is-sweeping .studio-batch-axis {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+.studio-batch.is-sweeping .studio-batch-count { border-color: var(--primary); }
+
+/* A browser without `:has()` still gets a usable control: two rounded selects
+   side by side rather than one joined pair. Nothing is unreadable, the seam
+   is just visible. */
+@supports not selector(:has(*)) {
+  .studio-batch { gap: 4px; }
+}
+
+/* On a narrow panel the row cannot hold three things and a button.
+ *
+ * The button takes a line of its own, which it can afford to -- it is the one
+ * thing here that is always pressed -- and the axis gets the width the button
+ * was using, rather than being squeezed into a slot too narrow to read a word
+ * in. That is what a shared row degrades into. */
+/* The phone layout for this row is at the end of the file, after the
+   939px block -- both match on a 390px screen, and the later one wins. */
 
 /* ------------------------------------------------- under the prompt sheet
 
@@ -1123,6 +1272,50 @@
 }
 .studio-none { margin: 64px auto; text-align: center; color: var(--text-secondary); }
 
+/* The queue strip: what the machine is doing and what it will do next.
+   One line, scrolling sideways rather than wrapping into a wall -- it is a
+   glance, not a table. */
+.studio-queue {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  overflow-x: auto;
+  scrollbar-width: none;
+  padding: 0.3rem 0.1rem 0.45rem;
+  font-size: var(--label);
+  color: var(--text-muted);
+}
+.studio-queue::-webkit-scrollbar { display: none; }
+.studio-queue-title {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-weight: 600;
+  color: var(--text-secondary);
+}
+.studio-queue-item {
+  flex: none;
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  max-width: 18rem;
+  padding: 0.15rem 0.3rem 0.15rem 0.5rem;
+  border: 1px solid var(--hairline);
+  border-radius: 999px;
+  background: var(--surface-sunken);
+}
+.studio-queue-item.is-running { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
+.studio-queue-item.is-running b { color: var(--accent); }
+.studio-queue-item b { font-weight: 600; font-variant-numeric: tabular-nums; }
+.studio-queue-what {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.studio-queue-item .icon-btn { width: 20px; height: 20px; }
+
 /* Starred: a mark that stays on the caption, and the button that set it. */
 .studio-job-fav { flex: none; align-self: center; color: #d19b12; }
 .studio-job-actions { flex-wrap: wrap; justify-content: flex-end; max-width: calc(100% - 16px); }
@@ -1149,3 +1342,774 @@
 }
 .studio-tool.is-stop:hover { color: #9a3412; background: rgba(194, 65, 12, 0.16); }
 .studio-tool.is-stop:disabled { opacity: 0.6; cursor: progress; }
+
+/* ------------------------------------------------------- the shape, as a ratio */
+
+.studio-ratios > span { display: flex; align-items: baseline; gap: 8px; }
+.studio-mp {
+  margin-inline-start: auto;
+  font-style: normal;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 11px;
+  color: var(--text-muted);
+}
+/* One row of eight, or two of four where eight do not fit -- never seven and
+   a lone one on a line of its own. */
+.studio-ratio-row {
+  display: grid;
+  grid-template-columns: repeat(8, minmax(0, 1fr));
+  gap: 5px;
+}
+@media (max-width: 520px) {
+  .studio-ratio-row { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+}
+.studio-ratio {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 4px;
+  min-height: 50px;
+  padding: 6px 4px 5px;
+  border: 1px solid var(--hairline, rgba(0, 0, 0, 0.1));
+  border-radius: 8px;
+  background: var(--surface-sunken);
+  color: var(--text-secondary);
+  font: 500 11px/1 var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.studio-ratio:hover { color: var(--text-primary); border-color: rgba(var(--primary-rgb), 0.35); }
+/* The shape itself. Its width and height are set inline by `ratioGlyph`,
+   fitted into the same square whichever way it points. */
+.studio-ratio i {
+  display: block;
+  box-sizing: border-box;
+  border: 1.5px solid currentColor;
+  border-radius: 2px;
+  opacity: 0.7;
+}
+.studio-ratio.is-on {
+  border-color: rgba(var(--primary-rgb), 0.7);
+  background: rgba(var(--primary-rgb), 0.1);
+  color: var(--text-primary);
+}
+.studio-ratio.is-on i { opacity: 1; }
+
+/* ------------------------------------------------------------- card size */
+
+.studio-density {
+  display: inline-flex;
+  padding: 2px;
+  border: 1px solid var(--hairline, rgba(0, 0, 0, 0.1));
+  border-radius: 9px;
+}
+.studio-density-btn {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 26px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+.studio-density-btn:hover { color: var(--text-primary); }
+.studio-density-btn.is-on { background: var(--surface-sunken); color: var(--text-primary); }
+
+.studio-gallery.is-density-s { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 18px 14px; }
+.studio-gallery.is-density-l { grid-template-columns: repeat(auto-fill, minmax(360px, 1fr)); gap: 32px 26px; }
+/* Small cards are for looking across many: one line of prompt is enough. */
+.studio-gallery.is-density-s .studio-job-prompt { -webkit-line-clamp: 1; }
+
+/* ------------------------------------------------ the rest, behind one button */
+
+.studio-job-more { position: relative; display: inline-flex; }
+.studio-job-menu {
+  position: absolute;
+  top: calc(100% + 6px);
+  right: 0;
+  z-index: 20;
+  min-width: 200px;
+  display: flex;
+  flex-direction: column;
+  padding: 4px;
+  border-radius: 10px;
+  background: rgba(22, 22, 24, 0.96);
+  backdrop-filter: blur(10px);
+  box-shadow: 0 10px 30px -8px rgba(0, 0, 0, 0.55), 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.studio-job-menu button {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 7px 10px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  color: #f2f1ee;
+  font: inherit;
+  font-size: var(--label, 12px);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.studio-job-menu button:hover:not(:disabled),
+.studio-job-menu button:focus-visible { background: rgba(255, 255, 255, 0.1); outline: none; }
+.studio-job-menu button:disabled { opacity: 0.6; cursor: progress; }
+.studio-job-menu button svg { flex: none; opacity: 0.85; }
+.studio-job-menu button.is-danger { color: #f0a58c; }
+/* Open, the corner stays up even when the pointer has left the card. */
+.studio-job:has(.studio-job-menu) .studio-job-actions { opacity: 1; }
+
+/* A film's way into the viewer: its player takes every other click. */
+.studio-job-expand {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  z-index: 2;
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 28px;
+  border: none;
+  border-radius: 8px;
+  background: rgba(18, 18, 20, 0.62);
+  backdrop-filter: blur(8px);
+  color: #fff;
+  cursor: zoom-in;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.studio-job:hover .studio-job-expand,
+.studio-job-expand:focus-visible { opacity: 1; }
+@media (hover: none) { .studio-job-expand { opacity: 1; } }
+
+/* ------------------------------------------------------- films in the viewer */
+
+.studio-lightbox-stage video {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  display: block;
+  max-width: calc(100% - 136px);
+  max-height: 100%;
+  width: auto;
+  height: auto;
+  border-radius: 3px;
+  background: #000;
+}
+.studio-lightbox.is-full .studio-lightbox-stage video { max-width: 100%; }
+.studio-lightbox-btn.is-fav { color: #f5c542; }
+.studio-lightbox-btn:disabled { opacity: 0.4; cursor: default; }
+/* A phone's bar holds the counter and up to seven buttons -- a picture from a
+   conversation brings three of its own. The pixel size is the one to give up. */
+@media (max-width: 480px) {
+  .studio-lightbox-bar { gap: 8px; padding: 8px 10px; }
+  .studio-lightbox-size { display: none; }
+  .studio-lightbox-btn { width: 34px; height: 34px; }
+  .studio-lightbox-tools { gap: 3px; }
+}
+.studio-lightbox-btn:disabled:hover { background: rgba(255, 255, 255, 0.07); }
+/* Which conversation a picture came from, when it was opened from the gallery. */
+.studio-lightbox-origin { font-family: var(--font-sans, inherit); color: rgba(242, 242, 244, 0.7); }
+/* Swiped on a phone, so the browser's own pan and pull-to-refresh stay out of it. */
+.studio-lightbox-stage { touch-action: pinch-zoom; }
+/* A film opens the same viewer a picture does, from the corner of its player. */
+.msg-generated .picture-expand {
+  position: absolute;
+  right: 8px;
+  top: 8px;
+  z-index: 1;
+  width: 30px;
+  height: 30px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border: 0;
+  border-radius: 8px;
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  cursor: zoom-in;
+  line-height: 1;
+  opacity: 0;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.msg-generated .safe-frame:hover .picture-expand,
+.msg-generated .picture-expand:focus-visible { opacity: 1; }
+@media (hover: none) { .msg-generated .picture-expand { opacity: 0.9; } }
+
+/* ------------------------------------------------------- before and after
+
+   The original and the result in one frame, split by a bar. Both pictures are
+   fitted into the same box, so an upscale lines up with the picture it was
+   made from. See BeforeAfter.jsx. */
+.before-after {
+  position: relative;
+  width: 100%;
+  max-width: 100%;
+  overflow: hidden;
+  background: #111113;
+  cursor: ew-resize;
+  user-select: none;
+  touch-action: none;
+  line-height: 0;
+}
+.before-after img {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  -webkit-user-drag: none;
+  pointer-events: none;
+}
+/* The result is laid out first and decides the frame's shape. */
+.before-after .before-after-after { position: relative; height: auto; }
+.before-after-bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 2px;
+  margin-left: -1px;
+  background: #fff;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.35), 0 0 12px rgba(0, 0, 0, 0.35);
+  pointer-events: none;
+}
+.before-after-handle {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 36px;
+  height: 36px;
+  transform: translate(-50%, -50%);
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  background: #fff;
+  color: #1a1a1d;
+  box-shadow: 0 2px 10px rgba(0, 0, 0, 0.45);
+  pointer-events: auto;
+  cursor: ew-resize;
+}
+.before-after-handle:focus-visible { outline: 2px solid var(--accent, #D97757); outline-offset: 2px; }
+.before-after-tag {
+  position: absolute;
+  top: 10px;
+  padding: 3px 9px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+  font-weight: 600;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.55);
+  -webkit-backdrop-filter: blur(6px);
+  backdrop-filter: blur(6px);
+  pointer-events: none;
+  transition: opacity var(--dur-fast) var(--ease-out);
+}
+.before-after-tag.is-before { left: 10px; }
+.before-after-tag.is-after { right: 10px; }
+.before-after-missing {
+  position: absolute;
+  left: 50%;
+  bottom: 10px;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border-radius: 999px;
+  font-size: 12px;
+  line-height: 1.4;
+  color: #fff;
+  background: rgba(0, 0, 0, 0.6);
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+/* In the viewer: as large as the stage allows, never past the result's own
+   pixels, and centred -- the same rules as the picture it stands in for. The
+   stage is a size container so its height can be read here. */
+.studio-lightbox-stage.is-comparing { container-type: size; }
+.studio-lightbox-stage .before-after {
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: min(100cqw - 136px, 100cqh * var(--ar, 1), var(--natural-w, 100cqw));
+  height: fit-content;
+  max-height: 100%;
+  border-radius: 3px;
+}
+.studio-lightbox.is-full .studio-lightbox-stage .before-after {
+  width: min(100cqw, 100cqh * var(--ar, 1), var(--natural-w, 100cqw));
+  border-radius: 0;
+}
+@media (max-width: 700px) {
+  .studio-lightbox-stage .before-after { width: min(100cqw, 100cqh * var(--ar, 1), var(--natural-w, 100cqw)); }
+}
+.studio-lightbox-btn.is-on { background: rgba(255, 255, 255, 0.24); }
+
+/* In a conversation: in place of the picture, at the picture's size. */
+.msg-generated .before-after {
+  width: min(100%, calc(70vh * var(--ar, 1)));
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+}
+/* The two pictures inside the frame are laid out by it, not by the rules for
+   the picture the viewer or the message shows on its own -- the viewer's keeps
+   room for its arrows, and the message's caps the height. */
+.studio-lightbox .studio-lightbox-stage .before-after img,
+.msg-generated .before-after img {
+  max-width: none;
+  max-height: none;
+  margin: 0;
+  border-radius: 0;
+  cursor: inherit;
+  transition: none;
+}
+/* The glass over a picture nobody has chosen to see covers both halves:
+   safeguard.css blurs every img in a veiled frame, and nothing here undoes it. */
+.studio-lightbox .studio-lightbox-stage .before-after .before-after-before,
+.msg-generated .before-after .before-after-before { position: absolute; inset: 0; width: 100%; height: 100%; }
+.studio-lightbox .studio-lightbox-stage .before-after .before-after-after,
+.msg-generated .before-after .before-after-after { position: relative; inset: auto; width: 100%; height: auto; }
+
+/* ------------------------------------------------------- prompt blocks
+
+   Chips, under the boxes they fill. Each is two or three targets in one
+   outline -- load it, add it, forget it -- because three separate buttons per
+   block would be a wall of controls under the thing the reader is trying to
+   write in. The two small ones stay quiet until the chip is under the pointer.
+   See src/studioPresets.js. */
+
+.studio-presets { margin: 0.35rem 0 0; }
+.studio-preset-chips { display: flex; flex-wrap: wrap; gap: 0.3rem; align-items: center; }
+
+.studio-preset {
+  display: inline-flex;
+  align-items: center;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: var(--bg-main);
+  overflow: hidden;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+  animation: pop-in var(--dur) var(--ease-spring) both;
+}
+.studio-preset:hover { border-color: var(--hairline-strong); }
+.studio-preset.is-on { border-color: var(--btn-active); }
+
+.studio-preset-load,
+.studio-preset-add,
+.studio-preset-drop {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.28rem;
+  padding: 0.26rem 0.5rem;
+  border: 0;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.72rem;
+  line-height: 1.2;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.studio-preset-load { max-width: 16rem; }
+.studio-preset-load span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.studio-preset-load:hover { color: var(--text-primary); background: var(--hover-bg); }
+.studio-preset.is-on .studio-preset-load { color: var(--btn-active); }
+
+/* Quiet until the chip is approached: the name is the thing to read, and two
+   icons at full weight beside every name is a row of noise. */
+.studio-preset-add,
+.studio-preset-drop {
+  padding-inline: 0.34rem;
+  opacity: 0;
+  width: 0;
+  padding: 0;
+  transition: opacity var(--dur-fast) var(--ease-out), width var(--dur) var(--ease-out),
+    padding var(--dur) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.studio-preset:hover .studio-preset-add,
+.studio-preset:hover .studio-preset-drop,
+.studio-preset:focus-within .studio-preset-add,
+.studio-preset:focus-within .studio-preset-drop {
+  opacity: 1;
+  width: 1.4rem;
+  padding: 0.26rem 0.2rem;
+}
+.studio-preset-add:hover { color: var(--btn-active); }
+.studio-preset-drop:hover { color: #EF4444; }
+@media (hover: none) {
+  .studio-preset-add,
+  .studio-preset-drop { opacity: 1; width: 1.4rem; padding: 0.26rem 0.2rem; }
+}
+
+.studio-preset-new {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0.26rem 0.6rem;
+  border: 1px dashed var(--border-color);
+  border-radius: 999px;
+  background: none;
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.72rem;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.studio-preset-new:hover:not(:disabled) { border-color: var(--btn-active); color: var(--btn-active); }
+.studio-preset-new:disabled { opacity: 0.4; cursor: default; }
+
+.studio-preset-naming {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  animation: rise-in var(--dur) var(--ease-out) both;
+}
+.studio-preset-naming input {
+  width: 10rem;
+  padding: 0.26rem 0.6rem;
+  border: 1px solid var(--btn-active);
+  border-radius: 999px;
+  background: var(--bg-main);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: 0.72rem;
+}
+.studio-preset-naming input:focus { outline: none; }
+
+/* --------------------------------------------------------------- a sweep */
+
+.studio-sweep-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  padding: 0 0.34rem;
+  border-radius: 5px;
+  background: rgba(217, 119, 87, 0.18);
+  color: var(--btn-active);
+  font-variant-numeric: tabular-nums;
+}
+.studio-sweep-badge b { font-weight: 600; opacity: 0.7; }
+
+/* ============================================================ the character lab
+
+   A group body is two columns; this is one thing with a shelf, a form and a
+   verdict in it, so it takes the whole width and lays itself out. */
+
+.studio-group-body > .charlab { grid-column: 1 / -1; }
+
+.charlab {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  min-width: 0;
+}
+
+/* ----------------------------------------------------------------- the shelf
+
+   What has been learnt, as a row of cards that are also the switch for it:
+   pressing one puts its LoRA in a slot and its word in the prompt, and
+   pressing it again takes both out. Two controls for two halves of one idea is
+   how you get a prompt that names a character the model was never given. */
+
+.charlab-shelf {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.charlab-card {
+  display: flex;
+  align-items: stretch;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  overflow: hidden;
+  transition:
+    border-color var(--dur-fast) var(--ease-out),
+    background var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+.charlab-card:hover { transform: translateY(calc(var(--motion-shift) * -0.5)); }
+
+.charlab-card.is-on {
+  border-color: rgba(var(--primary-rgb), 0.6);
+  background: rgba(var(--primary-rgb), 0.1);
+}
+
+/* Its file is not in this ComfyUI any more -- a different machine, or someone
+   tidied the loras folder. Still shown, because the name and the word are
+   still true and deleting the card for them is not this app's decision. */
+.charlab-card.is-gone { opacity: 0.55; }
+
+.charlab-card-main {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 2px;
+  padding: 7px 10px;
+  border: 0;
+  background: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+  min-width: 0;
+}
+.charlab-card-main:disabled { cursor: not-allowed; }
+
+.charlab-card-name {
+  font-size: var(--step-0);
+  font-weight: 600;
+  max-width: 14rem;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.charlab-card-meta {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: var(--label);
+  color: var(--text-muted);
+}
+.charlab-card-meta em { font-style: normal; }
+.charlab-card-meta code {
+  font-family: var(--mono, ui-monospace, monospace);
+  font-size: 0.95em;
+}
+
+.charlab-card-tick { position: absolute; inset-inline-end: 6px; inset-block-start: 6px; }
+.charlab-card { position: relative; }
+
+.charlab-mini {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 28px;
+  border: 0;
+  border-inline-start: 1px solid var(--hairline);
+  background: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.charlab-mini:hover { background: var(--surface-raised); color: var(--text-primary); }
+.charlab-mini.is-danger:hover { color: var(--danger, #d9534f); }
+
+/* ------------------------------------------------------------- the pictures */
+
+.charlab-refs {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: flex-start;
+}
+
+.charlab-ref { position: relative; }
+.charlab-ref-frame {
+  display: block;
+  width: 68px;
+  height: 68px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+}
+.charlab-ref-frame img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.charlab-ref-x {
+  position: absolute;
+  inset-block-start: -6px;
+  inset-inline-end: -6px;
+  background: var(--surface);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 50%;
+}
+
+.charlab-add {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  width: 68px;
+  height: 68px;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--radius-sm);
+  background: none;
+  color: var(--text-muted);
+  font: inherit;
+  font-size: var(--label);
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out);
+}
+.charlab-add:hover:not(:disabled) { border-color: rgba(var(--primary-rgb), 0.5); color: var(--text-primary); }
+.charlab-add:disabled { cursor: not-allowed; opacity: 0.5; }
+.charlab-add span { text-align: center; line-height: 1.2; }
+
+/* ----------------------------------------------------------- what to learn */
+
+.charlab-kind-row { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.charlab-kind {
+  flex: 1 1 12rem;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 8px 10px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--radius-md);
+  background: var(--surface-sunken);
+  color: var(--text-primary);
+  font: inherit;
+  font-size: var(--step-0);
+  text-align: start;
+  cursor: pointer;
+  transition: border-color var(--dur-fast) var(--ease-out), background var(--dur-fast) var(--ease-out);
+}
+.charlab-kind em {
+  font-style: normal;
+  font-size: var(--label);
+  color: var(--text-muted);
+  line-height: 1.35;
+}
+.charlab-kind.is-on {
+  border-color: rgba(var(--primary-rgb), 0.6);
+  background: rgba(var(--primary-rgb), 0.1);
+}
+.charlab-kind:disabled { cursor: not-allowed; opacity: 0.6; }
+
+.charlab-trigger {
+  margin: 0;
+  font-size: var(--label);
+  color: var(--text-muted);
+}
+.charlab-trigger code {
+  font-family: var(--mono, ui-monospace, monospace);
+  color: var(--text-primary);
+  background: var(--surface-sunken);
+  border-radius: var(--radius-xs);
+  padding: 1px 5px;
+}
+
+/* ------------------------------------------------------------ the captions */
+
+.charlab-captions { display: flex; flex-direction: column; gap: 6px; }
+.charlab-captions-label {
+  font-size: var(--label);
+  color: var(--text-muted);
+}
+.charlab-captions-why {
+  margin: 0 0 2px;
+  font-size: var(--label);
+  line-height: 1.5;
+  color: var(--text-muted);
+}
+.studio-form .charlab-caption { width: 100%; font-size: var(--label); }
+
+/* ---------------------------------------------------------- what it is doing */
+
+.charlab-blocked,
+.charlab-stage,
+.charlab-note {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  font-size: var(--label);
+  line-height: 1.5;
+}
+.charlab-blocked { color: var(--warning, #c98a1b); }
+.charlab-stage { color: var(--text-secondary); }
+.charlab-note { color: var(--text-muted); }
+.charlab-blocked svg,
+.charlab-stage svg { flex: 0 0 auto; }
+
+.charlab-go { display: flex; gap: 8px; }
+.charlab-go .studio-go { flex: 1 1 auto; }
+.charlab-go .studio-go.is-secondary { background: var(--surface-raised); color: var(--text-primary); }
+.charlab-go .studio-go.is-secondary:hover:not(:disabled) { filter: brightness(1.04); }
+.charlab-go .studio-go.is-danger { background: var(--danger, #d9534f); }
+
+/* A phone: the cards stop trying to sit side by side. */
+@media (max-width: 560px) {
+  .charlab-card { width: 100%; }
+  .charlab-card-name { max-width: none; }
+}
+/* ===================================================== the footer, on a phone
+
+   Last in the file on purpose. There are four rules for `.studio-footer`'s
+   columns and three of them are in media queries that all match at 390px, so
+   position in the file is what decides -- and the one that was meant to win
+   sat above a wider one that did not.
+
+   What was actually wrong, measured at 390px: the seed field got 79 pixels for
+   a number that needs 161. These workflows produce fifteen-digit seeds, so
+   more than half of it was cut off, in a field whose entire purpose is to be
+   read back and typed in again. And because the button had already been sent
+   to a row of its own, the third column sat empty beside them.
+
+   So: three rows, each holding one idea. The seed gets the whole width because
+   the seed is the widest thing here. */
+@media (max-width: 640px) {
+  .studio-footer {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 8px;
+  }
+
+  /* The number, and the lock beside it. */
+  .studio-seed { grid-column: 1 / -1; }
+  .studio-seed-row { grid-template-columns: minmax(0, 1fr) 44px; }
+
+  /* How many, and along what. */
+  .studio-batch { grid-column: 1 / -1; }
+  .studio-batch .studio-batch-count { width: 72px; }
+  .studio-batch .studio-batch-axis { max-width: none; flex: 1 1 auto; }
+
+  .studio-go { grid-column: 1 / -1; }
+}
+
+/* ---- A picture, read back as a prompt -------------------------------------
+   The button sits in the main row's label, because it describes into *that*
+   row: a control floating under a four-row sheet would not say which row it
+   filled. Pushed to the end of the label so it does not move the heading. */
+.studio-describe {
+  margin-inline-start: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 1px 7px;
+  border: 1px solid var(--border-color);
+  border-radius: 999px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: var(--label);
+  font-weight: 500;
+  cursor: pointer;
+  transition: color var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out);
+}
+.studio-describe:hover:not(:disabled) { color: var(--primary); border-color: var(--primary); }
+.studio-describe:disabled { opacity: 0.5; cursor: default; }
+.studio-describe:focus-visible { outline: 2px solid var(--primary); outline-offset: 1px; }
+
+.studio-describe-state {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 5px;
+  font-size: var(--label);
+  color: var(--text-muted);
+}
+.studio-describe-state.is-error { color: var(--danger); }
+
+/* A phone's label row is already tight; the button keeps its place but drops
+   the word, since the icon and the spinner carry the state on their own. */
+@media (max-width: 480px) {
+  .studio-describe span { display: none; }
+}
