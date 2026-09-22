@@ -968,6 +968,56 @@ change theme, export, toggle Web Fetch, open settings.
 `temperature`, `num_predict`, `top_p`, `top_k`, `repeat_penalty`, `num_ctx`, `seed`,
 stop sequences and the thinking mode — all persisted, all sent with every request.
 
+### Whether it will fit, before the twenty-gigabyte read
+
+Above, this README spends a page on why `--flash-attn` and a quantised KV cache are worth
+switching engine for, and the whole argument is about one number: whether 34% of the layers
+end up on the GPU or 100% of them, which is two to three times the speed. Everything needed
+to work that number out was already on screen — the card's size in the monitor, the model's
+in the picker, `num_ctx` in Settings — and the person moving the slider was the one part of
+the system that had to guess.
+
+They guess badly, in a specific direction, because nothing fails. Ollama loads the layers
+that fit and runs the rest on the CPU: no error, no warning, a model that works and is ten
+to twenty times slower. The monitor can say so *afterwards* — it divides `size_vram` by
+`size` and reports it — but by then the twenty-gigabyte read has happened and the answer is
+already arriving at three tokens a second.
+
+So the same arithmetic is done beforehand, as one line under the context box:
+
+> Only about 26 of 40 layers will fit on the card (64%). The rest runs on the CPU, which is
+> several times slower — with no error to say so. **16,384 would fit.** A quantised KV cache
+> (`OLLAMA_KV_CACHE_TYPE=q8_0`) would allow about 32,768.
+
+**The KV-head count is the term that matters.** A cache is two arrays — keys and values —
+of `layers × width × context`, and the width is set by `head_count_kv`, not by the query
+head count. Grouped-query attention gives a 14B model eight key/value heads against forty
+query heads, so its cache is five times smaller than the parameter count suggests. Reading
+the wrong field recommends 4k where 32k fits, which is exactly the kind of confidently
+wrong advice that would make the whole line worth deleting. The fields come out of
+`/api/show`'s `model_info`, matched by suffix (`.block_count`, `.attention.head_count_kv`)
+rather than against a table of architectures that would need a line adding for every model
+released.
+
+**Free, not total.** A card holding a picture model has whatever is left, and advice
+computed from the card's size is advice for a machine nobody is sitting at.
+
+**It is an estimate and says so.** The compute buffer depends on the batch size, the CUDA
+context on the driver, and the desktop compositor is holding some of the card no matter
+what. A round gigabyte is reserved for all of it — more than a headless server needs and
+less than a Windows desktop with a browser open actually costs — because erring upward
+means erring toward "it will not fit", which is the cheap direction to be wrong in. A tool
+that says "this fits" and is wrong teaches people to ignore it; one that says 8k where 10k
+would have worked costs almost nothing.
+
+**It renders nothing when it does not know.** No GPU reported, no `model_info`, a cloud
+model, the middleware not running — each of those shows no line at all, because a permanent
+"could not estimate" under a settings box is an apology, not information.
+
+It also says when the context is past what the model was trained for. That is a different
+problem with the same slider: a model does not fail past its trained length, it gets
+steadily worse, and nothing else reports that either.
+
 ### Artifacts, preview and running code
 Previewable, runnable or simply long code blocks open in a side panel with four tabs:
 

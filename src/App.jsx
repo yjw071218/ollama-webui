@@ -69,6 +69,7 @@ import { KnowledgePanel } from './KnowledgePanel.jsx';
 import { McpPanel } from './McpPanel.jsx';
 import { CanvasPanel } from './CanvasPanel.jsx';
 import { EvalPanel } from './EvalPanel.jsx';
+import { FitNote } from './FitNote.jsx';
 import { WatchedFolders } from './WatchedFolders.jsx';
 import { isAudioFile, formatDuration } from './audio.js';
 import { looksLikeDocument } from './canvas.js';
@@ -3786,6 +3787,29 @@ function App() {
     refreshMcpTools();
   }, [mcpEnabled, refreshMcpTools]);
 
+  /* What the card has free, while the settings panel is open.
+   *
+   * Only then: this is a shell-out to nvidia-smi on the server and polling it
+   * for a panel nobody is looking at would be a process every few seconds for
+   * ever. The monitor has its own poller for when it is open; this is the
+   * generation tab's, and it stops when the panel closes.
+   *
+   * Free rather than total, because free is the number that decides anything:
+   * a card holding a picture model has whatever is left, and advice computed
+   * from the card's size would be advice for a machine nobody is sitting at. */
+  const [gpuNow, setGpuNow] = useState(null);
+  useEffect(() => {
+    if (!showSettings || settingsTab !== 'generation') return;
+    let cancelled = false;
+    const read = () => fetch('/system/stats')
+      .then(r => (r.ok ? r.json() : null))
+      .then(d => { if (!cancelled && d?.gpus?.[0]) setGpuNow(d.gpus[0]); })
+      .catch(() => { /* no middleware; the note renders nothing */ });
+    read();
+    const timer = setInterval(read, 5000);
+    return () => { cancelled = true; clearInterval(timer); };
+  }, [showSettings, settingsTab]);
+
   // Filled from /system/stats, which the system monitor already polls. Only
   // used while the file tools are on -- see environmentPreamble.
   const [hostInfo, setHostInfo] = useState(null);
@@ -7300,6 +7324,7 @@ function App() {
   // English description — lossy and slow when the chosen model sees images
   // perfectly well by itself.
   const [modelCaps, setModelCaps] = useState({});
+  const [modelShow, setModelShow] = useState({});
   const capsInFlight = useRef(new Set());
 
   const loadCapabilities = useCallback(async (name) => {
@@ -7314,6 +7339,12 @@ function App() {
       if (!res.ok) return;
       const data = await res.json();
       setModelCaps(prev => ({ ...prev, [name]: data.capabilities || [] }));
+      /* The rest of the reply, which was being thrown away. `model_info` holds
+         the layer count, the width and -- the one that matters -- the number
+         of key/value heads, which is what decides whether this model's KV
+         cache is five times smaller than its parameter count suggests. See
+         src/fit.js. */
+      setModelShow(prev => ({ ...prev, [name]: data }));
     } catch (e) {
       // A model that cannot be inspected simply keeps the conservative default.
     } finally {
@@ -16169,6 +16200,16 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         />
                       </div>
                     </div>
+                    {/* What this will cost, before the twenty-gigabyte read.
+                        Nothing else in the system ever objects: Ollama loads
+                        the layers that fit and runs the rest on the CPU, with
+                        no error and no warning. See src/FitNote.jsx. */}
+                    <FitNote
+                      show={modelShow[selectedModel]}
+                      weights={models.find(m => m.name === selectedModel)?.size}
+                      gpu={gpuNow}
+                      context={numCtx}
+                    />
                   </div>
 
                   <div className="settings-group">
