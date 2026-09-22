@@ -2,7 +2,7 @@ import { flushSync } from 'react-dom';
 import { resumableChatReader } from './chatStream.js';
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, useCallback } from 'react';
 import localforage from 'localforage';
-import { ArrowUp, Paperclip, Sparkles, RefreshCcw, Trash2, Copy, Check, Terminal, Settings, Edit, MessageSquare, ChevronDown, Download, Square, X, Play, Mic, MicOff, Volume2, Search, Code, Maximize2, Sun, Moon, Monitor, Pin, PinOff, GitBranch, FileDown, Command, Cpu, Plus, Save, ArrowDown, Zap, Layers, Server, ExternalLink, Star, Info, TriangleAlert, FileText, Minimize2, PanelLeft, ListTree, LogOut, UserPlus, Languages, User, Activity, Globe, Folder, FolderPlus, MoreHorizontal, ChevronLeft, ChevronRight, SlidersHorizontal, CornerDownRight, Archive, WrapText, ListChecks, ChevronUp, Vibrate, Smartphone, FolderInput, StretchHorizontal, TextQuote, Brain, HelpCircle, Baby, Share2, ClipboardPaste, Upload, Users, Telescope, ShieldCheck, Wand2, Clock, Film, Brush, Scissors, Tags, Images, SquareSplitHorizontal, Undo2, Music } from 'lucide-react';
+import { ArrowUp, Paperclip, Sparkles, RefreshCcw, Trash2, Copy, Check, Terminal, Settings, Edit, MessageSquare, ChevronDown, Download, Square, X, Play, Mic, MicOff, Volume2, Search, Code, Maximize2, Sun, Moon, Monitor, Pin, PinOff, GitBranch, FileDown, Command, Cpu, Plus, Save, ArrowDown, Zap, Layers, Server, ExternalLink, Star, Info, TriangleAlert, FileText, Minimize2, PanelLeft, ListTree, LogOut, UserPlus, Languages, User, Activity, Globe, Folder, FolderPlus, MoreHorizontal, ChevronLeft, ChevronRight, SlidersHorizontal, CornerDownRight, Archive, WrapText, ListChecks, ChevronUp, Vibrate, Smartphone, FolderInput, StretchHorizontal, TextQuote, Brain, HelpCircle, Baby, Share2, ClipboardPaste, Upload, Users, Telescope, ShieldCheck, Wand2, Clock, Film, Brush, Scissors, Tags, Images, SquareSplitHorizontal, Undo2, Music, FileEdit } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
@@ -67,6 +67,8 @@ import {
 } from './tags.js';
 import { KnowledgePanel } from './KnowledgePanel.jsx';
 import { McpPanel } from './McpPanel.jsx';
+import { CanvasPanel } from './CanvasPanel.jsx';
+import { looksLikeDocument } from './canvas.js';
 import { ModelCompare } from './ModelCompare.jsx';
 import { loadLibrary, retrieve, formatContext, visibleDocuments, removeDocument, DEFAULT_EMBED_MODEL, extractDocument, renderPdfPages, embedTexts, normalise } from './rag.js';
 import { buildIndex, searchIndex, loadIndex, clearIndex, indexBytes, MAX_INDEXED } from './chatSearch.js';
@@ -3727,6 +3729,15 @@ function App() {
   const [attachments, setAttachments] = useState([]);
   const fileInputRef = useRef(null);
   const [mcpEnabled, setMcpEnabled] = useState(false);
+
+  /* The message currently open as a document, by index, and nothing else.
+   *
+   * The text is not held here. A document lives on the message it came from
+   * (`message.document`), so closing the panel and reopening it finds the work
+   * rather than the original answer -- and so that the transcript, which is a
+   * record of what was said, is never rewritten by editing. Two fields, two
+   * meanings. See src/CanvasPanel.jsx. */
+  const [canvasIndex, setCanvasIndex] = useState(null);
 
   /* Tools from MCP servers, if `mcp.json` names any.
    *
@@ -14558,6 +14569,24 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           <button className="action-btn" onClick={() => branchFromMessage(i)} title={t('msg.branch')}>
                             <GitBranch size={14} />
                           </button>
+                          {/* Long prose only. A four-word answer has nothing
+                              to edit, and an answer that is mostly code
+                              belongs in the artifact panel -- two buttons
+                              doing different things under the same word is
+                              worse than one button that is sometimes absent.
+                              A message that already has a document keeps the
+                              button whatever it now looks like, or the work
+                              would become unreachable. */}
+                          {msg.role === 'assistant' && selectedModel
+                            && (msg.document || looksLikeDocument(asWritten(msg.content))) && (
+                            <button
+                              className={`action-btn ${canvasIndex === i ? 'is-on' : ''}`}
+                              onClick={() => setCanvasIndex(canvasIndex === i ? null : i)}
+                              title={t('canvas.open')}
+                            >
+                              <FileEdit size={14} />
+                            </button>
+                          )}
                           {/* Only on answers, and only when there is a model to
                               do the checking. Verifying your own question is
                               not a thing. */}
@@ -17396,6 +17425,37 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           </div>
           );
         })()}
+
+        {/* A long answer, open as a document.
+         *
+         * Beside the transcript, in the same slot the artifact panel uses,
+         * because the two are the same idea for different material and having
+         * them appear in different places would make that harder to see rather
+         * than easier. Only one is ever open: `openArtifact` closes this, and
+         * this closes that. */}
+        {canvasIndex !== null && messages[canvasIndex] && (
+          <CanvasPanel
+            /* Keyed by chat and message, so switching chats with the panel
+               open rebuilds it rather than showing the new chat's text with
+               the old chat's undo history behind it. */
+            key={`${currentSessionId}:${canvasIndex}`}
+            initialText={messages[canvasIndex].document ?? asWritten(messages[canvasIndex].content)}
+            title={currentSession?.title || t('canvas.title')}
+            model={selectedModel}
+            language={promptLanguageName(lang)}
+            numCtx={numCtx}
+            onClose={() => setCanvasIndex(null)}
+            onToast={(message, kind) => toast(message, kind, 6000)}
+            onPersist={(document) => {
+              /* Written beside the answer, never over it. The transcript says
+                 what was said; the document is the thing being made. */
+              const at = canvasIndex;
+              updateCurrentSession({
+                messages: messages.map((m, n) => (n === at ? { ...m, document } : m)),
+              });
+            }}
+          />
+        )}
 
         {/* Who to start a chat with.
 

@@ -53,7 +53,7 @@ export const McpPanel = ({ tools, problems, config, loading, onRefresh }) => {
           {t('mcp.noConfig', { file: config.file })}
           <pre style={{
             marginTop: '0.4rem', padding: '0.6rem', overflowX: 'auto',
-            background: 'var(--bg-elevated)', borderRadius: '6px', fontSize: '0.7rem',
+            background: 'var(--surface-sunken)', borderRadius: '6px', fontSize: '0.7rem',
           }}>
 {`{
   "mcpServers": {
@@ -99,7 +99,7 @@ export const McpPanel = ({ tools, problems, config, loading, onRefresh }) => {
           key={`${problem.server || 'config'}-${i}`}
           style={{
             display: 'flex', gap: '0.4rem', marginTop: '0.6rem',
-            fontSize: '0.75rem', color: 'var(--danger, #e5484d)',
+            fontSize: '0.75rem', color: 'var(--danger)',
           }}
         >
           <TriangleAlert size={13} style={{ marginTop: '0.1rem', flexShrink: 0 }} />

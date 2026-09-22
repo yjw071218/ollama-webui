@@ -974,6 +974,59 @@ five pieces: two words, a card, three words, another card, three words. It also 
 restructure. A fence is the only thing that parses to a `<pre>`, so the renderer is mapped
 there and inline code never reaches it — and there is no longer a question to get wrong.
 
+### A long answer you can work on
+
+The artifact panel does this for code — preview it, run it, edit it. Everything that is
+*not* code had exactly one editing operation available, which was to ask again and hope.
+On a local model that costs four minutes and rewrites the nine paragraphs that were fine
+in order to fix the one that was not, and the nine come back subtly different, so the fix
+has to be checked against work that was already finished.
+
+**Open as a document** appears on any answer that is long prose (not on a short one, and
+not on one that is mostly code — that is the artifact panel's job, and two buttons doing
+different things under the same word is worse than one button that is sometimes absent).
+The answer opens beside the transcript. Select a paragraph, say what should change, and
+only that paragraph is rewritten.
+
+**A selection snaps outward to whole blocks** — paragraphs, headings, list items, a fenced
+code block entire. The obvious design is "rewrite whatever is selected" and it is wrong,
+because of the seam: a selection starting mid-sentence gives the model half a clause, and
+whatever comes back is grammatical on its own and meets the untouched half at an angle —
+*The report, which* + *it was submitted on Friday.* Nobody reads their way out of that, and
+every instance of it is a small loss of trust in the feature. Selecting three words of a
+paragraph rewrites that paragraph, which is what was meant anyway. A list is split per
+item, so fixing the third does not rewrite all five.
+
+**The whole document goes; one block comes back.** Both halves matter. Send only the block
+and the rewrite arrives in a different register from the rest of the piece, using a term
+the document defined two pages earlier. Ask for the whole document back and a
+one-paragraph change costs a full regeneration — and lets the model quietly revise
+paragraphs nobody asked about, which is the failure this feature exists to remove. So the
+document is context, with the block marked in place (`[[SELECTED]]`, because "the third
+paragraph" is a phrase models miscount), and only the marked part is asked for. A long
+document is trimmed to the neighbourhood of the block, never including trimming the block.
+
+**What comes back is not what is inserted.** A model asked for one paragraph returns one
+paragraph about half the time. The rest of the time it returns *Sure! Here's the revised
+paragraph:* and then the paragraph, or wraps it in a fence, or quotes it, or repeats the
+marker. Inserting that verbatim puts "Sure!" in the middle of somebody's report. The
+cleaning is deliberately conservative — a fence is unwrapped only when it encloses the
+entire reply, so a code sample inside a rewritten paragraph survives — and if cleaning
+leaves nothing, the original paragraph stays. A rewrite that silently deletes a paragraph
+is worse than one that does nothing, because the second is visible.
+
+**A rewrite lands as a proposal with a diff, not as an edit.** It takes ten to forty
+seconds, and comparing it against a paragraph that is no longer on screen is how a worse
+version gets accepted. The same one-column diff the regeneration pager uses. Undo reaches
+back through the whole session, because a run of small rewrites is the normal way this
+gets used and an undo that only reverses the last of them is an undo nobody trusts.
+
+**Editing never rewrites the conversation.** The document is stored beside the message it
+came from, not over it: the transcript is a record of what was said, the document is a
+thing being made, and letting the second overwrite the first means a conversation that no
+longer says what happened. Reopening finds the work; reading the transcript still finds the
+answer. Copy it out, or download it as Markdown.
+
 ### Agent tools (MCP toggle)
 When enabled, the model can emit `<TOOL_READ_FILE>`, `<TOOL_WRITE_FILE>`, `<TOOL_LIST_DIR>`,
 `<TOOL_SEARCH_FILES>` and `<TOOL_WEB_SEARCH>` tags; the dev-server middleware executes them
