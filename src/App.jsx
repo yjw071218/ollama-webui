@@ -66,6 +66,7 @@ import {
   filterByTags, parseTagQuery, suggestForChat, MAX_PER_CHAT,
 } from './tags.js';
 import { KnowledgePanel } from './KnowledgePanel.jsx';
+import { McpPanel } from './McpPanel.jsx';
 import { ModelCompare } from './ModelCompare.jsx';
 import { loadLibrary, retrieve, formatContext, visibleDocuments, removeDocument, DEFAULT_EMBED_MODEL, extractDocument, renderPdfPages, embedTexts, normalise } from './rag.js';
 import { buildIndex, searchIndex, loadIndex, clearIndex, indexBytes, MAX_INDEXED } from './chatSearch.js';
@@ -109,7 +110,7 @@ import { copyText } from './clipboard.js';
 import { buildSelectionPrompt, selectionTarget, SELECTION_ACTIONS } from './selection.js';
 import { promptsFrom, stepHistory, wantsHistory, NOT_BROWSING } from './promptHistory.js';
 import { canShare, shareText, shareBody, sharePicture, whyNoSheet } from './share.js';
-import { DRAWING_TAGS, schemasFor, toolCallsIn, nativeCallToTag, tagAttrs, TAG_ATTRS, canonicalToolTags } from './tools.js';
+import { DRAWING_TAGS, schemasFor, toolCallsIn, nativeCallToTag, tagAttrs, TAG_ATTRS, canonicalToolTags, MCP_TAG } from './tools.js';
 import { parseAssistantMessage } from './messageParts.js';
 import { localSttAvailable, recordAndTranscribe, whisperLanguage } from './stt.js';
 import { wantsNavigation, NAV_KEYS, step } from './messageNav.js';
@@ -3726,6 +3727,46 @@ function App() {
   const [attachments, setAttachments] = useState([]);
   const fileInputRef = useRef(null);
   const [mcpEnabled, setMcpEnabled] = useState(false);
+
+  /* Tools from MCP servers, if `mcp.json` names any.
+   *
+   * Fetched when the tools toggle goes on rather than at startup, because
+   * asking for the list is what *starts* those servers -- see server/mcp.js --
+   * and four Python processes spawned because the app was opened is four
+   * processes competing with the model for the machine.
+   *
+   * A server that cannot be reached lands in `mcpProblems` and is shown in
+   * Settings. It is deliberately not mentioned to the model: "a tool exists
+   * but is broken" is not a fact a model can do anything with, and naming it
+   * invites the model to keep trying it. */
+  const [mcpTools, setMcpTools] = useState([]);
+  const [mcpProblems, setMcpProblems] = useState([]);
+  const [mcpConfig, setMcpConfig] = useState(null);
+  const [mcpLoading, setMcpLoading] = useState(false);
+
+  const refreshMcpTools = useCallback(async () => {
+    setMcpLoading(true);
+    try {
+      const res = await fetch('/mcp/tools');
+      const data = await res.json();
+      setMcpTools(Array.isArray(data.tools) ? data.tools : []);
+      setMcpProblems(Array.isArray(data.problems) ? data.problems : []);
+      setMcpConfig({ file: data.file, configured: data.configured || 0, missing: !!data.missing });
+    } catch (e) {
+      // The middleware is not running. No tools, and nothing to report: this
+      // is the ordinary state of a build served without the server.
+      setMcpTools([]);
+      setMcpProblems([]);
+      setMcpConfig(null);
+    } finally {
+      setMcpLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (!mcpEnabled) return;
+    refreshMcpTools();
+  }, [mcpEnabled, refreshMcpTools]);
 
   // Filled from /system/stats, which the system monitor already polls. Only
   // used while the file tools are on -- see environmentPreamble.
@@ -9141,6 +9182,26 @@ Charts and graphs
             + '  any character, series or appearance tags for them yourself -- write only the\n'
             + '  scene: pose, expression, clothing changes, place, framing, lighting.'
           : '';
+        /* The tools from `mcp.json`, for a model with no native tool calling.
+         *
+         * Listed by name with their arguments as JSON, because that is the
+         * only shape that works for a schema this file has never seen. A model
+         * old enough to need the tag protocol is not going to be good at this,
+         * which is worth saying plainly rather than hiding: MCP is worth
+         * switching on with a model that does tool calls itself. Offering it
+         * anyway beats the alternative, which is a configured server whose
+         * tools are silently unavailable on half the models installed. */
+        /* One line of a description that may be a page of Markdown. Server
+           authors write these for a tool browser, not for a prompt, and the
+           whole of one pasted here would be most of a small model's context
+           spent on a tool it has not chosen yet. */
+        const firstLine = (text) => String(text || '').split(/\r?\n/)[0].trim();
+        const mcpToolPrompt = mcpTools.length === 0 ? '' : `
+From other tool servers -- call one with:
+  <TOOL_MCP server="name" tool="name">{"argument": "value"}</TOOL_MCP>
+${mcpTools.map(tool => `  ${tool.server} / ${tool.name}: ${firstLine(tool.description).slice(0, 160)}\n`
+    + `      arguments: ${JSON.stringify(tool.inputSchema?.properties || {}).slice(0, 300)}`).join('\n')}
+`;
         const drawPrompt = `Pictures and video
   <TOOL_GENERATE_IMAGE style="photo|anime" negative="what must not appear"
                        from="none|last_image" change="0.1-1.0" region="hair" count="1-4" aspect="16:9"
@@ -9276,7 +9337,7 @@ Environment
   <TOOL_TIME></TOOL_TIME>            Current date, time and timezone.
   <TOOL_LIST_MODELS></TOOL_LIST_MODELS>   Models installed in this Ollama.
   <TOOL_SYSTEM_INFO></TOOL_SYSTEM_INFO>   CPU, memory and GPU usage.
-
+${mcpToolPrompt}
 ${drawPrompt}${chartGuide}
 
 Rules
@@ -9391,7 +9452,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           ...(keepAlive ? { keep_alive: /^-?\d+$/.test(keepAlive) ? Number(keepAlive) : keepAlive } : {}),
           ...(resolvedFormat ? { format: resolvedFormat } : {}),
           // Structured tool calls, for a model that does them.
-          ...(useNativeTools ? { tools: schemasFor({ web: mcpEnabled, drawing: !drewThisTurn }) } : {}),
+          ...(useNativeTools ? { tools: schemasFor({ web: mcpEnabled, drawing: !drewThisTurn, mcp: mcpTools }) } : {}),
           options: buildOptions()
         })
       });
@@ -9890,6 +9951,48 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               ].filter(Boolean).join('\n');
             },
           },
+          /* Every tool from every MCP server, through one entry.
+           *
+           * The built-in tools each get their own registry entry because their
+           * arguments are known in this file. An MCP tool's are not -- the
+           * schema comes from a server this codebase has never seen -- so the
+           * arguments travel as JSON in the tag body and the server name and
+           * tool name as attributes. One entry, however many servers are
+           * configured, because the alternative is a registry that has to be
+           * rebuilt whenever `mcp.json` changes. */
+          {
+            name: MCP_TAG,
+            pattern: /<TOOL_MCP server="([^"]*)" tool="([^"]*)">([\s\S]*?)<\/TOOL_MCP>/,
+            run: async (m) => {
+              const server = m[1];
+              const tool = m[2];
+              let args = {};
+              try { args = JSON.parse(m[3] || '{}'); } catch (e) { /* the tool sees an empty call */ }
+              addLog(`[tool] ${server}: ${tool}`, 'info');
+              try {
+                const res = await fetch('/mcp/call', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({ server, tool, args }),
+                  signal,
+                });
+                const data = await res.json();
+                if (!data.success) return `The '${tool}' tool could not be run: ${data.error}`;
+                /* A tool that failed is a result, not an exception. "Your
+                   query had a syntax error" is something the model can act on
+                   and should see; it is not the same as the server being
+                   unreachable, and flattening the two would leave the model
+                   retrying a query that will never work. */
+                const header = data.isError
+                  ? `The '${tool}' tool reported a problem:`
+                  : `Result of ${tool} (from the ${server} server):`;
+                return `${header}\n${data.text}`;
+              } catch (e) {
+                if (e.name === 'AbortError') throw e;
+                return `The '${tool}' tool could not be reached: ${e.message}`;
+              }
+            },
+          },
           {
             name: 'TOOL_READ_FILE',
             pattern: /<TOOL_READ_FILE>([\s\S]*?)<\/TOOL_READ_FILE>/,
@@ -10364,7 +10467,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
          * function is refused rather than run. */
         const nativeText = nativeCalls
           .map(call => {
-            const tag = nativeCallToTag(call.name, call.args);
+            const tag = nativeCallToTag(call.name, call.args, { mcp: mcpTools });
             if (!tag) addLog(`[tool] model asked for '${call.name}', which does not exist`, 'error');
             return tag;
           })
@@ -15192,6 +15295,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   { id: 'models', label: t('settings.models') },
                   { id: 'prompts', label: t('settings.prompts') },
                   { id: 'knowledge', label: t('settings.knowledge') },
+                  { id: 'tools', label: t('settings.tools') },
                   { id: 'memory', label: t('settings.memory') },
                   { id: 'voice', label: t('settings.voice') },
                   { id: 'account', label: t('settings.account') },
@@ -16508,6 +16612,18 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     // to by name rather than by id.
                     chats={sessions}
                     folders={folders}
+                  />
+                </>
+              )}
+
+              {settingsTab === 'tools' && (
+                <>
+                  <McpPanel
+                    tools={mcpTools}
+                    problems={mcpProblems}
+                    config={mcpConfig}
+                    loading={mcpLoading}
+                    onRefresh={refreshMcpTools}
                   />
                 </>
               )}

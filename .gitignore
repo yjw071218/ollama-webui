@@ -53,3 +53,14 @@ server/data/
 
 # Copied from node_modules by scripts/pdf-assets.mjs, not authored here.
 public/pdfjs
+
+# The engines this app runs -- ACE-Step, GPT-SoVITS -- live here, whole: their
+# own Python, their weights, your trained voices. Tens of gigabytes that are
+# neither code nor the project's to publish. See engines/README.md.
+engines/*
+!engines/README.md
+
+# Which tool servers the model may reach, and the keys some of them need. A
+# file that names programs to spawn is a permission grant for this machine, not
+# project data. See server/mcp.js.
+mcp.json

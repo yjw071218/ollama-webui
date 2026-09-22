@@ -53,6 +53,17 @@ import {
 } from './webText.js';
 import { createLlamaRoutes, backendOf } from './llamacpp.js';
 import { createStudioRoutes } from './studio.js';
+import { commitStats } from './resourceSafety.js';
+import { vramGuard } from './vram.js';
+import { listSchedules, createSchedule, setScheduleEnabled, deleteSchedule } from './serverSchedules.js';
+import { enginesFor, ENGINE_SPECS } from './engines.js';
+import { createMusicRoutes } from './music.js';
+import { createMcpRoutes } from './mcp.js';
+import { readRequestBody } from './requestBody.js';
+import { readChatJob, replayChatJob, cancelChatJob, followChatJob, liveChatJobs } from './chatJobs.js';
+import {
+  pushPublicKey, rememberSubscription, forgetSubscription, lastFinished, subscriptionLabel,
+} from './push.js';
 
 
 // Previous CPU tick snapshot; usage is only meaningful as a delta.
@@ -67,7 +78,12 @@ const NVIDIA_QUERY = [
   '--format=csv,noheader,nounits',
 ];
 
-const readGpuStats = () => new Promise((resolve) => {
+let gpuProbePending = null;
+const readGpuStats = () => {
+  if (!gpuProbePending) gpuProbePending = probeGpuStats().finally(() => { gpuProbePending = null; });
+  return gpuProbePending;
+};
+const probeGpuStats = () => new Promise((resolve) => {
   if (!gpuProbeAvailable) return resolve([]);
 
   execFile('nvidia-smi', NVIDIA_QUERY, { timeout: 2500, windowsHide: true }, (err, stdout) => {
@@ -415,9 +431,79 @@ export const createApiRoutes = (env = {}, options = {}) => {
   const routes = [];
   const route = (routePath, handler) => routes.push({ path: routePath, handler });
 
+  route('/api/chat/replay', (req, res) => {
+    const id = new URL(req.url, 'http://localhost').searchParams.get('id');
+    const job = readChatJob(id);
+    if (!job) {
+      res.statusCode = 404;
+      res.end(JSON.stringify({ error: 'Chat generation not found' }));
+      return;
+    }
+    const replayUrl = new URL(req.url, 'http://localhost');
+    if (replayUrl.searchParams.get('follow') === '1') return followChatJob(req, res, job, replayUrl.searchParams.get('offset'));
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(replayChatJob(job));
+  });
+
+  /* An answer another of this reader's devices is writing, right now.
+   *
+   * The same gap `/studio/live` closes for pictures, for the words. A second
+   * device does see the answer arrive -- the conversation is saved every few
+   * hundred milliseconds and uploaded, so the phone gets it in chunks, a second
+   * or two behind and in lumps. The live bytes were there all along:
+   * `/api/chat/replay?follow=1` streams them to anyone, from any offset, and
+   * reconnects mid-character. What the phone could not do was learn the id,
+   * which lived only in the localStorage of the browser that started the turn.
+   *
+   * So it is asked for here, by conversation, for the account asking. The
+   * answer is the id and nothing else; the bytes come from the route that
+   * already served them. See `live` in server/chatJobs.js.
+   *
+   * `authenticate` is defined further down this function and read when the
+   * request arrives, which is long after. */
+  route('/api/chat/live', (req, res) => {
+    const url = new URL(req.url, 'http://localhost');
+    const chat = url.searchParams.get('chat') || '';
+    res.setHeader('Content-Type', 'application/json');
+    res.setHeader('Cache-Control', 'no-store');
+
+    /* Asked about one id instead: "is the generation I wrote down still a
+       generation?" A browser keeps the id of the turn it started so it can pick
+       the answer up after a reload -- and an id this server has never heard of
+       is one that finished for good, whatever that browser wrote down. Asked
+       before the app takes the screen over for it; see the restore in App.jsx
+       for the loop that came of not asking. */
+    const id = url.searchParams.get('id') || '';
+    if (id) {
+      const job = readChatJob(id);
+      return res.end(JSON.stringify({ success: true, running: !!job && !job.finished, known: !!job }));
+    }
+
+    if (!chat) {
+      res.statusCode = 400;
+      return res.end(JSON.stringify({ success: false, error: 'A chat is required' }));
+    }
+    const [job = null] = liveChatJobs(authenticate(req).user?.id || '', chat);
+    res.end(JSON.stringify({ success: true, job }));
+  });
+
+  route('/api/chat/cancel', (req, res) => {
+    let body = '';
+    req.setEncoding('utf8');
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      let id = '';
+      try { id = JSON.parse(body).id || ''; } catch (e) { /* invalid body */ }
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: cancelChatJob(id) }));
+    });
+  });
+
 
     route('/localfs/read',(req, res) => {
       let body = '';
+      req.setEncoding('utf8');
       req.on('data', chunk => body += chunk.toString());
       req.on('end', () => {
         try {
@@ -439,6 +525,7 @@ export const createApiRoutes = (env = {}, options = {}) => {
 
     route('/localfs/write',(req, res) => {
       let body = '';
+      req.setEncoding('utf8');
       req.on('data', chunk => body += chunk.toString());
       req.on('end', () => {
         try {
@@ -456,6 +543,7 @@ export const createApiRoutes = (env = {}, options = {}) => {
     
     route('/localfs/list',(req, res) => {
       let body = '';
+      req.setEncoding('utf8');
       req.on('data', chunk => body += chunk.toString());
       req.on('end', () => {
         try {
@@ -485,6 +573,7 @@ export const createApiRoutes = (env = {}, options = {}) => {
 
     route('/localfs/search',(req, res) => {
       let body = '';
+      req.setEncoding('utf8');
       req.on('data', chunk => body += chunk.toString());
       req.on('end', () => {
         try {
@@ -526,6 +615,7 @@ export const createApiRoutes = (env = {}, options = {}) => {
     // ---- MCP: fetch a page ----
     route('/mcp/fetch',(req, res) => {
       let body = '';
+      req.setEncoding('utf8');
       req.on('data', chunk => { body += chunk.toString(); });
       req.on('end', async () => {
         const json = (payload, status = 200) => {
@@ -595,6 +685,7 @@ export const createApiRoutes = (env = {}, options = {}) => {
 
     const readBody = (req, limit = 1024 * 1024) => new Promise((resolve, reject) => {
       let body = '';
+      req.setEncoding('utf8');
       req.on('data', chunk => {
         body += chunk;
         if (body.length > limit) {
@@ -1163,10 +1254,100 @@ export const createApiRoutes = (env = {}, options = {}) => {
       addListener(auth.user.id, req, res);
     });
 
+    /* ------------------------------------------------ schedules on the server
+
+       An account's schedules, answered here whether or not a browser is open.
+       Signed-in only: a guest has no chats on this server to answer in, and
+       keeps the browser runner. See server/serverSchedules.js. */
+    route('/api/schedules', async (req, res) => {
+      if (req.method === 'GET') {
+        const auth = authenticate(req);
+        if (!auth.user) return sendJson(res, { success: false, error: 'Not signed in.', code: 'unauthenticated' }, 401);
+        return sendJson(res, { success: true, schedules: listSchedules(auth.user.id) });
+      }
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      try {
+        const made = createSchedule(auth.user.id, await jsonBody(req));
+        if (made.error) return sendJson(res, { success: false, error: made.error }, 400);
+        sendJson(res, { success: true, schedule: made.schedule });
+      } catch (e) {
+        sendError(res, e);
+      }
+    });
+
+    route('/api/schedules/enabled', async (req, res) => {
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      try {
+        const { id, enabled } = await jsonBody(req);
+        sendJson(res, { success: setScheduleEnabled(auth.user.id, id, !!enabled) });
+      } catch (e) {
+        sendError(res, e);
+      }
+    });
+
+    route('/api/schedules/delete', async (req, res) => {
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      try {
+        const { id } = await jsonBody(req);
+        sendJson(res, { success: deleteSchedule(auth.user.id, id) });
+      } catch (e) {
+        sendError(res, e);
+      }
+    });
+
     route('/api/auth/stats', (req, res) => {
       const auth = guard(req, res, { methods: ['GET'] });
       if (!auth) return;
       sendJson(res, { success: true, ownerId: auth.user.id, ...accountStats(auth.user.id) });
+    });
+
+    /* --------------------------------------------------------------- push
+
+       The half of "tell me when it is done" that works when the app is not
+       open anywhere. See server/push.js for why these carry no payload, and
+       src/notify.js for the half that works when it is. */
+
+    // The key a browser subscribes with. Public by definition -- it is handed
+    // to every browser that subscribes -- and '' where none can be made.
+    route('/api/push/key', (req, res) => {
+      sendJson(res, { success: true, key: pushPublicKey() });
+    });
+
+    route('/api/push/subscribe', async (req, res) => {
+      const auth = guard(req, res, { methods: ['POST'] })
+        // A guest can ask for notifications too; the account is the scope, and
+        // '' is the guest's. `guard` refuses that, so it is only used to check
+        // the method and CSRF when there *is* a session.
+        || (authenticate(req).user ? null : { user: null, session: null });
+      if (!auth) return;
+      try {
+        const body = await jsonBody(req);
+        const kept = rememberSubscription(auth.user?.id || '', body.subscription, body.label || '');
+        sendJson(res, kept ? { success: true } : { success: false, error: 'That is not a push endpoint.' }, kept ? 200 : 400);
+      } catch (e) {
+        sendError(res, e);
+      }
+    });
+
+    route('/api/push/unsubscribe', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, { success: false, error: 'POST required.' }, 405);
+      try {
+        const body = await jsonBody(req);
+        sendJson(res, { success: true, forgotten: forgetSubscription(body.endpoint) });
+      } catch (e) {
+        sendError(res, e);
+      }
+    });
+
+    /* What just finished, for a worker that has been woken with no payload to
+       read. The sentence is the one the app handed over when it subscribed,
+       because the worker has no translations of its own. */
+    route('/api/push/last', (req, res) => {
+      const owner = authenticate(req).user?.id || '';
+      sendJson(res, { success: true, last: lastFinished(owner), label: subscriptionLabel(owner) });
     });
 
     /* ------------------------------------------------------- share links */
@@ -1181,9 +1362,11 @@ export const createApiRoutes = (env = {}, options = {}) => {
         // A transcript is not, so this route is given the share cap plus room
         // for the JSON around it -- and `createShare` still checks the real
         // size, because the wrapper is not what is being stored.
-        const { chatId, title, snapshot, expiresInDays } =
+        const { chatId, title, snapshot, picture, expiresInDays } =
           await jsonBody(req, MAX_SHARE_BYTES + 64 * 1024);
-        const made = createShare(auth.user.id, { chatId, title, snapshot, expiresInDays });
+        // `picture` publishes one picture instead of a transcript; it names a
+        // file rather than carrying it. See `createShare`.
+        const made = createShare(auth.user.id, { chatId, title, snapshot, picture, expiresInDays });
         sendJson(res, { success: true, ...made });
       } catch (e) {
         sendJson(res, { success: false, error: e.message, code: e.code || 'share' }, e.status || 400);
@@ -1205,7 +1388,12 @@ export const createApiRoutes = (env = {}, options = {}) => {
       const shared = readShare(token);
       res.setHeader('Cache-Control', 'no-store');
       if (!shared) return sendJson(res, { success: false, error: 'That link is not available.' }, 404);
-      sendJson(res, { success: true, share: shared });
+      /* Everything except the file it names. The page asks for the picture by
+         token and gets it from `/api/share/image`; handing the browser the
+         filename as well would be handing it a second address for the same
+         bytes, one that revoking the link does not reach. */
+      const { file, ...page } = shared;
+      sendJson(res, { success: true, share: page });
     });
 
     route('/api/share/list', (req, res) => {
@@ -1262,6 +1450,7 @@ export const createApiRoutes = (env = {}, options = {}) => {
     // list from named publishers, not a page of links.
     route('/mcp/news',(req, res) => {
       let body = '';
+      req.setEncoding('utf8');
       req.on('data', chunk => { body += chunk.toString(); });
       req.on('end', async () => {
         const json = (payload, status = 200) => {
@@ -1298,6 +1487,7 @@ export const createApiRoutes = (env = {}, options = {}) => {
 
     route('/mcp/search',(req, res) => {
       let body = '';
+      req.setEncoding('utf8');
       req.on('data', chunk => { body += chunk.toString(); });
       req.on('end', async () => {
         const json = (payload, status = 200) => {
@@ -1326,6 +1516,25 @@ export const createApiRoutes = (env = {}, options = {}) => {
     // ---- System stats ----
     // A browser cannot see host CPU/GPU/RAM, so the dev server samples them.
     // CPU load is a delta between polls, hence the module-level snapshot.
+
+    /* The card back to the language model, after a picture has had it.
+     *
+     * Taking it *off* for a picture has always happened (`releaseLlm` in
+     * server/studio.js). Putting it back waited until something next asked a
+     * question -- so a reply that draws a picture and then keeps writing paid
+     * for a 22GB reload in the middle of itself, with the reader watching.
+     * Asked for as soon as the picture is finished instead, and answered
+     * straight away: the loading happens behind whatever the app does next. */
+    route('/api/vram/warm', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, { success: false, error: 'POST required.' }, 405);
+      let model = '';
+      try { ({ model } = await jsonBody(req)); } catch (e) { /* no model, nothing to warm */ }
+      sendJson(res, { success: true, warming: !!model });
+      if (!model) return;
+      // Deliberately not awaited by the response: a cold model is minutes and
+      // an HTTP request held open for it is a request that times out.
+      vramGuard(env).warmLlm(String(model)).catch(() => {});
+    });
 
     route('/system/stats',async (req, res) => {
       const json = (payload, status = 200) => {
@@ -1373,6 +1582,10 @@ export const createApiRoutes = (env = {}, options = {}) => {
             cores,
           },
           memory: { total: totalMem, free: freeMem, used: totalMem - freeMem },
+          /* Commit -- RAM plus the page file -- is what a model load actually
+             needs, and running out of it is not slow, it is ComfyUI exiting.
+             See commitAvailable in server/resourceSafety.js. */
+          commit: await commitStats().catch(() => null),
           gpus: await readGpuStats(),
           host: { platform: os.platform(), uptime: os.uptime(), load: os.loadavg() },
         });
@@ -1533,52 +1746,49 @@ export const createApiRoutes = (env = {}, options = {}) => {
       });
     });
 
-    // GPT-SoVITS lives outside this repository — it is tens of gigabytes of
-    // weights and a bundled Python runtime. The web UI only needs to know where
-    // it is, and that comes from .env so no one's install layout ends up here.
-    const ttsRoot = env.GPT_SOVITS_PATH || '';
-    const ttsHost = env.TTS_HOST || '127.0.0.1';
-    const ttsPort = Number(env.TTS_PORT || 9880);
+    /* The engines this app runs: GPT-SoVITS for speech, ACE-Step for songs.
+     *
+     * They live in `engines/` now -- inside the project, gitignored, started by
+     * the app when something needs one. `.env` still wins where it names a
+     * path, so an install kept elsewhere on purpose goes on working. See
+     * server/engines.js. */
+    const engines = enginesFor(env);
 
-    route('/api/tts-status',(req, res) => {
-      res.setHeader('Content-Type', 'application/json');
-      res.end(JSON.stringify({
-        configured: !!ttsRoot,
-        installed: !!ttsRoot && fs.existsSync(ttsRoot),
-        root: ttsRoot ? path.basename(ttsRoot) : null,   // never the full path
-        host: ttsHost,
-        port: ttsPort,
-      }));
+    route('/api/engines', async (req, res) => {
+      sendJson(res, { success: true, engines: await engines.list() });
     });
 
-    route('/api/start-tts',(req, res) => {
-      res.setHeader('Content-Type', 'application/json');
-      if (!ttsRoot) {
-        res.statusCode = 501;
-        res.end(JSON.stringify({
-          success: false,
-          error: 'GPT_SOVITS_PATH is not set. Copy .env.example to .env and point it at your GPT-SoVITS folder.',
-        }));
-        return;
-      }
-      if (!fs.existsSync(ttsRoot)) {
-        res.statusCode = 404;
-        res.end(JSON.stringify({ success: false, error: `GPT_SOVITS_PATH does not exist: ${ttsRoot}` }));
-        return;
-      }
-      try {
-        const script = path.resolve(process.cwd(), 'tts', 'start-tts-api.ps1');
-        const ps = spawn('powershell.exe', ['-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', script], {
-          detached: true,
-          stdio: 'ignore',
-          cwd: process.cwd(),
-        });
-        ps.unref();
-        res.end(JSON.stringify({ success: true }));
-      } catch (e) {
-        res.statusCode = 500;
-        res.end(JSON.stringify({ success: false, error: e.message }));
-      }
+    route('/api/engines/start', async (req, res) => {
+      let body = {};
+      try { body = await jsonBody(req); } catch (e) { return sendJson(res, { success: false, error: e.message }, 400); }
+      const id = String(body.id || '').trim();
+      if (!ENGINE_SPECS[id]) return sendJson(res, { success: false, error: `Unknown engine: ${id}` }, 400);
+      /* Not waited for by default: starting one is minutes of loading weights,
+         and a browser that waits for it has already given up. The caller polls
+         /api/engines, which is the same question asked cheaply. */
+      const started = await engines.ensure(id, { wait: body.wait === true });
+      sendJson(res, { success: started.ok !== false, ...started }, started.ok === false ? 502 : 200);
+    });
+
+    // Kept at their old addresses: the Voice settings and the speak button call
+    // these, and an engine is not a reason to change what they call.
+    route('/api/tts-status', async (req, res) => {
+      const voice = await engines.status('gpt-sovits');
+      sendJson(res, {
+        configured: voice.installed,
+        installed: voice.installed,
+        root: voice.root,             // the folder's name, never the full path
+        host: engines.resolve('gpt-sovits').host,
+        port: voice.port,
+        running: voice.running,
+        problem: voice.problem,
+      });
+    });
+
+    route('/api/start-tts', async (req, res) => {
+      const started = await engines.ensure('gpt-sovits', { wait: false });
+      if (started.ok === false) return sendJson(res, { success: false, error: started.error }, 502);
+      sendJson(res, { success: true, ...started });
     });
 
   /* The inference backend.
@@ -1599,7 +1809,24 @@ export const createApiRoutes = (env = {}, options = {}) => {
    * take a path away from anything, and they answer with a legible "ComfyUI is
    * not running" rather than a 404 when it is not — which is the difference
    * between a feature that looks broken and one that says what to start. */
-  for (const studioRoute of createStudioRoutes(env)) routes.push(studioRoute);
+  /* `identify` is only for `/studio/live`, which says what is being generated
+     in one conversation: that answer belongs to the account that asked for the
+     picture and to nobody else. Every other studio route is unchanged. */
+  for (const studioRoute of createStudioRoutes(env, {
+    identify: (req) => String(authenticate(req).user?.id || ''),
+  })) routes.push(studioRoute);
+
+  /* Songs, for the same reason and on the same terms: mounted always, and they
+   * say "ACE-Step is not installed" rather than 404ing. See server/music.js. */
+  for (const musicRoute of createMusicRoutes(env, {
+    identify: (req) => String(authenticate(req).user?.id || ''),
+  })) routes.push(musicRoute);
+
+  /* Tools from servers this repository did not write. Mounted always and inert
+     until `mcp.json` exists: with no config the routes answer with an empty
+     list and the name of the file they looked for, which is what lets the
+     panel explain itself instead of 404ing. See server/mcp.js. */
+  for (const mcpRoute of createMcpRoutes(env, { readBody: readRequestBody })) routes.push(mcpRoute);
 
   return allowLocalFs
     ? routes

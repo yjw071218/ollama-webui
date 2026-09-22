@@ -982,6 +982,64 @@ and feeds the result back. URLs in your prompt are fetched and injected as conte
 > The `/localfs` middleware reads and writes anywhere your user account can reach, and only
 > exists while the Vite dev server is running. Keep it off untrusted networks.
 
+### Tools this repository did not write
+
+The built-in tools are a fixed set of eleven, and they are the eleven somebody thought of.
+That is a reasonable list and it is also a ceiling: wanting the model to query a SQLite
+database, read a git log or drive a headless browser has meant writing a twelfth tool into
+this repository, and a thirteenth, for ever.
+
+**The toggle has said "MCP" since long before any of this existed.** It now means it. A
+Model Context Protocol server describes its tools over JSON-RPC and anything speaking the
+protocol can offer them, so the list of tools stops being a property of this codebase.
+There are hundreds already written.
+
+Nothing is contacted until a file says so. Put `mcp.json` beside `package.json` — the same
+file Claude Desktop and the rest of the ecosystem use, so a server configured elsewhere can
+be pasted straight in:
+
+```json
+{
+  "mcpServers": {
+    "sqlite":  { "command": "uvx", "args": ["mcp-server-sqlite", "--db-path", "D:/notes.db"] },
+    "git":     { "command": "npx", "args": ["-y", "@modelcontextprotocol/server-git"], "allow": ["git_log", "git_diff"] },
+    "docs":    { "url": "https://example.internal/mcp" }
+  }
+}
+```
+
+`mcp.json` is gitignored: a file naming programs to spawn is a permission grant for this
+machine, not project data. `MCP_CONFIG` names a different path. `"disabled": true` keeps a
+server without starting it, and `"allow"` offers some of its tools rather than all of them
+— which is not paranoia about the server but arithmetic about the model, since twenty tool
+descriptions is a large part of a small model's context spent on tools it will not use, and
+it measurably worsens its choice among the ones it will.
+
+Servers are started on the first request that needs their tools, not when the app boots:
+four MCP servers is four Node or Python processes, and starting them because a tab was
+opened means paying for them on a machine whose whole point is having RAM free for a model.
+A server that dies is started again by the next call. One that will not start at all costs
+its own tools and is named, with the reason, in Settings → Tools — because every failure
+here is otherwise invisible: the model simply answers without those tools, perfectly
+fluently, and the only evidence is an answer that could have been better.
+
+Both transports work. **stdio** is a child process speaking newline-delimited JSON-RPC
+(note *newline-delimited* — the `Content-Length` framing belongs to the Language Server
+Protocol, which MCP resembles and is not), and its stderr is drained and kept, because a
+server that fails to start says why there and nowhere else. **HTTP** is the same JSON-RPC
+posted to a URL, answered as either JSON or one SSE event at the server's discretion, with
+the session id echoed back on every later request.
+
+A tool from a server is offered to the model as `mcp_<server>_<tool>`, which is both how
+two servers can each have a `search` and how a name arriving from outside this repository
+is prevented from colliding with `read_file`. Settings → Tools lists what came back.
+
+> An MCP server is a program this app will run on your machine, with your account's
+> permissions, chosen by the contents of a file. That is the whole of the security model,
+> and it is why there is no discovery, no default server and no way to add one from the
+> browser — a web page that could choose which programs the server spawns would be remote
+> code execution with a settings icon on it, and this app is routinely opened from a phone.
+
 ### Sampling presets
 - **Precise / Balanced / Creative / Repeatable** as starting points, plus any number of
   named snapshots of the whole generation panel

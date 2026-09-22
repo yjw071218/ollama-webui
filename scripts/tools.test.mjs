@@ -140,7 +140,12 @@ eq('a call with no name is discarded',
 const app = fs.readFileSync(path.resolve(HERE, '../src/App.jsx'), 'utf8').replace(/\r\n/g, '\n');
 
 check('the schemas are sent only when the model has tools',
-  /useNativeTools \? \{ tools: schemasFor\(\{ web: mcpEnabled, drawing: !drewThisTurn \}\) \} : \{\}/.test(app));
+  /useNativeTools \? \{ tools: schemasFor\(\{ web: mcpEnabled, drawing: !drewThisTurn, mcp: mcpTools \}\) \} : \{\}/.test(app));
+// Tools from MCP servers ride on the same switch as everything else that
+// reaches outside the browser, rather than on one of their own.
+check('and tools from servers are offered on the web switch',
+  /if \(!web \|\| !mcp\?\.length\) return built;/.test(
+    fs.readFileSync(path.resolve(HERE, '../src/tools.js'), 'utf8')));
 check('and the model is asked rather than assumed',
   /const useNativeTools = modelSupportsTools\(activeModel\);/.test(app));
 /* What is *offered* is no longer all-or-nothing. Fetching a page and reading a
@@ -170,9 +175,26 @@ check('and so are the calls already spent',
 /* And a picture that worked ends the turn. The leg after it was allowed one
    sentence, and a model that had drawn a picture it could not see sometimes
    spent it saying it cannot draw — under the picture. */
-check('a turn that only drew, and drew, is not handed back to the model',
-  /const drewEverything = dropped\.length === 0[\s\S]{0,200}?turnImages\.length - picturesBefore >= running\.length/.test(app)
-  && /if \(drewEverything\) \{[\s\S]{0,1400}?\} else \{[\s\S]{0,1800}?handleSend\(null, nextMessages, activeModel\)/.test(app));
+{
+  /* Checked as an order rather than as a distance. A window of N characters
+     between two landmarks fails the day somebody writes a comment between
+     them, which says nothing about whether the code is still right. */
+  const drewAll = app.indexOf('const drewEverything = dropped.length === 0');
+  const branch = app.indexOf('if (drewEverything) {', drewAll);
+  const otherwise = app.indexOf('} else {', branch);
+  const handedBack = app.indexOf('handleSend(null, nextMessages, activeModel)', otherwise);
+  check('a turn that only drew, and drew, is not handed back to the model',
+    drewAll > 0
+    && /turnImages\.length - picturesBefore >= running\.length/.test(app.slice(drewAll, branch))
+    && branch > drewAll && otherwise > branch && handedBack > otherwise,
+    `${drewAll} ${branch} ${otherwise} ${handedBack}`);
+
+  /* And a turn the reader stopped is not handed back either. Stopping used to
+     stop only what was running at that instant -- the picture -- while the next
+     leg made an AbortController of its own and carried on. */
+  check('  nor is one the reader stopped',
+    /if \(signal\.aborted\) \{[\s\S]{0,200}?the turn ends here/.test(app.slice(branch, handedBack)));
+}
 check('and "the picture is made" is said only when one was',
   /const drew = turnImages\.length > picturesBefore;/.test(app));
 check('which reads the capability /api\\/show already reports',
@@ -238,6 +260,20 @@ check('a number with no passage behind it stays plain text',
 check('and code is left alone',
   /if \(node\.tagName === 'code' \|\| node\.tagName === 'pre'\) return;/.test(app));
 check('pressing one opens the passage', /setOpenCitation\(\{ n, \.\.\.passage \}\)/.test(app));
+
+/* Reported: Japanese lyrics came out as "加速する鼓動<0xE3><0x80><0x80>デジタルな空".
+   gemma4 spells a character it has no merged token for as its UTF-8 bytes, and a
+   native call's arguments reached the song as written -- the text of an answer
+   was decoded, the arguments were not. */
+{
+  const T2 = { parseToolArgs, nativeCallToTag };
+  const args = T2.parseToolArgs('{"style":"j-pop","lyrics":"加速する鼓動<0xE3><0x80><0x80>デジタルな空","parts":["<0xEB><0x98><0xA0>방각하"]}');
+  check('byte tokens in a native call\'s arguments are characters again', args.lyrics === '加速する鼓動\u3000デジタルな空' && args.parts[0] === '똠방각하', JSON.stringify(args));
+  check('  whether the arguments arrive as JSON text or as an object',
+    T2.parseToolArgs({ prompt: 'a<0xE3><0x80><0x80>b' }).prompt === 'a\u3000b');
+  check('  and so is the tag a native call becomes',
+    T2.nativeCallToTag('generate_music', { style: 'j-pop', lyrics: '光の粒が<0xE3><0x80><0x80>降り注ぐ街' }).includes('光の粒が\u3000降り注ぐ街'));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

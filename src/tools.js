@@ -23,6 +23,8 @@
  * have been. One implementation, two ways in.
  */
 
+import { decodeByteFallback } from './byteFallback.js';
+
 /**
  * The tools, in Ollama's format.
  *
@@ -201,20 +203,39 @@ export const TOOL_SCHEMAS = [
         + 'picture: name the subject, the setting, the lighting and the framing. '
         + 'Write it in English even when the conversation is in another language, '
         + 'because that is what these models were trained on. Takes about a minute, '
-        + 'so do not use it to decorate an answer nobody asked to be illustrated.',
+        + 'so do not use it to decorate an answer nobody asked to be illustrated. '
+        /* "그려줘" is the same word for both, and a diffusion model handed
+           "r = 4cos3θ" returns a drawing of a graph -- axes, a squiggle, and
+           numbers that are not the ones asked for. */
+        + 'Not for an equation, a function, a curve or a set of numbers: those are '
+        + 'plotted in the reply itself, exactly, and the writing instructions say how.',
       parameters: {
         type: 'object',
         properties: {
           prompt: {
             type: 'string',
-            description: 'The finished picture, described. Not an instruction.',
+            /* "여캐 그려줘" was coming back as `1girl, solo`. A picture model
+               given no description does not draw an unspecified person -- it
+               draws its own default one, the same every time. */
+            description: 'The finished picture, described. Not an instruction. When there is a '
+              + 'person in it, say how they look even if the request did not: hair colour and '
+              + 'cut, eye colour, the whole outfit, expression, pose, framing, and where they '
+              + 'are. A prompt that leaves the appearance out gets the same stock face every '
+              + 'time, so design somebody and write them down. Preserve any supplied unusual '
+              + 'hair colour or hairstyle instead of normalising it to a stock black/brown '
+              + 'colour, long hair, bob, or ponytail unless the user asks for that change. '
+              + 'When style is "photo" (Krea 2), write this as natural descriptive English '
+              + 'sentences and never as a comma-separated Danbooru tag list. Only use the '
+              + 'tag-first format when style is "anime" (Anima).',
           },
           style: {
             type: 'string',
             enum: ['photo', 'anime'],
             description:
               'photo for realism and general illustration, anime for anime and '
-              + 'character art. Defaults to photo.',
+              + 'character art. Defaults to photo. This choice also controls prompt format: '
+              + 'photo means natural English for Krea 2; anime means Danbooru tags followed '
+              + 'by one or two natural-language sentences for Anima.',
           },
           /* Written by the model, because it is the half of a diffusion prompt
              that depends on what is being drawn: a portrait wants "extra
@@ -241,20 +262,27 @@ export const TOOL_SCHEMAS = [
               'last_image edits the most recent picture in this conversation '
               + 'instead of drawing a new one — use it whenever they ask to '
               + 'change, fix, adjust or re-colour the picture they can already '
-              + 'see. The prompt then describes the whole finished picture as '
-              + 'it should now be, not only the part that changes. Defaults to '
-              + 'none, which starts from nothing.',
+              + 'see. Without `region` the prompt describes the whole finished '
+              + 'picture as it should now be, not only the part that changes. With '
+              + '`region` it describes the subject and what that part should now '
+              + 'look like, and leaves out everything else in the picture: whatever '
+              + 'it names is drawn inside the region, so a toy she is already '
+              + 'holding comes back as a second one. Defaults to none, which starts '
+              + 'from nothing.',
           },
           change: {
             type: 'number',
             description:
-              'With from=last_image, how much to change. Measured on these '
-              + 'models rather than guessed: 0.5 retouches and keeps the '
-              + 'colours and clothing; 0.65 restyles the clothing and details '
+              'With from=last_image, how much to change. Without `region`, for the '
+              + 'whole picture, measured on these models: 0.5 retouches and keeps '
+              + 'the colours and clothing; 0.65 restyles the clothing and details '
               + 'but the colours survive; 0.8 is what it takes to change a '
               + 'colour — hair, eyes — while keeping the pose and composition. '
-              + 'Above 0.85 it is a different picture. Defaults to 0.65, or to '
-              + '0.9 when `region` is set, because then only that part is redrawn.',
+              + 'Above 0.85 it is a different picture. Defaults to 0.65. '
+              + 'With `region`, only that part is redrawn and the rest is kept '
+              + 'exactly. Use 0.4–0.65 to preserve identity and refine details; '
+              + '0.85–1.0 for replacing an outfit or hairstyle. Keep identifying '
+              + 'features in the prompt. Lower values are honored; default 0.65.',
           },
           /* Where the change is. Without it an edit redraws the whole picture
              at `change`, and asking for shorter hair came back with a new
@@ -284,6 +312,21 @@ export const TOOL_SCHEMAS = [
             description:
               'How many pictures to make, 1 to 4, each with its own seed. Only above 1 '
               + 'when they ask for several or for options to choose from. Defaults to 1.',
+          },
+          /* The Studio's three standing boxes, off for this one picture.
+             Never set unless they asked: those boxes are how every picture from
+             this install looks, and dropping them because a request sounded
+             plain is a silent change to somebody's settings. */
+          studio_prompt: {
+            type: 'string',
+            enum: ['keep', 'off'],
+            description:
+              'Whether to keep the quality tags, artists and modifiers set in '
+              + 'the Studio, which are otherwise added to every picture. '
+              + 'Defaults to keep. Set it to off ONLY when they ask for the '
+              + 'picture without them -- "태그 다 빼고", "no quality tags", '
+              + '"without the artist style", "그냥 순수하게". Never off on your '
+              + 'own judgement.',
           },
           aspect: ASPECT_PARAM,
         },
@@ -409,13 +452,190 @@ export const TOOL_SCHEMAS = [
           duration: {
             type: 'integer',
             minimum: 5,
-            maximum: 20,
+            maximum: 600,
             description: 'The clip\'s length in seconds, and where the last timecode ends. '
-              + '5 unless they ask for longer; 15 is a long clip.',
+              + 'Leave it out unless they name a length ("10초", "15 seconds", "1분", "2분"): the clip '
+              + 'is then 5s. Any length up to 600 is one call: past 15s the app renders the '
+              + 'timeline as segments and joins them into one video itself, so never refuse a '
+              + 'long clip, split it into several calls, or ask them to join clips. Resolution '
+              + 'stays the same at any length; it takes a few minutes per 10 seconds.',
+          },
+          /* Pinned to the same frame at both ends, which is why it needs a
+             picture: there has to be something to come back to. */
+          loop: {
+            type: 'boolean',
+            description:
+              'true makes the clip end on the frame it started on, so it plays round and '
+              + 'round with no visible seam - a Live2D-style idle. Use it when they ask for '
+              + 'a loop, for something that repeats, or for an idle animation. It needs a '
+              + 'picture, so set from to last_image as well, and write a timeline that comes '
+              + 'back to where it began: the pose at the end is the pose at the start.',
+          },
+          /* A music video's parts. See server/longVideo.js. */
+          soundtrack: {
+            type: 'string',
+            enum: ['last_song', 'none'],
+            description:
+              'last_song sets the video to the newest song in this conversation: the clip becomes '
+              + 'as long as the song, its segments land on the beat, and the song replaces the '
+              + 'video\'s own sound. For a music video (MV, 뮤비), make the song with generate_music '
+              + 'first, then call this with last_song.',
+          },
+          cut: {
+            type: 'boolean',
+            description:
+              'true renders each segment as its own shot instead of one continuous take -- the '
+              + 'character stays the same, the scene and framing change. Use it for a music video '
+              + 'or anything that should feel edited. Write each ~10 seconds of the timeline as a '
+              + 'different shot.',
+          },
+          transition: {
+            type: 'string',
+            enum: ['fade', 'none'],
+            description: 'With cut: fade cross-fades between shots (the default), none is a hard cut.',
+          },
+          captions: {
+            type: 'string',
+            description:
+              '"lyrics" puts the song\'s lyrics on screen as styled captions. Or timed lines, one '
+              + 'per line: "[2s-5s] 첫 줄" -- words shown at those times.',
+          },
+          upscale: {
+            type: 'boolean',
+            description: 'true doubles the resolution of what is written. Slower; use it when they ask for high quality.',
           },
           aspect: ASPECT_PARAM,
         },
         required: ['prompt'],
+      },
+    },
+  },
+  /* Music.
+   *
+   * ACE-Step writes the song and sings it: one call produces a finished mix,
+   * vocals and all, in about as long as the song lasts. Which is why the two
+   * fields are what they are -- a *style*, in the vocabulary a music model was
+   * trained on (genre, instruments, tempo, mood, production), and the actual
+   * lyrics with their section markers. A sentence asking for a song is not
+   * either of those, and passing one through gets a song about the request.
+   */
+  {
+    type: 'function',
+    function: {
+      name: 'generate_music',
+      description:
+        'Write and record a song, and play it to the person you are talking to. Use it '
+        + 'when they ask for a song, a track, background music, a jingle, or music in a '
+        + 'named style - "노래 만들어줘", "작곡해줘", "make me a song". You write both the '
+        + 'style and the lyrics yourself unless they gave you words to use. Takes about '
+        + 'as long as the song lasts, so never call it unasked.',
+      parameters: {
+        type: 'object',
+        properties: {
+          style: {
+            type: 'string',
+            description:
+              'The sound, as comma-separated tags in English - genre, instruments, tempo, '
+              + 'mood, voice, production: "dream pop, female vocal, reverbed guitars, 90bpm, '
+              + 'wistful, warm analogue tape". Not a sentence and not a request; this is the '
+              + 'field the music model actually listens to.',
+          },
+          lyrics: {
+            type: 'string',
+            description:
+              'The words to sing, with section markers on their own lines - [verse], '
+              + '[chorus], [bridge], [outro]. Write them in the language the song should be '
+              + 'sung in (Korean lyrics for a Korean song). Use their words if they gave '
+              + 'you any. Leave it out for an instrumental.',
+          },
+          instrumental: {
+            type: 'boolean',
+            description: 'true for music with no singing at all. Leave lyrics out as well.',
+          },
+          language: {
+            type: 'string',
+            description: 'The language of the lyrics as a code: ko, en, ja, zh. Default en.',
+          },
+          duration: {
+            type: 'integer',
+            minimum: 10,
+            maximum: 300,
+            description:
+              'How long in seconds. Leave it out for about a minute; a full song with '
+              + 'verses and a chorus wants 120-180. Only set it when they ask for a length.',
+          },
+        },
+        required: ['style'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'swap_character',
+      description:
+        'Redraw whoever is in the newest picture as somebody else, keeping '
+        + 'their clothes, the setting and the framing. Use it when they ask for '
+        + 'the person in a picture to be a different character — "이 그림 루나로 '
+        + '바꿔줘", "make her Hoshino instead", "같은 구도로 다른 캐릭터". Two '
+        + 'kinds of answer work: a character this install has been taught (the '
+        + 'system message lists them by name), or any character these models '
+        + 'already know, named as danbooru tags it, with the brackets escaped — '
+        + '"hoshino \\(blue archive\\)", "ganyu \\(genshin impact\\)". '
+        + 'Prefer a taught one when the name is in '
+        + 'that list, since it is a likeness trained from real pictures. Not '
+        + 'for changing hair, clothes or expression on the same character — '
+        + 'that is generate_image with from="last_image".',
+      parameters: {
+        type: 'object',
+        properties: {
+          into: {
+            type: 'string',
+            description:
+              'Who to put in the picture. A name from the system message\'s list '
+              + 'of taught characters, or danbooru tags for anyone else — the '
+              + 'character tag and its series, lowercase, as danbooru writes '
+              + 'them, with the brackets escaped: "hoshino \\(blue archive\\)". '
+              + 'Unescaped, brackets mean emphasis to the image model and the '
+              + 'series is not read as part of the name at all.',
+          },
+          style: {
+            type: 'string',
+            description:
+              'How it should be drawn, if they asked for that too — '
+              + '"watercolor", "90s anime cel", "thick lineart". Comma-separated '
+              + 'English tags. Leave it out when they only asked for the '
+              + 'character to change.',
+          },
+        },
+        required: ['into'],
+      },
+    },
+  },
+  {
+    type: 'function',
+    function: {
+      name: 'remove_shadow',
+      description:
+        'Lift the shadows out of the newest picture, keeping everything else. '
+        + 'Use it when they ask for the shadows or the shading to go — "그림자 '
+        + '지워줘", "remove the shading", "그림자 빼줘". It raises the shaded '
+        + 'areas towards the light and takes the colour cast out of them, which '
+        + 'on flat and anime-coloured work removes the shade outright; on a '
+        + 'photograph it lightens the shadow rather than deleting it, because '
+        + 'nothing local can invent what a real shadow covers. Say which of '
+        + 'those it was if it matters. Seconds, not minutes.',
+      parameters: {
+        type: 'object',
+        properties: {
+          strength: {
+            type: 'number',
+            description:
+              'How far to lift, 0 to 2, where 1 is the usual amount. Below 1 '
+              + 'leaves some shading; above 1 flattens harder. Leave it out '
+              + 'unless they asked for more or less.',
+          },
+        },
       },
     },
   },
@@ -432,12 +652,15 @@ export const TOOL_SCHEMAS = [
  *
  * So these two are always offered and the rest stay behind the switch. */
 export const DRAWING_TOOLS = new Set([
-  'generate_image', 'generate_video', 'remove_background', 'upscale_image', 'extend_image',
+  'generate_image', 'generate_video', 'generate_music', 'remove_background', 'upscale_image', 'extend_image',
+  'swap_character', 'remove_shadow',
 ]);
 
 /** The same ones, named as the executor's registry names them. */
 export const DRAWING_TAGS = new Set([
-  'TOOL_GENERATE_IMAGE', 'TOOL_GENERATE_VIDEO', 'TOOL_REMOVE_BACKGROUND', 'TOOL_UPSCALE_IMAGE', 'TOOL_EXTEND_IMAGE',
+  'TOOL_GENERATE_IMAGE', 'TOOL_GENERATE_VIDEO', 'TOOL_GENERATE_MUSIC',
+  'TOOL_REMOVE_BACKGROUND', 'TOOL_UPSCALE_IMAGE', 'TOOL_EXTEND_IMAGE',
+  'TOOL_SWAP_CHARACTER', 'TOOL_REMOVE_SHADOW',
 ]);
 
 /**
@@ -450,11 +673,47 @@ export const DRAWING_TAGS = new Set([
  * invitation, and the only reliable answer to that is to stop handing it the
  * tool.
  */
-export const schemasFor = ({ web = false, drawing = true } = {}) =>
-  TOOL_SCHEMAS.filter((t) => {
+export const schemasFor = ({ web = false, drawing = true, mcp = [] } = {}) => {
+  const built = TOOL_SCHEMAS.filter((t) => {
     const name = t.function?.name;
     return DRAWING_TOOLS.has(name) ? drawing : web;
   });
+
+  /* Tools from MCP servers, on the same switch as the other tools that reach
+     outside the browser. They are described by whoever wrote the server, so
+     the description goes through untouched -- rewriting somebody else's tool
+     description to match the house style would be this app deciding what a
+     tool it has never seen is for. */
+  if (!web || !mcp?.length) return built;
+  return built.concat(mcp.map(tool => ({
+    type: 'function',
+    function: {
+      name: tool.qualified,
+      description: tool.description,
+      parameters: tool.inputSchema || { type: 'object', properties: {} },
+    },
+  })));
+};
+
+/**
+ * One tag for every tool this app did not write.
+ *
+ * The executor matches tag text, and the built-in tools each get a tag with
+ * named attributes because their arguments are known here. An MCP tool's are
+ * not: the schema arrives at run time from a server this codebase has never
+ * seen, and inventing an attribute per field would mean a tag shape that
+ * changes with the config.
+ *
+ * So the arguments travel as JSON in the body, and one entry in the executor's
+ * registry serves every MCP tool there will ever be. The model never writes
+ * this tag -- it is produced here, from a structured call -- so its legibility
+ * to a model is not a consideration, which is exactly why it can be the shape
+ * that is easiest to parse correctly.
+ */
+export const MCP_TAG = 'TOOL_MCP';
+
+/** Is this the name of a tool from a server, rather than a built-in? */
+export const isMcpToolName = (name) => typeof name === 'string' && name.startsWith('mcp_');
 
 /** Which tag each native name renders into. */
 const TAG_FOR = {
@@ -470,9 +729,12 @@ const TAG_FOR = {
   system_info: 'TOOL_SYSTEM_INFO',
   generate_image: 'TOOL_GENERATE_IMAGE',
   generate_video: 'TOOL_GENERATE_VIDEO',
+  generate_music: 'TOOL_GENERATE_MUSIC',
   remove_background: 'TOOL_REMOVE_BACKGROUND',
   upscale_image: 'TOOL_UPSCALE_IMAGE',
   extend_image: 'TOOL_EXTEND_IMAGE',
+  swap_character: 'TOOL_SWAP_CHARACTER',
+  remove_shadow: 'TOOL_REMOVE_SHADOW',
 };
 
 export const toolNames = () => Object.keys(TAG_FOR);
@@ -485,12 +747,29 @@ export const toolNames = () => Object.keys(TAG_FOR);
  * an empty object is the honest reading — the tool then fails on its own
  * missing-argument path with a message the model can act on.
  */
+/* Byte-fallback tokens, put back into characters, in every string of a call.
+
+   A model's words go through `decodeByteFallback` on their way to the screen;
+   a native call's arguments did not. gemma4 writes a character outside its
+   merged vocabulary as its UTF-8 bytes spelled out -- the ideographic space
+   U+3000 as `<0xE3><0x80><0x80>` -- and Ollama hands the tool arguments over
+   as written. Reported as Japanese lyrics sung and saved with those tokens in
+   them: `加速する鼓動<0xE3><0x80><0x80>デジタルな空`. */
+const decodeArgs = (value) => {
+  if (typeof value === 'string') return decodeByteFallback(value);
+  if (Array.isArray(value)) return value.map(decodeArgs);
+  if (value && typeof value === 'object') {
+    return Object.fromEntries(Object.entries(value).map(([key, item]) => [key, decodeArgs(item)]));
+  }
+  return value;
+};
+
 export const parseToolArgs = (raw) => {
-  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return raw;
+  if (raw && typeof raw === 'object' && !Array.isArray(raw)) return decodeArgs(raw);
   if (typeof raw === 'string') {
     try {
       const parsed = JSON.parse(raw);
-      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {};
+      return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? decodeArgs(parsed) : {};
     } catch (e) {
       return {};
     }
@@ -537,7 +816,18 @@ export const TAG_ATTRS = String.raw`((?:\s+[A-Za-z_][\w-]*="[^"]*")*)`;
  * for a search -- becomes the body when the body is empty.
  * Single-quoted and bare values are quoted. A tag whose opening is not finished
  * yet -- still streaming -- is left exactly as it is, and so is a tag that opens
- * and never closes, which is text somebody wrote.
+ * and never closes with nothing in it to run: `<TOOL_TIME>` in a sentence is
+ * text somebody wrote.
+ *
+ * An opening tag that never closes but already carries its argument is a call:
+ *
+ *     <TOOL_GENERATE_IMAGE style="anime" from="none" prompt="a cat, on a wall">
+ *
+ * The prompt is right there and no body is coming, so the missing
+ * `</TOOL_GENERATE_IMAGE>` is a typo -- not a reason to print the tag at the
+ * person instead of drawing. A tool whose body is the payload is exempt:
+ * without its closing tag that body was cut off, and running it would write the
+ * wrong thing.
  */
 const OPEN_TOOL = /<(TOOL_(?!RESULT\b)[A-Z_]+)(?=[\s/>])/gi;
 /* Which attribute is really the body, per tool. Per tool, because
@@ -547,12 +837,19 @@ const BODY_ATTR = {
   TOOL_GENERATE_IMAGE: 'prompt',
   TOOL_GENERATE_VIDEO: 'prompt',
   TOOL_EXTEND_IMAGE: 'prompt',
+  // The body is the character's name, so a model that writes the tag
+  // rather than a native call has one obvious place to put it.
+  TOOL_SWAP_CHARACTER: 'into',
   TOOL_WEB_SEARCH: 'query',
   TOOL_NEWS: 'topic',
   TOOL_FETCH_URL: 'url',
   TOOL_READ_FILE: 'path',
   TOOL_LIST_DIR: 'path',
 };
+/* Tools whose body is the payload rather than a convenience: the contents of a
+   file, the lyrics of a song. An unclosed one of those has lost that payload,
+   so it stays the text it looks like rather than running on half of it. */
+const BODY_IS_PAYLOAD = new Set(['TOOL_WRITE_FILE', 'TOOL_GENERATE_MUSIC']);
 
 const readOpening = (text, from) => {
   const attrs = [];
@@ -606,9 +903,17 @@ export const canonicalToolTags = (source) => {
     let end = head.end;
     if (!head.selfClosing) {
       const closing = new RegExp(`</${match[1]}\\s*>`, 'i').exec(text.slice(head.end));
-      if (!closing) continue;                  // opened and never closed: text somebody wrote
-      body = text.slice(head.end, head.end + closing.index);
-      end = head.end + closing.index + closing[0].length;
+      if (closing) {
+        body = text.slice(head.end, head.end + closing.index);
+        end = head.end + closing.index + closing[0].length;
+      } else {
+        /* Opened and never closed. Complete it anyway when the attributes
+           already say what to do -- otherwise it is text somebody wrote. */
+        const carried = BODY_ATTR[name]
+          ? head.attrs.some(([key]) => key === BODY_ATTR[name])
+          : head.attrs.length > 0 && !BODY_IS_PAYLOAD.has(name);
+        if (!carried) continue;
+      }
     }
 
     let attrs = head.attrs;
@@ -636,7 +941,17 @@ export const canonicalToolTags = (source) => {
  * turned back into the string the existing one reads. Returns null for a name
  * that is not a tool, which is how a hallucinated function is refused.
  */
-export const nativeCallToTag = (name, rawArgs) => {
+export const nativeCallToTag = (name, rawArgs, { mcp = [] } = {}) => {
+  /* A tool from a server, before the built-in lookup: its name is not in
+     TAG_FOR and never will be, since the set of them depends on a config file
+     rather than on this source. Matched against what the server actually
+     offered, so a model inventing an `mcp_`-prefixed name is still refused. */
+  const served = isMcpToolName(name) ? mcp.find(tool => tool.qualified === name) : null;
+  if (served) {
+    return `<${MCP_TAG} server="${attr(served.server)}" tool="${attr(served.name)}">`
+      + `${JSON.stringify(parseToolArgs(rawArgs))}</${MCP_TAG}>`;
+  }
+
   const tag = TAG_FOR[name];
   if (!tag) return null;
   const args = parseToolArgs(rawArgs);
@@ -663,10 +978,28 @@ export const nativeCallToTag = (name, rawArgs) => {
     case 'extend_image':
       return `<${tag} direction="${attr(args.direction || 'horizontal')}" amount="${attr(args.amount ?? 0.5)}">`
         + `${args.prompt ?? ''}</${tag}>`;
-    case 'generate_video':
+    /* The lyrics are the body, because they are the part with newlines in it
+       and an attribute cannot hold those. */
+    case 'generate_music':
+      return `<${tag} style="${attr(args.style || '')}"`
+        + `${args.duration ? ` duration="${attr(args.duration)}"` : ''}`
+        + `${args.language ? ` language="${attr(args.language)}"` : ''}`
+        + `${args.instrumental ? ' instrumental="true"' : ''}>${args.lyrics ?? ''}</${tag}>`;
+    case 'generate_video': {
+      /* Timed caption lines travel in the body, under the timeline -- see
+         splitCaptions in src/videoPrompt.js -- and "lyrics" as an attribute. */
+      const captions = String(args.captions || '').trim();
+      const timed = captions && captions.toLowerCase() !== 'lyrics' ? `\nCAPTIONS:\n${captions}` : '';
       return `<${tag} from="${attr(args.from || 'none')}"`
         + `${args.duration ? ` duration="${attr(args.duration)}"` : ''}`
-        + `${args.aspect ? ` aspect="${attr(args.aspect)}"` : ''}>${args.prompt ?? ''}</${tag}>`;
+        + `${args.aspect ? ` aspect="${attr(args.aspect)}"` : ''}`
+        + `${args.loop ? ' loop="true"' : ''}`
+        + `${args.soundtrack === 'last_song' ? ' soundtrack="last_song"' : ''}`
+        + `${args.cut ? ' cut="true"' : ''}`
+        + `${args.transition === 'none' ? ' transition="none"' : ''}`
+        + `${captions.toLowerCase() === 'lyrics' ? ' captions="lyrics"' : ''}`
+        + `${args.upscale ? ' upscale="true"' : ''}>${args.prompt ?? ''}${timed}</${tag}>`;
+    }
     // The three that take nothing.
     default: return `<${tag}></${tag}>`;
   }
