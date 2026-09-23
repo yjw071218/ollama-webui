@@ -36,7 +36,14 @@ const COMFY = 'http://127.0.0.1:8188';
  * out. `comfyQueue` is what ComfyUI is doing, and `comfyHeld` what its torch
  * has reserved until a `/free` arrives.
  */
-const fakeWorld = ({ loaded = [], comfyQueue = { running: [], pending: [] }, comfyHeld = 8 * GIB, down = [] } = {}) => {
+const fakeWorld = ({
+  loaded = [], comfyQueue = { running: [], pending: [] }, comfyHeld = 8 * GIB, down = [],
+  /* What `/free` can actually get down to, and how big the card is. Both
+     default to what they were before this: everything releases, and ComfyUI
+     does not say how big the card is. A real install reports both. */
+  comfyFloor = 256 * 1024 * 1024,
+  cardTotal = null,
+} = {}) => {
   const calls = [];
   const state = { loaded: [...loaded], comfyHeld };
   const fetchImpl = async (url, options = {}) => {
@@ -67,8 +74,13 @@ const fakeWorld = ({ loaded = [], comfyQueue = { running: [], pending: [] }, com
         queue_pending: comfyQueue.pending.map((id, n) => [n + 1, id, {}, {}, []]),
       });
     }
-    if (url === `${COMFY}/free`) { state.comfyHeld = 256 * 1024 * 1024; return json({}); }
-    if (url === `${COMFY}/system_stats`) return json({ devices: [{ torch_vram_total: state.comfyHeld }] });
+    if (url === `${COMFY}/free`) { state.comfyHeld = Math.min(state.comfyHeld, comfyFloor); return json({}); }
+    if (url === `${COMFY}/system_stats`) {
+      return json({ devices: [{
+        torch_vram_total: state.comfyHeld,
+        ...(cardTotal ? { vram_total: cardTotal, vram_free: cardTotal - state.comfyHeld } : {}),
+      }] });
+    }
     if (url === `${COMFY}/prompt`) return json({ prompt_id: 'job-1' });
     return json({});
   };
@@ -153,28 +165,78 @@ check('an idle one is not', !V.comfyBusy({ queue_running: [], queue_pending: [] 
   const world = fakeWorld();
   const guard = V.createVramGuard({}, { fetchImpl: world.fetchImpl });
   await guard.beforeInference();
-  eq('a ComfyUI we never used is left alone', world.calls.length, 0);
+  eq('cached models from before a restart are freed', hits(world.calls, '/free').length, 1);
 }
 
 {
   const world = fakeWorld();
   const guard = V.createVramGuard({}, { fetchImpl: world.fetchImpl });
   guard.comfyUsed();
-  check('after one of our jobs, it is freed', await guard.beforeInference() === true);
+  check('after one of our jobs, it is freed', await guard.beforeInference() === 'freed');
   eq('asked to unload, not just to tidy', hits(world.calls, '/free')[0]?.body,
     { unload_models: true, free_memory: true });
   check('and measured, because Ollama sizes its share from what is free', hits(world.calls, '/system_stats').length >= 2);
 
   world.calls.length = 0;
   await guard.beforeInference();
-  eq('the next question costs nothing', world.calls.length, 0);
+  eq('an empty card is checked without another unload', hits(world.calls, '/free').length, 0);
+}
+
+/* ------------------------------ a floor `/free` cannot get below
+
+   Reported as: every chat after any picture answered
+
+     Ollama returned HTTP 502: ComfyUI did not release GPU memory;
+     chat was not started.
+
+   on a card that was almost entirely empty. `/free` returns 200, unloads what
+   it can, and leaves `torch_vram_total` at exactly 0.600 GB -- a CUDA context
+   and whatever a custom node pins -- while the card reports 15.1 of 17.1 GB
+   free. Asked again a second later it is still 0.600 GB, because there is
+   nothing left to release.
+
+   Against a fixed 512 MB line that install can never succeed. The line is now
+   also a share of the card, because what the caller needs to know is whether
+   ComfyUI is in the language model's way, and six hundred megabytes of a
+   seventeen gigabyte card is not in anybody's way. */
+{
+  const HELD = 600 * 1000 * 1000;          // what this machine sits at
+  const CARD = 17.09 * 1000 * 1000 * 1000;
+  const world = fakeWorld({ comfyHeld: HELD, comfyFloor: HELD, cardTotal: CARD });
+  const guard = V.createVramGuard({}, { fetchImpl: world.fetchImpl });
+  guard.comfyUsed();
+
+  check('a floor ComfyUI cannot go below does not refuse the chat',
+    await guard.beforeInference() === 'freed');
+  check('and it was asked to let go first', hits(world.calls, '/free').length === 1);
+  /* Without this it polls for the whole five seconds before failing, so the
+     refusal also cost five seconds of the reader's time. */
+  check('it stops asking once the number has stopped moving',
+    hits(world.calls, '/system_stats').length <= 6,
+    String(hits(world.calls, '/system_stats').length));
+}
+
+{
+  // The other side of the same line: this really is a model, and loading on
+  // top of it is how both end up half on the CPU.
+  const CARD = 17.09 * 1000 * 1000 * 1000;
+  const world = fakeWorld({ comfyHeld: 8 * GIB, comfyFloor: 8 * GIB, cardTotal: CARD });
+  const guard = V.createVramGuard({}, { fetchImpl: world.fetchImpl });
+  guard.comfyUsed();
+  let thrown = null;
+  try { await guard.beforeInference(); } catch (e) { thrown = e; }
+  check('a card ComfyUI is genuinely sitting on still refuses', thrown !== null);
+  // The old message named neither number, so an install stuck at a floor
+  // looked exactly like one that was genuinely busy.
+  check('and the refusal says how much of what', /8\.00 GB of a 15\.\d\d GB card/.test(thrown?.message || ''),
+    thrown?.message);
 }
 
 {
   const world = fakeWorld({ comfyQueue: { running: ['drawing'], pending: [] } });
   const guard = V.createVramGuard({}, { fetchImpl: world.fetchImpl });
   guard.comfyUsed();
-  check('a picture being drawn is not pulled out from under itself', await guard.beforeInference() === false);
+  check('a picture being drawn is not pulled out from under itself', await guard.beforeInference() === 'drawing');
   eq('no free is sent', hits(world.calls, '/free').length, 0);
 
   world.calls.length = 0;
@@ -186,10 +248,193 @@ check('an idle one is not', !V.comfyBusy({ queue_running: [], queue_pending: [] 
   const world = fakeWorld({ down: [COMFY] });
   const guard = V.createVramGuard({}, { fetchImpl: world.fetchImpl });
   guard.comfyUsed();
-  check('a ComfyUI that has gone away does not hold up the chat', await guard.beforeInference() === false);
+  check('a ComfyUI that has gone away does not hold up the chat', await guard.beforeInference() === 'idle');
   world.calls.length = 0;
   await guard.beforeInference();
-  eq('nor keep being asked', world.calls.length, 0);
+  eq('the next question checks whether ComfyUI restarted', hits(world.calls, '/queue').length, 1);
+}
+
+/* ------------------------------ while a video is drawn: the chat on the CPU
+
+   Reported as: the chat model sits on the card while a video renders, and the
+   video is slow. Every question, title and summary asked meanwhile loaded it
+   back onto the card the video was drawing on. */
+
+eq('an Ollama request is sent with no layers on the card, and not kept',
+  JSON.parse(V.offTheCard(JSON.stringify({ model: 'm', options: { temperature: 0.2 } }))),
+  { model: 'm', options: { temperature: 0.2, num_gpu: 0 }, keep_alive: 0 });
+check('a num_gpu somebody set is overridden', JSON.parse(V.offTheCard('{"options":{"num_gpu":99}}')).options.num_gpu === 0);
+eq('anything that is not an object is left alone', [V.offTheCard('nope'), V.offTheCard('[1]'), V.offTheCard('null')], [null, null, null]);
+
+{
+  const http = await import('node:http');
+  const realFetch = globalThis.fetch;
+  // A paper Ollama that listens, so what reaches it can be read.
+  const received = [];
+  const ollama = http.createServer((req, res) => {
+    let body = '';
+    req.on('data', c => { body += c; });
+    req.on('end', () => {
+      received.push({ url: req.url, body: JSON.parse(body), declared: Number(req.headers['content-length']), bytes: Buffer.byteLength(body) });
+      res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+      res.end('{"message":{"content":"안녕"},"done":true}\n');
+    });
+  });
+  await new Promise(r => ollama.listen(0, '127.0.0.1', r));
+  const env = { OLLAMA_URL: `http://127.0.0.1:${ollama.address().port}` };
+  const hook = V.inferenceHook(env);
+  const app = http.createServer((req, res) => hook(req, res, () => { res.writeHead(200); res.end('passed on'); }));
+  await new Promise(r => app.listen(0, '127.0.0.1', r));
+  const ask = (body, headers = {}) => realFetch(`http://127.0.0.1:${app.address().port}/api/chat`, {
+    method: 'POST', headers: { 'Content-Type': 'application/json', ...headers }, body: JSON.stringify(body),
+  }).then(r => r.text());
+
+  const queue = { running: [], pending: [] };
+  const world = fakeWorld({ comfyQueue: queue });
+  globalThis.fetch = world.fetchImpl;
+  try {
+    check('with no job of ours, Ollama answers', (await ask({ model: 'm', options: { num_ctx: 4096 } })).includes('안녕'));
+    eq('and the request reaches it untouched', received[0]?.body, { model: 'm', options: { num_ctx: 4096 } });
+    received.length = 0;
+
+    const durableBody = { model: 'm', keep_alive: '5m', options: { num_ctx: 4096, num_gpu: 20 } };
+    check('a durable chat answers while ComfyUI is idle', (await ask(durableBody, { 'X-Chat-Job-Id': 'vram-idle-regression' })).includes('안녕'));
+    eq('a job ID preserves GPU and keep-alive options', received[0]?.body, durableBody);
+    received.length = 0;
+    world.calls.length = 0;
+    V.vramGuard(env).comfyUsed();
+    queue.running.push('video');
+    const answer = await ask({ model: 'gemma3:12b', messages: [{ role: 'user', content: '영상 어때?' }], options: { num_ctx: 8192 } });
+    check('chat is refused while ComfyUI is drawing', answer.includes('ComfyUI is generating'), answer);
+    eq('no CPU model is loaded alongside the video', received.length, 0);
+    eq('and ComfyUI is not freed under it', hits(world.calls, '/free').length, 0);
+
+    queue.running.length = 0;
+    await ask({ model: 'm' });
+    eq('once the video is done, ComfyUI is freed', hits(world.calls, '/free').length, 1);
+    eq('and the request goes on as it was, so the model loads onto the card again', received[0]?.body, { model: 'm' });
+  } finally {
+    globalThis.fetch = realFetch;
+    app.close();
+    ollama.close();
+  }
+}
+
+{
+  const world = fakeWorld({ comfyQueue: { running: ['video'], pending: [] } });
+  const realFetch = globalThis.fetch;
+  globalThis.fetch = world.fetchImpl;
+  try {
+    const env = { LLM_BACKEND: 'llamacpp', LLAMACPP_URL: 'http://127.0.0.1:8081' };
+    V.vramGuard(env).comfyUsed();
+    let passed = false;
+    let status = 0;
+    await V.inferenceHook(env)({ method: 'POST', url: '/api/chat' }, { writeHead(code) { status = code; }, end() {} }, () => { passed = true; });
+    check('llama.cpp is also refused while ComfyUI is drawing', !passed && status === 503);
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+}
+
+/* ------------------------ a model still answering is stopped, not waited out
+
+   Reported as: a picture failed with "Input type (CUDABFloat16Type) and weight
+   type (CPUBFloat16Type) should be the same". gemma4:31b was still answering a
+   title or summary when the picture was asked for; Ollama unloads a model only
+   once nothing is using it, so it stayed on the card for the whole fifteen
+   seconds the unload was given, and the picture started with 0.7GB free. Every
+   model was offloaded, and the PiD upscaler crashed on the half it had. */
+
+check('a model answering from the CPU is not in the way',
+  JSON.stringify(V.loadedOllama({ models: [{ name: 'on-card', size_vram: 8 * GIB }, { name: 'on-cpu', size_vram: 0 }, { name: 'old-ollama' }] }))
+    === JSON.stringify(['on-card', 'old-ollama']));
+
+{
+  // An Ollama that will not unload a model while a request is using it.
+  const state = { loaded: ['gemma4:31b'], busy: 0, unloadAsked: false };
+  const calls = [];
+  const fetchImpl = async (url, options = {}) => {
+    const body = options.body ? JSON.parse(options.body) : null;
+    calls.push({ url: String(url), body });
+    const json = (value) => ({ ok: true, status: 200, json: async () => value });
+    if (url.endsWith('/api/ps')) return json({ models: state.loaded.map(name => ({ name, size_vram: 8 * GIB })) });
+    if (url.endsWith('/api/generate') && body?.keep_alive === 0) {
+      state.unloadAsked = true;
+      if (!state.busy) state.loaded = [];
+      return json({ done: true });
+    }
+    return json({});
+  };
+  const guard = V.createVramGuard({}, { fetchImpl, grace: 400, patience: 2000 });
+  let stoppedCount = 0;
+  const hold = () => {
+    state.busy += 1;
+    const done = guard.track(() => {
+      stoppedCount += 1;
+      state.busy -= 1;
+      done();
+      if (!state.busy && state.unloadAsked) state.loaded = [];
+    });
+  };
+  hold(); hold();
+  const began = Date.now();
+  const unloaded = await guard.releaseLlm();
+  eq('a model still answering is unloaded anyway', [unloaded, state.loaded], [['gemma4:31b'], []]);
+  eq('by stopping what was holding it', stoppedCount, 2);
+  check('after the grace, not after the whole wait', Date.now() - began < 1800, `${Date.now() - began}ms`);
+
+  stoppedCount = 0;
+  state.loaded = ['gemma4:31b'];
+  state.unloadAsked = false;
+  await guard.releaseLlm();
+  eq('with nothing under way, nothing is stopped', stoppedCount, 0);
+}
+
+{
+  const http = await import('node:http');
+  const realFetch = globalThis.fetch;
+  // A paper Ollama that takes its time over an answer, as a 31B model does.
+  let upstreamClosed = false;
+  const ollama = http.createServer((req, res) => {
+    req.resume();
+    res.writeHead(200, { 'Content-Type': 'application/x-ndjson' });
+    res.write('{"message":{"content":"One,"},"done":false}\n');
+    // The response, not the request: a request "closes" once its body is read.
+    // Like Ollama, an unload asked for while it is busy happens once it is not.
+    res.on('close', () => { upstreamClosed = true; if (unloadAsked) loaded = []; });
+  });
+  await new Promise(r => ollama.listen(0, '127.0.0.1', r));
+  const env = { OLLAMA_URL: `http://127.0.0.1:${ollama.address().port}`, COMFYUI_PORT: '18188' };
+  let loaded = ['gemma4:31b'];
+  let unloadAsked = false;
+  const world = {
+    fetchImpl: async (url, options = {}) => {
+      const json = (value) => ({ ok: true, status: 200, json: async () => value });
+      if (String(url).endsWith('/system_stats')) return json({ devices: [{ torch_vram_total: 0 }] });
+      if (String(url).endsWith('/api/ps')) return json({ models: loaded.map(name => ({ name })) });
+      if (String(url).endsWith('/api/generate')) { unloadAsked = true; if (upstreamClosed) loaded = []; return json({}); }
+      return json({});
+    },
+  };
+  const hook = V.inferenceHook(env, { fetchImpl: world.fetchImpl, grace: 300, patience: 1500 });
+  const app = http.createServer((req, res) => hook(req, res, () => { res.end('passed on'); }));
+  await new Promise(r => app.listen(0, '127.0.0.1', r));
+  try {
+    const answering = realFetch(`http://127.0.0.1:${app.address().port}/api/chat`, {
+      method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ model: 'gemma4:31b', stream: true }),
+    });
+    const res = await answering;
+    const reading = res.text();
+    await new Promise(r => setTimeout(r, 100));
+    await V.vramGuard(env).releaseLlm();
+    await reading;
+    check('a request through this server is stopped when the card is needed', upstreamClosed);
+    eq('and the model it was holding comes off', loaded, []);
+  } finally {
+    globalThis.fetch = realFetch;
+    app.close();
+    ollama.close();
+  }
 }
 
 check('one guard per set of addresses, shared by everything that asks',
@@ -237,14 +482,27 @@ check('one guard per set of addresses, shared by everything that asks',
 
 const vite = fs.readFileSync(path.join(ROOT, 'vite.config.js'), 'utf8');
 const index = fs.readFileSync(path.join(ROOT, 'server/index.js'), 'utf8');
-check('the dev server waits for ComfyUI before an inference request',
-  /isInference\([\s\S]{0,80}\)\) return next\(\);\s*\n\s*vram\.beforeInference\(\)/.test(vite));
+check('the dev server runs the inference hook before an inference request',
+  /isInference\([\s\S]{0,80}\)\) return next\(\);\s*\n\s*inference\(req, res, next\);/.test(vite));
 check('ahead of the API routes, so llama.cpp\'s are covered too',
-  vite.indexOf('vram.beforeInference') < vite.indexOf('createApiRoutes(env)'));
+  vite.indexOf('inference(req, res, next)') < vite.indexOf('createApiRoutes(env)'));
 check('and so does the production server',
-  /if \(isInference\(url\.pathname\)\) \{\s*\n\s*vram\.beforeInference\(\)[\s\S]{0,80}dispatch\(req, res, url\)/.test(index));
+  /if \(isInference\(url\.pathname\)\) \{\s*\n\s*inference\(req, res, \(\) => dispatch\(req, res, url\)\);/.test(index));
 check('.env.example documents the switch',
   /^VRAM_EXCLUSIVE=true$/m.test(fs.readFileSync(path.join(ROOT, '.env.example'), 'utf8')));
+
+/* Reported: Ollama logged `500 | 2m0s | POST /api/chat` with the model 427
+   tokens into its answer. The proxy gave up on two minutes of silence -- a
+   cold load, a long prompt, and a tool call Ollama holds back until it is
+   complete are each most of that -- and the browser sent it all again. */
+{
+  const vramSource = fs.readFileSync(path.join(ROOT, 'server/vram.js'), 'utf8');
+  check('Ollama may be silent for ten minutes, not two, before a request is given up on',
+    /export const OLLAMA_IDLE_MS = 10 \* 60 \* 1000;/.test(vramSource)
+    && /out\.setTimeout\(idleMs,/.test(vramSource)
+    && !/out\.setTimeout\(120000/.test(vramSource));
+  check('  and .env can say otherwise', /env\.OLLAMA_IDLE_TIMEOUT_MS/.test(vramSource));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
