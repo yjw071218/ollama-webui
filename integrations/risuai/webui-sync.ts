@@ -15,7 +15,16 @@ const fields = ['characters', 'botPresets', 'modules'] as const;
 const empty = () => ({ characters: [], botPresets: [], modules: [], assets: {} });
 const fingerprint = data => JSON.stringify(data);
 const announce = (state, message) => window.parent.postMessage({ channel: 'webui-risu', syncState: state, syncMessage: message }, location.origin);
-const hash = bytes => Array.from(sha256(bytes), x => x.toString(16).padStart(2, '0')).join('');
+const hex = (digest: Uint8Array) => Array.from(digest, x => x.toString(16).padStart(2, '0')).join('');
+/* The browser's own SHA-256 where there is one (native, off the main thread's
+   JS) -- the same digest the pure-JS one gives, many times faster on big
+   assets. The fallback is for a page served without a secure context. */
+const hash = async (bytes: Uint8Array): Promise<string> => {
+  if (globalThis.crypto?.subtle) {
+    try { return hex(new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))); } catch { /* fall back */ }
+  }
+  return hex(sha256(bytes));
+};
 const assetKey = key => !key.startsWith('database/') && !key.startsWith('webui-sync/') && key !== 'migrated';
 
 export function startWebUISync(isImporting: () => boolean) {
@@ -69,9 +78,9 @@ export function startWebUISync(isImporting: () => boolean) {
       if (!assetKey(key)) throw new Error('잘못된 에셋 경로');
       if (assetsIndex.matches(key, digest)) return;
       const current = await forageStorage.getItem(key);
-      if (current && hash(current) === digest) return;
+      if (current && await hash(current) === digest) return;
       const bytes = new Uint8Array(await (await request('?asset=' + digest)).arrayBuffer());
-      if (hash(bytes) !== digest) throw new Error('에셋 검증에 실패했습니다.');
+      if (await hash(bytes) !== digest) throw new Error('에셋 검증에 실패했습니다.');
       await forageStorage.setItem(key, bytes);
     }, progress('에셋 수신·확인'));
     return () => {
@@ -141,7 +150,7 @@ export function startWebUISync(isImporting: () => boolean) {
         const missing = [...new Set(Object.values(merged.assets))].filter(digest => !known.has(digest) && localPaths.has(digest));
         await syncAssetTasks(missing, async digest => {
           const bytes = await forageStorage.getItem(localPaths.get(digest));
-          if (!bytes || hash(bytes) !== digest) throw new Error('에셋이 변경되어 다음 동기화에서 다시 확인합니다.');
+          if (!bytes || await hash(bytes) !== digest) throw new Error('에셋이 변경되어 다음 동기화에서 다시 확인합니다.');
           await request('?asset=' + digest, { method: 'PUT', body: bytes });
         }, progress('에셋 전송'));
       }

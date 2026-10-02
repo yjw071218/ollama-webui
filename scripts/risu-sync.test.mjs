@@ -28,7 +28,7 @@ test('message append and settings edits transfer only changed values and round t
 test('asset index reads existing binaries once and tracks edits, deletions and other tabs', async () => {
   const values = new Map([['assets/a', new Uint8Array([1])]]);
   let reads = 0;
-  const storage = { keys: async () => [...values.keys()], getItem: async key => { reads++; return values.get(key); },
+  const storage = { keys: async () => [...values.keys()], getItem: async key => { if (key.startsWith('assets/')) reads++; return values.get(key); },
     setItem: async (key, bytes) => values.set(key, bytes), removeItem: async key => values.delete(key) };
   const index = createAssetIndex(storage, key => key.startsWith('assets/'), bytes => String(bytes[0]), () => {});
   assert.deepEqual(await index.read(), { 'assets/a': '1' });
@@ -38,6 +38,22 @@ test('asset index reads existing binaries once and tracks edits, deletions and o
   values.set('assets/a', new Uint8Array([3])); index.invalidate('assets/a');
   assert.deepEqual(await index.read(), { 'assets/a': '3' }); assert.equal(reads, 2);
   await storage.removeItem('assets/a'); assert.deepEqual(await index.read(), {});
+});
+
+test('asset digests persist, so the next page load does not read every asset again', async () => {
+  const values = new Map([['assets/a', new Uint8Array([1])], ['assets/b', new Uint8Array([2])]]);
+  let reads = 0;
+  const makeStorage = () => ({ keys: async () => [...values.keys()], getItem: async key => { if (key.startsWith('assets/')) reads++; return values.get(key); },
+    setItem: async (key, bytes) => values.set(key, bytes), removeItem: async key => values.delete(key) });
+  const isAsset = key => key.startsWith('assets/');
+  const digest = async bytes => String(bytes[0]);
+  await createAssetIndex(makeStorage(), isAsset, digest, () => {}).read();
+  assert.equal(reads, 2);
+  await new Promise(r => setTimeout(r, 600));   // the cache is saved shortly after
+  values.set('assets/c', new Uint8Array([3])); values.delete('assets/b');
+  reads = 0;
+  assert.deepEqual(await createAssetIndex(makeStorage(), isAsset, digest, () => {}).read(), { 'assets/a': '1', 'assets/c': '3' });
+  assert.equal(reads, 1, 'only the asset the cache did not know is read');
 });
 
 test('large asset libraries transfer concurrently with bounded memory and complete progress', async () => {

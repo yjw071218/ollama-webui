@@ -76,7 +76,7 @@ import {
 } from 'lucide-react';
 import { CliPanel } from './CliPanel.jsx';
 import { CliApprovals } from './CliAgent.jsx';
-import { CliLimitBadge, formatUsd } from './CliLimits.jsx';
+import { CliLimitBadge, formatUsd, cliOf } from './CliLimits.jsx';
 import { CliTurnExtras, CliChips } from './CliTurn.jsx';
 import { cliHeadersOf } from './cliTurn.js';
 
@@ -1061,6 +1061,29 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
     );
   }
 });
+
+/* One paragraph of an answer, parsed only when its text (or its plugins)
+   change. Inline, every render of App -- a keystroke in the composer, a
+   streamed token, a scroll button appearing -- parsed every answer in the
+   chat again with remark/rehype/KaTeX, and remounted each code block because
+   `components` was a new object each time. On a phone that was the lag. */
+const ANSWER_REMARK = [remarkGfm, remarkMath];
+const AnswerLink = ({ node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />;
+const AnswerMarkdown = memo(({ text, basePlugins, citations, onOpenArtifact }) => {
+  const openRef = useRef(onOpenArtifact);
+  openRef.current = onOpenArtifact;
+  const open = useCallback((...args) => openRef.current?.(...args), []);
+  const citeKey = citations?.length ? citations.map(c => (c.url ? 'url' : 'passage')).join(',') : '';
+  const plugins = useMemo(() => (citeKey
+    ? [...basePlugins, createCitationLinker(citeKey.split(',').length, citeKey.split(','))]
+    : basePlugins), [basePlugins, citeKey]);
+  const components = useMemo(() => ({
+    pre: (props) => <MarkdownCodeBlock {...props} onOpenArtifact={open} />,
+    a: AnswerLink,
+  }), [open]);
+  return <ReactMarkdown remarkPlugins={ANSWER_REMARK} rehypePlugins={plugins} components={components}>{text}</ReactMarkdown>;
+}, (a, b) => a.text === b.text && a.basePlugins === b.basePlugins
+  && (a.citations?.length || 0) === (b.citations?.length || 0));
 
 // Decided before React renders anything, because the useState initialisers
 // below read settings and must read the right profile's. A tab that has none of
@@ -9758,16 +9781,24 @@ ${mcpTools.map(tool => `  ${tool.server} / ${tool.name}: ${firstLine(tool.descri
   conversation. The prompt is a timeline — [0s-2s] … [2s-5s] … — ending at
   \`duration\`. It takes minutes, so never use it unasked.${videoGuide}`;
 
-        if (!mcpEnabled && !useNativeTools && mcpToolCallsInTurnForSystem === 0) {
+        /* A CLI model (Claude Code, Codex, agy) brings its own tools: with the
+           tools switch on it is handed the MCP servers and the web natively
+           (X-Cli-Tools). Teaching it this app's tags as well gave it two ways
+           to read a file, and it sometimes took the tag one -- shown as this
+           app's tool cards instead of the CLI's own. Only the picture and chart
+           tags, which no CLI has, are taught to it. */
+        const cliTurn = !!cliOf(activeModel);
+        if ((!mcpEnabled || cliTurn) && !useNativeTools && mcpToolCallsInTurnForSystem === 0) {
           mcpPrompt = `[Tools]
-You can call a tool by emitting one tag. For a tool whose *answer* you need,
+${cliTurn && mcpEnabled ? `For files, commands, the web and MCP servers use your own tools, not tags.
+` : ''}You can call a tool by emitting one tag. For a tool whose *answer* you need,
 emit exactly one and then stop; the result comes back in a <TOOL_RESULT> block
 and you continue from there. Pictures are the exception — see below.
 
 ${drawPrompt}${chartGuide}`;
         }
 
-        if (mcpEnabled && !useNativeTools && mcpToolCallsInTurnForSystem === 0) {
+        if (mcpEnabled && !cliTurn && !useNativeTools && mcpToolCallsInTurnForSystem === 0) {
           mcpPrompt = `[Agent tools enabled]
 You can call tools by emitting one tag. For a tool whose *answer* you need — a
 search, a page, a file — emit exactly one and then stop; the result comes back
@@ -13457,6 +13488,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             direction={1}
             getSize={() => sidebarWidth}
             setSize={setSidebarWidth}
+            cssVar="--sidebar-width"
             min={240}
             max={() => Math.min(560, window.innerWidth - 320)}
             onReset={() => setSidebarWidth(DEFAULT_SIDEBAR_WIDTH)}
@@ -14467,13 +14499,14 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                       }
                                       if (part.type === 'think') {
                                         return (
-                                          <ReactMarkdown 
+                                          /* Memoized like the answer: parsed again only
+                                             when this block's text changes. */
+                                          <AnswerMarkdown
                                             key={`think-${idx}`}
-                                            remarkPlugins={[remarkGfm, remarkMath]} 
-                                            rehypePlugins={markdownRehypePlugins}
-                                          >
-                                            {part.content}
-                                          </ReactMarkdown>
+                                            text={part.content}
+                                            basePlugins={markdownRehypePlugins}
+                                            onOpenArtifact={handleOpenArtifact}
+                                          />
                                         );
                                       } else if (part.type === 'tool_call') {
                                         const isSearch = part.tool === 'TOOL_WEB_SEARCH';
@@ -14660,44 +14693,16 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                   {answerParts[idx].map((part, pn) => (part.type === 'change'
                                     ? <FileChanges key={`chg-${pn}`} changes={[part.change]} inline />
                                     : (
-                                  <ReactMarkdown
+                                  /* Memoized (AnswerMarkdown): parsed again only
+                                     when this paragraph's text changes. Citations
+                                     are per message, so the linker is built there. */
+                                  <AnswerMarkdown
                                     key={`md-${pn}`}
-                                    remarkPlugins={[remarkGfm, remarkMath]}
-                                    rehypePlugins={
-                                      /* Citations are per message, so the
-                                         plugin has to be built per message
-                                         rather than shared -- the shared list
-                                         above knows nothing about which
-                                         passages this answer was given. */
-                                      (msg.citations?.length
-                                        ? [...(isStreamingRow && idx === textBlocks.length - 1
-                                            ? streamingRehypePlugins : markdownRehypePlugins),
-                                           createCitationLinker(msg.citations.length, msg.citations.map(c => (c.url ? 'url' : 'passage')))]
-                                        : (isStreamingRow && idx === textBlocks.length - 1
-                                            ? streamingRehypePlugins : markdownRehypePlugins))
-                                    }
-                                    components={{
-                                      // `pre`, not `code`: a fence is the only
-                                      // thing that arrives as a <pre>, so this
-                                      // cannot be handed a word from the
-                                      // middle of a sentence. Inline code is
-                                      // left to render as plain <code>.
-                                      pre: (props) => <MarkdownCodeBlock {...props} onOpenArtifact={handleOpenArtifact} />,
-                                      /* A link in an answer opens a new tab.
-                                         Without this it replaces the app, and
-                                         a model is very often still writing
-                                         when somebody follows a source it just
-                                         cited -- so the cost of a click was
-                                         the rest of the answer. `noopener` as
-                                         well, because the page being opened is
-                                         one a search engine chose. */
-                                      a: ({ node, ...props }) => (
-                                        <a {...props} target="_blank" rel="noopener noreferrer" />
-                                      ),
-                                    }}
-                                  >
-                                    {part.text}
-                                  </ReactMarkdown>
+                                    text={part.text}
+                                    basePlugins={isStreamingRow && idx === textBlocks.length - 1 ? streamingRehypePlugins : markdownRehypePlugins}
+                                    citations={msg.citations}
+                                    onOpenArtifact={handleOpenArtifact}
+                                  />
                                     )))}
                                 </div>
                                 {/* And whatever was drawn between this
@@ -18123,6 +18128,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 direction={-1}
                 getSize={() => artifactWidth}
                 setSize={setArtifactWidth}
+                cssVar="--artifact-width"
                 min={320}
                 max={() => Math.max(320, window.innerWidth - 420)}
                 onReset={() => setArtifactWidth(DEFAULT_ARTIFACT_WIDTH)}

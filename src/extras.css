@@ -1024,6 +1024,10 @@ mark.chat-hit.current {
   background: transparent;
   border: none;
   padding: 0;
+  /* Without this a touch drag is taken by the browser as a scroll or a swipe
+     back, and the drag is cancelled part way. */
+  touch-action: none;
+  -webkit-touch-callout: none;
 }
 .resize-handle:focus-visible { outline: 2px solid var(--primary); outline-offset: -2px; }
 
@@ -1057,7 +1061,25 @@ mark.chat-hit.current {
 .resize-handle.dragging .resize-grip { background: var(--primary); }
 
 /* Swallows pointer events over the preview iframe while dragging. */
-.resize-overlay { position: fixed; inset: 0; z-index: 500; }
+.resize-overlay { position: fixed; inset: 0; z-index: 500; touch-action: none; }
+
+/* A finger is wider than 9px: a larger target, and a grip that can be seen. */
+@media (pointer: coarse) {
+  .resize-x { width: 24px; right: -12px; }
+  .artifact-panel > .resize-x { left: -12px; }
+  [dir="rtl"] .claude-sidebar > .resize-x { left: -12px; }
+  [dir="rtl"] .artifact-panel > .resize-x { right: -12px; }
+  .resize-y { height: 24px; }
+  .resize-x .resize-grip { width: 4px; height: 44px; background: var(--hairline, rgba(127,127,127,.35)); }
+  .resize-y .resize-grip { height: 4px; width: 44px; background: var(--hairline, rgba(127,127,127,.35)); }
+}
+
+/* Mid-drag: no width animations, and no layout work spent on hover states. */
+.is-panel-resizing .claude-sidebar,
+.is-panel-resizing .artifact-panel,
+.is-panel-resizing .canvas-panel,
+.is-panel-resizing .claude-main { transition: none !important; }
+.is-panel-resizing iframe { pointer-events: none; }
 .resize-overlay-x { cursor: col-resize; }
 .resize-overlay-y { cursor: row-resize; }
 
@@ -9653,3 +9675,13 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 .live-work-spark { color: var(--btn-active); animation: live-work-spin 2.4s linear infinite; display: inline-block; }
 @keyframes live-work-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .live-work-spark { animation: none; } }
+
+/* mobile-perf: on a phone, blur behind overlays is redrawn every frame by a
+   weak GPU, and purely decorative loops keep it busy while idle. */
+@media (pointer: coarse), (max-width: 860px) {
+  *, *::before, *::after { -webkit-backdrop-filter: none !important; backdrop-filter: none !important; }
+  .empty-logo svg { animation: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .empty-logo svg, .studio-progress-waiting svg { animation: none; }
+}

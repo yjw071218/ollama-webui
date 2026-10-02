@@ -41,17 +41,39 @@ export const ResizeHandle = ({
   max = () => Infinity,
   onReset,
   label = 'Resize panel',
+  /* The CSS variable the size is drawn from (e.g. '--sidebar-width') and the
+     element it is set on. With both, a drag writes the variable straight onto
+     that element once per frame and tells React only when the finger lifts:
+     re-rendering the whole app on every move is what made it stutter on a
+     phone or tablet. */
+  cssVar = '',
+  varTarget = '.claude-app',
 }) => {
   const [dragging, setDragging] = useState(false);
+  const draggingRef = useRef(false);
   const originRef = useRef(0);
   const startRef = useRef(0);
+  const pendingRef = useRef(null);   // the size waiting for the next frame
+  const latestRef = useRef(null);    // the size last drawn
+  const frameRef = useRef(0);
+  const targetRef = useRef(null);
 
   const limits = useCallback(() => [min, typeof max === 'function' ? max() : max], [min, max]);
-
-  const apply = useCallback((next) => {
+  const fit = useCallback((next) => {
     const [lo, hi] = limits();
-    setSize(clamp(next, lo, Math.max(lo, hi)));
-  }, [limits, setSize]);
+    return Math.round(clamp(next, lo, Math.max(lo, hi)));
+  }, [limits]);
+
+  const apply = useCallback((next) => { setSize(fit(next)); }, [fit, setSize]);
+
+  const draw = () => {
+    frameRef.current = 0;
+    const size = pendingRef.current;
+    if (size === null || size === latestRef.current) return;
+    latestRef.current = size;
+    if (targetRef.current) targetRef.current.style.setProperty(cssVar, `${size}px`);
+    else setSize(size);
+  };
 
   const onPointerDown = (e) => {
     if (e.button !== 0) return;
@@ -59,20 +81,34 @@ export const ResizeHandle = ({
     e.currentTarget.setPointerCapture?.(e.pointerId);
     startRef.current = axis === 'x' ? e.clientX : e.clientY;
     originRef.current = getSize();
+    latestRef.current = originRef.current;
+    pendingRef.current = null;
+    targetRef.current = cssVar ? (e.currentTarget.closest(varTarget) || document.querySelector(varTarget)) : null;
+    draggingRef.current = true;
     setDragging(true);
   };
 
   const onPointerMove = (e) => {
-    if (!dragging) return;
+    if (!draggingRef.current) return;
+    // Every coalesced point is one move; only the newest matters for a frame.
     const current = axis === 'x' ? e.clientX : e.clientY;
-    apply(originRef.current + (current - startRef.current) * direction);
+    pendingRef.current = fit(originRef.current + (current - startRef.current) * direction);
+    if (!frameRef.current) frameRef.current = requestAnimationFrame(draw);
   };
 
   const endDrag = (e) => {
-    if (!dragging) return;
+    if (!draggingRef.current) return;
+    draggingRef.current = false;
     e.currentTarget.releasePointerCapture?.(e.pointerId);
+    if (frameRef.current) { cancelAnimationFrame(frameRef.current); frameRef.current = 0; }
+    draw();
+    // React (and localStorage) hear the size once, at the end.
+    if (targetRef.current && latestRef.current !== null) setSize(latestRef.current);
+    targetRef.current = null;
     setDragging(false);
   };
+
+  useEffect(() => () => { if (frameRef.current) cancelAnimationFrame(frameRef.current); }, []);
 
   const onKeyDown = (e) => {
     const step = e.shiftKey ? 48 : 16;
@@ -88,7 +124,12 @@ export const ResizeHandle = ({
     if (!dragging) return undefined;
     const previous = document.body.style.userSelect;
     document.body.style.userSelect = 'none';
-    return () => { document.body.style.userSelect = previous; };
+    // Transitions off while dragging, so the panel follows the finger, not an animation.
+    document.documentElement.classList.add('is-panel-resizing');
+    return () => {
+      document.body.style.userSelect = previous;
+      document.documentElement.classList.remove('is-panel-resizing');
+    };
   }, [dragging]);
 
   return (
