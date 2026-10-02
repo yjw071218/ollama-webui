@@ -1,0 +1,79 @@
+# Builds the Windows installer and attaches it to a GitHub Release.
+# Trigger: push a tag such as v0.1.0   (git tag v0.1.0 && git push origin v0.1.0)
+# or run it by hand from the Actions tab.
+name: release
+
+on:
+  push:
+    tags: ['v*']
+  workflow_dispatch:
+    inputs:
+      version:
+        description: 'Version (e.g. 0.1.0)'
+        required: true
+
+permissions:
+  contents: write
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    env:
+      NODE_RUNTIME: '24.14.1'
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ env.NODE_RUNTIME }}
+          cache: npm
+
+      - name: Version
+        id: v
+        shell: pwsh
+        run: |
+          $v = if ('${{ github.event.inputs.version }}') { '${{ github.event.inputs.version }}' } else { '${{ github.ref_name }}'.TrimStart('v') }
+          "version=$v" >> $env:GITHUB_OUTPUT
+
+      - name: Build web app
+        run: |
+          npm ci
+          npm run build
+
+      - name: Icon from the app logo
+        run: |
+          npm i --no-save @resvg/resvg-js
+          node scripts/desktop/make-icon.mjs
+
+      - name: Stage files
+        shell: pwsh
+        run: |
+          $stage = 'installer/stage'
+          New-Item -ItemType Directory -Force "$stage/app", "$stage/runtime" | Out-Null
+          foreach ($item in 'dist','server','assets','workflows','public','package.json','.env.example','LICENSE','README.md') {
+            if (Test-Path $item) { Copy-Item $item "$stage/app/" -Recurse -Force }
+          }
+          # Never ship local data or secrets that might be in the checkout.
+          Remove-Item "$stage/app/server/data/*" -Recurse -Force -ErrorAction SilentlyContinue
+          Get-ChildItem "$stage/app" -Recurse -Include '.env','*.log','*.bak' -File | Remove-Item -Force
+          $zip = "node-v$env:NODE_RUNTIME-win-x64.zip"
+          Invoke-WebRequest "https://nodejs.org/dist/v$env:NODE_RUNTIME/$zip" -OutFile $zip
+          Expand-Archive $zip -DestinationPath node-tmp
+          Copy-Item "node-tmp/node-v$env:NODE_RUNTIME-win-x64/node.exe" "$stage/runtime/"
+
+      - name: Build installer
+        shell: pwsh
+        run: |
+          if (-not (Get-Command iscc -ErrorAction SilentlyContinue)) {
+            choco install innosetup -y --no-progress
+            $env:PATH += ';C:\Program Files (x86)\Inno Setup 6'
+          }
+          iscc /DAppVersion=${{ steps.v.outputs.version }} installer/ollama-webui.iss
+
+      - name: Publish release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: v${{ steps.v.outputs.version }}
+          name: Ollama WebUI ${{ steps.v.outputs.version }}
+          files: release/OllamaWebUI-Setup-*.exe
+          generate_release_notes: true

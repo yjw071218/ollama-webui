@@ -72,3 +72,8 @@ integrations/risuai/upstream/
 *.bak
 check_deleted_again.cjs
 force_restore.cjs
+
+# installer build output
+installer/stage/
+installer/app.ico
+release/
