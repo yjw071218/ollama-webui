@@ -441,7 +441,7 @@ const toml = (value) => {
 };
 
 /** The servers as Codex `-c` overrides, one server table each. */
-export const codexMcpOverrides = (servers = {}) => {
+export const codexMcpOverrides = (servers = {}, { approve = false } = {}) => {
   const out = [];
   for (const [name, s] of Object.entries(servers)) {
     const table = {};
@@ -457,6 +457,11 @@ export const codexMcpOverrides = (servers = {}) => {
     if (s.allow) table.enabled_tools = s.allow;
     if (s.deny?.length) table.disabled_tools = s.deny;
     if (s.timeout) table.tool_timeout_sec = Math.round(s.timeout / 1000);
+    /* Chat mode runs with approvalPolicy "never", and Codex then refuses any
+       MCP tool it would have asked about ("requires approval, but approval
+       policy is never") -- so write_file never ran. The user chose these
+       servers for the chat, so their tools are approved up front. */
+    if (approve) table.default_tools_approval_mode = 'approve';
     // Its own table, whole: fields one at a time would merge into a server of
     // the same name in the reader's own config.toml.
     out.push('-c', `mcp_servers.${name}=${toml(table)}`);
@@ -720,7 +725,7 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
     return {
       // `-c` belongs to `codex` itself and carries into its subcommands.
       args: [
-        ...(hasServers ? codexMcpOverrides(servers) : []),
+        ...(hasServers ? codexMcpOverrides(servers, { approve: true }) : []),
         ...(wantThinking && reasoningSummaryOf(env) ? ['-c', `model_reasoning_summary=${JSON.stringify(reasoningSummaryOf(env))}`] : []),
         'app-server',
       ],
@@ -733,7 +738,15 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
           sandbox: 'read-only',
           approvalPolicy: 'never',
           ephemeral: !(persist || resume),
-          baseInstructions: system || 'You are a helpful assistant.',
+          baseInstructions: [
+            system || 'You are a helpful assistant.',
+            /* The read-only sandbox is only Codex's own shell. Told nothing,
+               Codex read "sandbox: read-only" in its context and refused to
+               make files, even with a workbench MCP server that can. */
+            hasServers
+              ? "\n\nNote: the read-only sandbox applies only to your built-in shell and patch tools. Your MCP tools run outside it and CAN read and write files on the user's PC (within the folders they allow). When the user asks you to create or edit files, do it with those MCP tools (e.g. write_file / edit_file with absolute paths) -- never say the PC connection is read-only, and do not ask the user to change permissions unless an MCP tool actually returned a permission error."
+              : '',
+          ].join(''),
         },
         turn: { input, ...(effort ? { effort } : {}) },
         resume,
@@ -765,8 +778,13 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
     /* With the tools toggle on, the app's tool tags are in the instructions
        and are the way to use them; agy's own tools stay off either way. */
     const appTools = !!tools;
-    const ownTools = hasServers && agent
-      ? "Do not use agy's own files or browser. Use your MCP tools whenever they help, and any tool tags your instructions describe."
+    const ownTools = hasServers
+      /* This agy build ignores the agent's `tools: []` and `mcpServers` (it
+         loads MCP only from the global mcp_config.json or plugins), so the
+         MCP write_file is not there. Told to use it, the model wrote with
+         run_command, which the chat cannot show; its own file tools are
+         read back from the transcript as file cards (agyEditCards). */
+      ? `Do not use run_command or the browser. To create or edit files, use your write_to_file / replace_file_content / multi_replace_file_content tools with absolute paths in a folder the user will find -- by default a new folder on their Desktop (${path.join(HOME, 'Desktop')}); never in your current directory, which is a hidden temp folder the user never sees. Use any tool tags your instructions describe as well.`
       : appTools
         ? "Do not use agy's own tools, files or browser. When a tool would help, use the tool tags your instructions describe: write the tag and stop, and the app runs it and returns the result."
         : 'Do not use any tools, files or the browser.';
@@ -1262,7 +1280,7 @@ export class ClaudeReader {
           this.textInMessage = true;
           return { content: gap + delta.text };
         }
-        if (delta.type === 'thinking_delta' && delta.thinking) return { thinking: delta.thinking };
+        if (delta.type === 'thinking_delta' && delta.thinking) { this.thoughts = 1; return { thinking: delta.thinking }; }
       }
       if (event.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
         const open = this.tools?.get(event.index);
@@ -1271,6 +1289,11 @@ export class ClaudeReader {
       }
       if (event.type === 'content_block_start') {
         const block = event.content_block || {};
+        /* Each thinking block (one per step between tool calls) is its own
+           paragraph; without this they ran into each other and into the
+           tool notes. A redacted one is said, not silently dropped. */
+        if (block.type === 'thinking' && this.thoughts) return { thinking: '\n\n' };
+        if (block.type === 'redacted_thinking') return { thinking: '\n[thinking hidden by the model]\n' };
         if (block.type === 'tool_use' || block.type === 'server_tool_use') {
           /* Said once its arguments are in (content_block_stop), so the note
              can name the file or command and not only the tool. */
@@ -1458,6 +1481,17 @@ export class CodexSession {
       case 'item/completed': {
         const item = p.item || {};
         if (item.type === 'agentMessage' && typeof item.text === 'string') return this.text(item.id || '', item.text, true);
+        /* A thought that came whole, with no deltas before it (some models and
+           versions): shown from the finished item, once. */
+        if (item.type === 'reasoning' && !this.reasoning.has(item.id)) {
+          const parts = [...(item.summary || []), ...(item.summary?.length ? [] : item.content || [])]
+            .map(s => (typeof s === 'string' ? s : s?.text || '')).filter(Boolean);
+          if (!parts.length) return null;
+          this.reasoning.set(item.id, 'whole');
+          const lead = this.lastReasoning ? '\n\n' : '';
+          this.lastReasoning = item.id;
+          return { thinking: lead + parts.join('\n\n') };
+        }
         if (item.type === 'commandExecution') {
           const command = Array.isArray(item.command) ? item.command.join(' ') : String(item.command || '');
           const code = Number.isInteger(item.exitCode) ? item.exitCode : null;
@@ -1466,6 +1500,18 @@ export class CodexSession {
           noteCommand({ id: item.id, command, output, code, status: failed ? 'failed' : 'done' });
           const end = String(output || '').trim().split('\n').slice(-15).join('\n');
           return { thinking: commandNoteOf(command, item.status === 'declined' ? 'declined' : `exit ${code ?? '?'}`, end) };
+        }
+        /* What an edit changed, as Claude Code's edits show it: each file's
+           diff (kept short), or why it did not go through. */
+        if (item.type === 'fileChange') {
+          if (item.status === 'failed' || item.status === 'declined') {
+            return { thinking: toolNote('tool failed', `edit ${item.status}: ${(item.changes || []).map(c => c.path).join(', ')}`) };
+          }
+          const diffs = (item.changes || []).map((c) => {
+            const d = String(c.diff || c.unified_diff || '').split('\n').slice(0, 40).join('\n');
+            return `${c.kind?.type || c.kind || 'update'} ${c.path}${d ? `\n${d}` : ''}`;
+          }).join('\n\n');
+          return diffs ? { thinking: `\n${resultNote(diffs)}` } : null;
         }
         if (item.type === 'mcpToolCall' && item.status === 'failed') {
           return { thinking: toolNote('tool failed', item.error?.message || `${item.server} / ${item.tool}`) };
@@ -1485,8 +1531,17 @@ export class CodexSession {
         const seen = this.reasoning.get(p.itemId);
         if (seen && seen !== kind) return null;
         this.reasoning.set(p.itemId, kind);
-        return p.delta ? { thinking: String(p.delta) } : null;
+        if (!p.delta) return null;
+        // A new thought (another reasoning item) starts a new paragraph.
+        const lead = this.lastReasoning && this.lastReasoning !== p.itemId ? '\n\n' : '';
+        this.lastReasoning = p.itemId;
+        return { thinking: lead + String(p.delta) };
       }
+      /* One summary is several parts ("**Planning**", "**Checking**"); each
+         was glued onto the last. */
+      case 'item/reasoning/summaryPartAdded':
+        if (Number(p.summaryIndex) > 0 && this.reasoning.get(p.itemId) !== 'raw') return { thinking: '\n\n' };
+        return null;
       case 'account/rateLimits/updated':
         return p.rateLimits || p.primary ? { limits: codexLimitsOf(p.rateLimits || p) } : null;
       case 'thread/tokenUsage/updated': {
@@ -1548,7 +1603,7 @@ export class AgyReader {
       const started = this.began ? {} : { started: true };
       this.began = true;
       // Its reasoning, when the model shares any.
-      if (step.thinking_delta) return { ...started, thinking: String(step.thinking_delta) };
+      if (step.thinking_delta) { this.sawThinking = true; return { ...started, thinking: String(step.thinking_delta) }; }
       if (step.step_type === 'agent_response' && step.text_delta) {
         this.sawText = true;
         return { ...started, content: step.text_delta };
@@ -1578,6 +1633,166 @@ export class AgyReader {
 
 const READERS = { 'claude-code': ClaudeReader, agy: AgyReader };
 
+/* ------------------------------------------------- agy's own transcript */
+
+/* agy's stdout carries only its words and thoughts: the files it read, the
+   commands it ran, the edits it made never come through. They are in the
+   transcript it writes as it goes (brain/<conversation>/.system_generated/
+   logs/transcript_full.jsonl), one step per line -- a PLANNER_RESPONSE with
+   `tool_calls`, then a step (VIEW_FILE, RUN_COMMAND, CODE_ACTION, …) with what
+   the tool gave back. Followed while agy runs and shown as the same timeline
+   notes Claude Code's tool calls are. */
+export const agyBrainDir = (env = {}) => String(env.CLI_AGY_BRAIN_DIR || '').trim()
+  || path.join(os.homedir(), '.gemini', 'antigravity-cli', 'brain');
+const AGY_TRANSCRIPT = path.join('.system_generated', 'logs', 'transcript_full.jsonl');
+const AGY_QUIET_STEPS = new Set(['USER_INPUT', 'PLANNER_RESPONSE', 'EPHEMERAL_MESSAGE', 'CHECKPOINT',
+  'CONVERSATION_HISTORY', 'SYSTEM_MESSAGE']);
+
+/* The one argument that says what a call is about, in agy's spelling. */
+export const agyToolTarget = (args = {}) => {
+  if (!args || typeof args !== 'object') return '';
+  for (const key of ['CommandLine', 'TargetFile', 'AbsolutePath', 'DirectoryPath', 'SearchPath', 'SearchDirectory',
+    'Query', 'query', 'Pattern', 'Url', 'Prompt', 'Message']) {
+    if (typeof args[key] === 'string' && args[key].trim()) {
+      const v = args[key].replace(/^file:\/\/\//, '').replace(/\s+/g, ' ').trim().slice(0, 160);
+      return key === 'Pattern' && args.SearchDirectory ? `${v} in ${args.SearchDirectory}` : v;
+    }
+  }
+  return typeof args.toolSummary === 'string' ? args.toolSummary.slice(0, 160) : '';
+};
+
+/* What a step's content says, without agy's "Created At / Completed At" header. */
+const agyStepBody = (text) => String(text || '')
+  .replace(/^(Created At|Completed At):[^\n]*\n/gm, '')
+  // agy's nudge to itself, not news for the reader.
+  .replace(/\s*If relevant, proactively run terminal commands[^\n]*/g, '')
+  .trim();
+
+/** The timeline notes for one transcript step ('' for one there is nothing to show of). */
+export const agyStepNotes = (step = {}, { withThinking = false } = {}) => {
+  let out = '';
+  /* agy's stdout says nothing while it thinks (often 20s+); the transcript
+     keeps each planning step's reasoning. Shown only when stdout did not
+     already stream it, so it is never said twice. */
+  if (withThinking && step.type === 'PLANNER_RESPONSE' && typeof step.thinking === 'string' && step.thinking.trim()) {
+    out += `${step.thinking.trim()}\n`;
+  }
+  for (const call of Array.isArray(step.tool_calls) ? step.tool_calls : []) {
+    const name = String(call?.name || 'tool');
+    const { toolAction, toolSummary, CodeContent, ReplacementContent, ReplacementChunks, ...args } = call?.args || {};
+    const what = agyToolTarget(call?.args);
+    out += name === 'run_command'
+      ? toolNote('running', what)
+      : toolNote('tool', `${name}${what ? ` · ${what}` : ''}`) + inputNote(args);
+  }
+  if (step.type === 'ERROR_MESSAGE') {
+    const why = String(step.error || agyStepBody(step.content)).replace(/^Error:\s*/i, '').split('\n')[0];
+    if (why) out += toolNote('tool failed', why);
+  } else if (!AGY_QUIET_STEPS.has(step.type) && step.status !== 'RUNNING') {
+    const body = agyStepBody(step.content);
+    if (body) out += `\n${resultNote(body)}`;
+  }
+  return out;
+};
+
+/* agy's own file edits as the Claude Code-style file cards (changesAsMarkdown's
+   line), read from the call's arguments since agy reports no diff. */
+const agyCard = (file, removed, added) => {
+  const lines = (s) => (s ? String(s).replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n') : []);
+  const minus = removed.flatMap(lines), plus = added.flatMap(lines);
+  const name = path.basename(file);
+  return ['', `📝 **\`${file}\`** (+${plus.length} −${minus.length})`, '```diff',
+    `--- a/${name}`, `+++ b/${name}`, ...minus.map(l => `-${l}`), ...plus.map(l => `+${l}`), '```', ''].join('\n');
+};
+
+export const agyEditCards = (step = {}) => {
+  let out = '';
+  for (const call of Array.isArray(step.tool_calls) ? step.tool_calls : []) {
+    const a = call?.args || {};
+    const file = typeof a.TargetFile === 'string' ? a.TargetFile.replace(/^file:\/\/\//, '') : '';
+    if (!file) continue;
+    if (call.name === 'write_to_file') out += agyCard(file, [], [a.CodeContent]);
+    else if (call.name === 'replace_file_content') out += agyCard(file, [a.TargetContent], [a.ReplacementContent]);
+    else if (call.name === 'multi_replace_file_content' && Array.isArray(a.ReplacementChunks)) {
+      out += agyCard(file, a.ReplacementChunks.map(c => c?.TargetContent), a.ReplacementChunks.map(c => c?.ReplacementContent));
+    }
+  }
+  return out;
+};
+
+/* Finds the transcript of the run that began at `startedAt` -- its own
+   conversation when agy has said which, else the newest one started since --
+   and hands each new step's notes to `emit`. `finish()` reads what is left. */
+export const watchAgyTranscript = ({ env = {}, startedAt = Date.now(), conversation = () => '', streamedThinking = () => false, emit }) => {
+  const brain = agyBrainDir(env);
+  let file = '', offset = 0, partial = '';
+  const seen = new Set();
+  const since = startedAt - 5000;   // created_at has whole seconds
+
+  const locate = () => {
+    const id = conversation();
+    if (id) {
+      const own = path.join(brain, id, AGY_TRANSCRIPT);
+      if (fs.existsSync(own)) return own;
+    }
+    let best = '', bestAt = 0;
+    let dirs = [];
+    try { dirs = fs.readdirSync(brain, { withFileTypes: true }); } catch { return ''; }
+    for (const d of dirs) {
+      if (!d.isDirectory()) continue;
+      const f = path.join(brain, d.name, AGY_TRANSCRIPT);
+      try {
+        const st = fs.statSync(f);
+        if (st.mtimeMs >= since && st.mtimeMs > bestAt) { best = f; bestAt = st.mtimeMs; }
+      } catch { /* not this one */ }
+    }
+    return best;
+  };
+
+  const step = () => {
+    if (!file) { file = locate(); if (!file) return; }
+    let size = 0;
+    try { size = fs.statSync(file).size; } catch { return; }
+    if (size < offset) { offset = 0; partial = ''; }       // rewritten
+    if (size === offset) return;
+    let chunk = '';
+    try {
+      const fd = fs.openSync(file, 'r');
+      try {
+        const buf = Buffer.alloc(size - offset);
+        fs.readSync(fd, buf, 0, buf.length, offset);
+        chunk = buf.toString('utf8');
+      } finally { fs.closeSync(fd); }
+    } catch { return; }
+    offset = size;
+    const lines = (partial + chunk).split('\n');
+    partial = lines.pop();
+    let notes = '', cards = '';
+    for (const raw of lines) {
+      let s;
+      try { s = JSON.parse(raw); } catch { continue; }
+      // A resumed conversation's earlier turns are not this run's work.
+      const at = Date.parse(s.created_at || '');
+      if (Number.isFinite(at) && at < since) continue;
+      const key = `${s.step_index}:${s.status}:${(s.tool_calls || []).length}`;
+      if (seen.has(key)) continue;
+      seen.add(key);
+      notes += agyStepNotes(s, { withThinking: !streamedThinking() });
+      /* agy's file edits, and any workbench diff a step returns, go into the
+         answer as the same file card Claude Code and Codex get. */
+      cards += agyEditCards(s);
+      if (!AGY_QUIET_STEPS.has(s.type) && s.type !== 'ERROR_MESSAGE' && s.status !== 'RUNNING') {
+        cards += changesAsMarkdown(agyStepBody(s.content));
+      }
+    }
+    if (notes || cards) { try { emit(notes, cards); } catch { /* shown or not */ } }
+  };
+
+  const timer = setInterval(step, 600);
+  timer.unref?.();
+  return { finish: () => { clearInterval(timer); step(); }, stop: () => clearInterval(timer) };
+};
+
 /* ------------------------------------------------------------ running one */
 
 /* Thirty minutes: with tools on, one answer can be a CLI reading, editing and
@@ -1586,7 +1801,9 @@ const CLI_TIMEOUT_DEFAULT_MS = 30 * 60 * 1000;
 /* Shorter where a run cannot be a long loop: plain chat, then chat with tools.
    CLI_TIMEOUT_MS still sets all three at once; the _CHAT/_TOOLS/_PROJECT ones
    set each. */
-const CLI_TIMEOUT_DEFAULTS = { chat: 3 * 60 * 1000, tools: 15 * 60 * 1000, project: CLI_TIMEOUT_DEFAULT_MS };
+/* No limit by default (0): an answer runs until the CLI finishes or the reader
+   presses stop. CLI_TIMEOUT_MS / CLI_TIMEOUT_<MODE>_MS still set one. */
+const CLI_TIMEOUT_DEFAULTS = { chat: 0, tools: 0, project: 0 };
 export const cliTimeoutMs = (env = {}, { tools = null, project = null } = {}) => {
   const mode = project ? 'project' : tools ? 'tools' : 'chat';
   const raw = env[`CLI_TIMEOUT_${mode.toUpperCase()}_MS`] || env.CLI_TIMEOUT_MS;
@@ -1635,6 +1852,82 @@ const workDir = () => {
   const dir = path.join(SCRATCH, 'cwd');
   fs.mkdirSync(dir, { recursive: true });
   return dir;
+};
+
+/* Without a project folder a CLI still writes files -- into workDir, where the
+   reader would never look and nothing said it had. A cheap listing before and
+   after (size + mtime, no git) finds what it wrote, shown as the same 📝 cards
+   a project run gets, with the full path. */
+const SCAN_MAX_FILES = 3000;
+const SCAN_SKIP = new Set(['node_modules', '.git', '.venv', '__pycache__']);
+export const scanDir = (root) => {
+  const out = new Map();
+  const walk = (dir, depth) => {
+    if (depth > 8 || out.size >= SCAN_MAX_FILES) return;
+    let entries = [];
+    try { entries = fs.readdirSync(dir, { withFileTypes: true }); } catch { return; }
+    for (const e of entries) {
+      if (out.size >= SCAN_MAX_FILES) return;
+      const full = path.join(dir, e.name);
+      if (e.isDirectory()) { if (!SCAN_SKIP.has(e.name)) walk(full, depth + 1); continue; }
+      if (!e.isFile()) continue;
+      try { const st = fs.statSync(full); out.set(full, `${st.size}:${st.mtimeMs}`); } catch { /* gone */ }
+    }
+  };
+  walk(root, 0);
+  return out;
+};
+
+const PREVIEW_BYTES = 64 * 1024;
+export const scratchChangesMarkdown = (before, after) => {
+  const changed = [...after.keys()].filter(f => before.get(f) !== after.get(f));
+  const removed = [...before.keys()].filter(f => !after.has(f));
+  if (!changed.length && !removed.length) return '';
+  const blocks = changed.slice(0, 30).map((file) => {
+    let text = '';
+    try {
+      const buf = fs.readFileSync(file);
+      text = buf.subarray(0, 8000).includes(0) ? '' : buf.subarray(0, PREVIEW_BYTES).toString('utf8');
+      if (buf.length > PREVIEW_BYTES) text += '\n… (cut)';
+    } catch { /* unreadable */ }
+    const lines = text ? text.replace(/\r\n/g, '\n').replace(/\n$/, '').split('\n') : [];
+    /* The same line changesAsMarkdown writes, so the chat draws it as the
+       Claude Code-style file card (src/fileChanges.js ANSWER_CHANGE) rather
+       than as a loose "Diff" code block. */
+    const added = lines.length;
+    return ['', `📝 **\`${file}\`** (+${added} −0)`, '```diff', added ? lines.map(l => `+${l}`).join('\n') : '+(binary or empty)', '```', ''].join('\n');
+  });
+  const more = changed.length > 30 ? `\n\n… +${changed.length - 30} more` : '';
+  const gone = removed.length ? `\n\n🗑️ ${removed.slice(0, 30).map(f => `\`${f}\``).join(', ')}` : '';
+  return `\n\n${blocks.join('\n')}${more}${gone}\n\n`;
+};
+
+/* Watches the scratch folder while a CLI runs and hands each file over as it
+   is written, so its card lands in the answer where the work happened rather
+   than all at the end. A file is shown once its size and time have held for
+   one look (not half-written); `finish` shows whatever is left. */
+const SCRATCH_POLL_MS = 1200;
+export const watchScratch = (dir, before, emit) => {
+  let shown = new Map(before);
+  let last = before;
+  const step = (final) => {
+    let now;
+    try { now = scanDir(dir); } catch { return; }
+    const next = new Map(shown);
+    for (const [f, stamp] of now) {
+      if (final || last.get(f) === stamp) next.set(f, stamp);
+    }
+    for (const f of [...next.keys()]) if (!now.has(f) && (final || !last.has(f))) next.delete(f);
+    last = now;
+    try {
+      const md = scratchChangesMarkdown(shown, next);
+      if (md) emit(md);
+    } catch { /* the answer stands without it */ }
+    shown = next;
+  };
+  const timer = setInterval(() => step(false), SCRATCH_POLL_MS);
+  timer.unref?.();
+  return { finish: () => { clearInterval(timer); step(true); }, stop: () => clearInterval(timer) };
 };
 
 /* The whole tree: on Windows a CLI is often a launcher with the real work in a
@@ -1712,6 +2005,13 @@ const runCliOnce = ({
 
   // A conversation (Codex) reads and writes; the others read a stream.
   const reader = invocation.session || new READERS[provider.id]();
+  // agy's tool steps, from its transcript (see watchAgyTranscript).
+  const transcript = provider.id === 'agy' && !flag(env.CLI_AGY_TRANSCRIPT ?? 'on', true) ? null
+    : provider.id === 'agy' ? watchAgyTranscript({
+      env, startedAt: Date.now(), conversation: () => reader.sessionId || resume || '',
+      streamedThinking: () => !!reader.sawThinking,
+      emit: (thinking, content = '') => { try { onDelta?.({ content, thinking }); } catch { /* closed */ } },
+    }) : null;
   const timeoutMs = cliTimeoutMs(env, { tools, project });
   let settled = false, stdout = '', stderr = '', last = null, exited = false;
   /* The folder goes once the process has exited, not as it is being killed;
@@ -1722,6 +2022,8 @@ const runCliOnce = ({
     settled = true;
     clearTimeout(timer);
     stopWatching();
+    // The last steps agy wrote, before the answer is called whole.
+    if (transcript) { if (error) transcript.stop(); else transcript.finish(); }
     signal?.removeEventListener('abort', onAbort);
     killTree(child);
     if (exited) cleanup();
@@ -1733,13 +2035,14 @@ const runCliOnce = ({
   if (signal?.aborted) { onAbort(); return; }
   /* A timeout keeps the session it was in (when the CLI had said one), so the
      chat can carry on from there rather than starting the work over. */
-  const timer = setTimeout(() => {
+  // 0 = no limit: no timer at all.
+  const timer = timeoutMs > 0 ? setTimeout(() => {
     const e = new Error(`${provider.label} did not finish within ${Math.round(timeoutMs / 1000)}s`);
     e.timedOut = true;
     e.sessionId = reader.sessionId || (reader.threadId && !reader.thread?.ephemeral ? reader.threadId : '') || '';
     settle(e);
-  }, timeoutMs);
-  timer.unref?.();
+  }, timeoutMs) : null;
+  timer?.unref?.();
 
   const write = (message) => {
     if (!child.stdin.writable) return;
@@ -2238,16 +2541,22 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
       resume: id, persist: resumable, onStart, onDelta, project, approve,
     });
     const before = project ? await snapshotTree(project.dir) : null;
+    const scratchBefore = project || generate ? null : scanDir(workDir());
     /* Said before anything else: which CLI, since when and for how long at
        most, so the chat can show a clock against the limit. */
     publish(frameOf({ content: '' }, {
       done: false,
       cli_started: { provider: provider.id, model, startedAt: Date.now(), timeoutMs: cliTimeoutMs(env, { tools, project }), continued: !!carry },
     }));
+    // No folder picked: each file it writes is shown as it appears, with its real path.
+    const scratchWatch = scratchBefore
+      ? watchScratch(workDir(), scratchBefore, (md) => onDelta({ content: md, thinking: '' }))
+      : null;
     let result;
     try {
       result = await attempt(request, resume);
     } catch (e) {
+      scratchWatch?.stop();
       if (e.timedOut && e.sessionId && chat && !generate) {
         noteContinuable(owner, chat, { id: e.sessionId, provider: provider.id, keyModel });
         e.canContinue = true;
@@ -2272,6 +2581,8 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
         run = noteRun({ owner, chat, root: before.root, before: before.tree, after: after.tree, files: changes.files }).id;
         onDelta({ content: changesMarkdown(changes, run), thinking: '' });
       }
+    } else if (scratchWatch) {
+      scratchWatch.finish();   // whatever was written in the last moment
     }
     if (resumable && result.sessionId) {
       const said = body.format ? unfence(content) : content;

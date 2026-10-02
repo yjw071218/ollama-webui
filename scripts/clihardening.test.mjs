@@ -42,12 +42,12 @@ for (const s of ['Claude Code did not finish within 180s', 'exited with code 1 b
 }
 
 /* ---- time limits by mode */
-ok(C.cliTimeoutMs({}, {}) === 3 * 60 * 1000, 'chat: 3 min');
-ok(C.cliTimeoutMs({}, { tools: {} }) === 15 * 60 * 1000, 'tools: 15 min');
-ok(C.cliTimeoutMs({}, { project: {} }) === 30 * 60 * 1000, 'project: 30 min');
+ok(C.cliTimeoutMs({}, {}) === 0, 'chat: no limit');
+ok(C.cliTimeoutMs({}, { tools: {} }) === 0, 'tools: no limit');
+ok(C.cliTimeoutMs({}, { project: {} }) === 0, 'project: no limit');
 ok(C.cliTimeoutMs({ CLI_TIMEOUT_MS: '1000' }, { project: {} }) === 1000, 'CLI_TIMEOUT_MS sets all');
 ok(C.cliTimeoutMs({ CLI_TIMEOUT_MS: '1000', CLI_TIMEOUT_CHAT_MS: '2000' }, {}) === 2000, 'per-mode wins');
-ok(C.cliTimeoutMs({ CLI_TIMEOUT_CHAT_MS: 'nonsense' }, {}) === 3 * 60 * 1000, 'nonsense falls back');
+ok(C.cliTimeoutMs({ CLI_TIMEOUT_CHAT_MS: 'nonsense' }, {}) === 0, 'nonsense falls back');
 
 /* ---- agy: tokens through the environment, not the agent file */
 const servers = { gh: { transport: 'stdio', command: 'node', args: ['x.js'], env: { GH_TOKEN: 'secret-123' } } };

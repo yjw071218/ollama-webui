@@ -125,7 +125,8 @@ export const CliTurnExtras = ({ message, live = false, isLast = false, busy = fa
   if (!(live && message.cliStarted) && !runId && !showFallback && !showContinue && !(isLast && !busy && message.cliTimedOut)) return null;
   return (
     <div className="cli-turn-extras">
-      {live && message.cliStarted && <CliRunClock started={message.cliStarted} />}
+      {/* Only against a real limit: with none, a clock is just noise. */}
+      {live && message.cliStarted && Number(message.cliStarted.timeoutMs) > 0 && <CliRunClock started={message.cliStarted} />}
       {!live && runId && <CliRunCard runId={runId} />}
       {showContinue && (
         <button type="button" className="continue-btn" onClick={() => onContinue?.(message.cliContinue.model)}>

@@ -199,7 +199,7 @@ export const CliPanel = ({ sessions = [], onImportChat }) => {
           {status.settings.effort && (
             <div>{t('cli.effortSetting')}: <span style={mono}>{status.settings.effort}</span></div>
           )}
-          {status.settings.timeouts && (
+          {status.settings.timeouts && Object.values(status.settings.timeouts).some(v => v > 0) && (
             <div>
               {t('cli.timeouts', {
                 chat: formatDuration(status.settings.timeouts.chat, lang),
