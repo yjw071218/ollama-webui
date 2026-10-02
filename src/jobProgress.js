@@ -78,6 +78,22 @@ export const formatDuration = (ms) => {
 };
 
 /**
+ * How fast the sampler is going, the way ComfyUI's own console says it:
+ * seconds per step when a step takes a second or more, steps per second when
+ * it takes less. '' with nothing measured yet.
+ *
+ * The one number that tells "slow because it is a big picture" from "slow
+ * because the model has spilled out of VRAM" -- the second is several times
+ * the first, and nothing else on the card changes when it happens.
+ */
+export const formatSpeed = (stepMs) => {
+  const ms = Number(stepMs);
+  if (!Number.isFinite(ms) || ms <= 0) return '';
+  if (ms >= 1000) return `${(ms / 1000).toFixed(ms >= 10000 ? 0 : 1)}s/it`;
+  return `${(1000 / ms).toFixed(1)}it/s`;
+};
+
+/**
  * How much longer, from how long it has taken to get this far.
  *
  * Deliberately refuses to answer early. In the first seconds the fraction is
@@ -91,6 +107,75 @@ export const remainingMs = (fraction, elapsedMs) => {
   if (fraction <= 0.04 || fraction >= 1) return null;
   if (!(elapsedMs > 4000)) return null;
   return Math.max(0, (elapsedMs / fraction) - elapsedMs);
+};
+
+/**
+ * Time left by the server's reckoning, counted down since it was said.
+ *
+ * The server places a run against earlier runs of the same workflow (see
+ * server/studioTimings.js) and says how long it has left as of that message.
+ * Messages come when something changes, so between them the figure is aged
+ * here rather than left standing. Null when the server had nothing to go on,
+ * and the caller falls back to `remainingMs`.
+ */
+export const learnedRemaining = (snapshot, receivedAt, now = Date.now()) => {
+  if (!snapshot?.learned || !Number.isFinite(snapshot.remainingMs)) return null;
+  const since = Number.isFinite(receivedAt) ? Math.max(0, now - receivedAt) : 0;
+  return Math.max(0, snapshot.remainingMs - since);
+};
+
+/* What a failure was, from the words ComfyUI used. Checked in order: the first
+   that matches names it. */
+const FAILURES = [
+  ['stopped', /^stopped$|interrupt/i],
+  ['memory', /out of memory|OutOfMemory|CUDA error: out of memory|Allocation on device|not enough memory/i],
+  // A module half on the card and half not: a model that did not fit, run by
+  // a node that cannot cope with that.
+  ['offloaded', /Input type \(CUDA[\w]*\) and weight type \(CPU|weight type \(CPU\w*\)|Expected all tensors to be on the same device|found at least two devices/i],
+  ['missing', /No such file|not found|does not exist|Value not in list|could not find|FileNotFoundError/i],
+];
+
+/**
+ * A failure, said in words a person can act on.
+ *
+ * What ComfyUI reports is the exception from inside a node -- "AnimaPiDDecode:
+ * Input type (CUDABFloat16Type) and weight type (CPUBFloat16Type) should be the
+ * same" -- which is exact and means nothing to anyone who did not write the
+ * node. The common ones have a cause worth naming and something to do about
+ * it; the rest say which node it was. The original is kept as `raw`, for the
+ * details, because an explanation that replaced it would hide the one thing
+ * worth pasting into a bug report.
+ */
+export const explainFailure = (error) => {
+  const raw = String(error || '').trim();
+  const colon = raw.indexOf(': ');
+  const node = colon > 0 && colon < 60 && !/\s/.test(raw.slice(0, colon)) ? raw.slice(0, colon) : '';
+  const found = FAILURES.find(([, pattern]) => pattern.test(raw));
+  return { kind: found ? found[0] : 'generic', node, raw: raw === 'stopped' ? '' : raw };
+};
+
+/* Two gigabytes: past ComfyUI's own 0.7GB reserve by more than anyone would
+   choose, and short of what a model needs. */
+const RESERVE_WARN = 2 * 1024 ** 3;
+
+/**
+ * What is worth saying about memory while a job runs, from `/studio/loaded`.
+ *
+ * `offloaded` is the largest model ComfyUI holds, when less than nine tenths of
+ * it is on the card -- the rest running from system RAM, which is why a job is
+ * slow. `reserved` is ComfyUI holding back far more than its own figure for
+ * other programs, the state that made every picture fail for an hour. Null
+ * when there is nothing to say.
+ */
+export const memoryNote = (loaded) => {
+  const models = (loaded?.models || []).filter(m => Number(m?.size) > 0 && !m.approximate);
+  const largest = models.sort((a, b) => b.size - a.size)[0];
+  const share = largest ? Math.min(1, (Number(largest.size_vram) || 0) / largest.size) : 1;
+  const offloaded = largest && share < 0.9
+    ? { name: largest.name, onGpu: Number(largest.size_vram) || 0, size: largest.size, share }
+    : null;
+  const reserved = Number(loaded?.reserved) > RESERVE_WARN ? Number(loaded.reserved) : null;
+  return offloaded || reserved ? { offloaded, reserved } : null;
 };
 
 /**

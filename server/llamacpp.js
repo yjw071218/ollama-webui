@@ -1,3 +1,9 @@
+import { readRequestBody } from './requestBody.js';
+import { ownerOfRequest } from './session.js';
+import {
+  beginChatJob, attachChatController, appendChatFrame, finishChatJob, readChatJob, replayChatJob, cancelChatJob, followChatJob,
+} from './chatJobs.js';
+
 /**
  * Talking to llama.cpp as though it were Ollama.
  *
@@ -298,6 +304,18 @@ export const toDoneFrame = (model, { timings, usage, finishReason } = {}) => {
   if (Number.isFinite(promptMs) && Number.isFinite(predictedMs)) {
     frame.total_duration = ns(promptMs + predictedMs);
   }
+  /* Speculative decoding: how many tokens the draft proposed and how many the
+     big model kept. Not in llama-server's documented `timings` example, but
+     sent when a draft (or n-gram lookup) is in use; passed on only if present.
+     The acceptance rate is the whole question of whether a draft is worth its
+     VRAM -- below roughly half it is slower than no draft at all. */
+  const draftN = timings?.draft_n;
+  const draftAccepted = timings?.draft_n_accepted;
+  if (Number.isFinite(draftN) && draftN > 0) {
+    frame.draft_n = draftN;
+    if (Number.isFinite(draftAccepted)) frame.draft_n_accepted = draftAccepted;
+  }
+
   // Nothing here loads the model as a separate measurable step the way Ollama
   // does, so this is honestly zero rather than absent: the client shows it as
   // "why was the first message slow", and a missing field would read as a
@@ -535,19 +553,11 @@ export const pullFinished = (event) => {
    existing proxy handles `/api/*` untouched, which is what keeps this a
    switchable backend rather than a replacement. */
 
-const readBody = (req, limit = 32 * 1024 * 1024) => new Promise((resolve, reject) => {
-  let body = '';
-  req.on('data', (chunk) => {
-    body += chunk;
-    // A chat carrying several images is genuinely large; anything past this is
-    // not something to be buffering in memory.
-    if (body.length > limit) reject(new Error('Request too large'));
-  });
-  req.on('end', () => {
-    try { resolve(body ? JSON.parse(body) : {}); } catch (e) { reject(new Error('Invalid JSON')); }
-  });
-  req.on('error', reject);
-});
+const readBody = async (req, limit = 32 * 1024 * 1024) => {
+  const raw = await readRequestBody(req, limit);
+  try { return raw.length ? JSON.parse(raw.toString('utf8')) : {}; }
+  catch { throw new Error('Invalid JSON'); }
+};
 
 const sendJson = (res, payload, status = 200) => {
   res.statusCode = status;
@@ -568,7 +578,7 @@ const openNdjson = (res) => {
 };
 
 /** Every model llama-server knows about, in its own shape. */
-const listModels = async (base) => {
+export const listModels = async (base) => {
   const data = await jsonOf(await callServer(base, '/models', { timeout: 20000 }));
   return data.data || data.models || [];
 };
@@ -578,17 +588,57 @@ export const createLlamaRoutes = (env = {}) => {
   const routes = [];
   const route = (path, handler) => routes.push({ path, handler });
 
+  route('/api/chat/replay', (req, res) => {
+    const id = new URL(req.url, 'http://localhost').searchParams.get('id');
+    const job = readChatJob(id);
+    if (!job) {
+      res.statusCode = 404;
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ error: 'Chat generation not found' }));
+      return;
+    }
+    const replayUrl = new URL(req.url, 'http://localhost');
+    if (replayUrl.searchParams.get('follow') === '1') return followChatJob(req, res, job, replayUrl.searchParams.get('offset'));
+    res.statusCode = 200;
+    res.setHeader('Content-Type', 'application/x-ndjson');
+    res.setHeader('Cache-Control', 'no-store');
+    res.end(replayChatJob(job));
+  });
+  route('/api/chat/cancel', (req, res) => {
+    let body = '';
+    req.on('data', chunk => { body += chunk; });
+    req.on('end', () => {
+      let id = '';
+      try { id = JSON.parse(body).id || ''; } catch (e) { /* invalid body below */ }
+      const cancelled = cancelChatJob(id);
+      res.setHeader('Content-Type', 'application/json');
+      res.end(JSON.stringify({ success: cancelled }));
+    });
+  });
+
   /* ---------------------------------------------------------------- chat */
 
   route('/api/chat', async (req, res) => {
     let body;
     try { body = await readBody(req); } catch (e) { return fail(res, e, 400); }
 
-    // Stop aborts the socket to us; that has to reach llama-server, or the GPU
-    // carries on writing an answer nobody will ever see.
+    // A browser reload closes this response, but it must not cancel the model
+    // request. The generation is the durable work; the NDJSON response is only
+    // one subscriber to it. Cancelling here made a refresh look like a stopped
+    // queue and discarded the answer that was already being generated.
     const controller = new AbortController();
-    req.on('aborted', () => controller.abort());
-    res.on('close', () => { if (!res.writableEnded) controller.abort(); });
+    const jobId = String(req.headers['x-chat-job-id'] || '').trim();
+    if (jobId) {
+      try {
+        // Whose answer, and for which conversation -- see `live` in server/chatJobs.js.
+        const job = beginChatJob(jobId, {
+          owner: ownerOfRequest(req),
+          chat: String(req.headers['x-chat-conversation'] || '').trim(),
+        });
+        if (job.finished || job.controller) return fail(res, new Error('Chat job already exists'), 409);
+        attachChatController(jobId, controller);
+      } catch (e) { return fail(res, e, 503); }
+    }
 
     let upstream;
     try {
@@ -598,10 +648,12 @@ export const createLlamaRoutes = (env = {}) => {
         signal: controller.signal,
       });
     } catch (e) {
+      if (jobId) cancelChatJob(jobId, e.message);
       return fail(res, e);
     }
 
     if (!upstream.ok) {
+      if (jobId) cancelChatJob(jobId, 'Model refused the request');
       const detail = await upstream.text().catch(() => '');
       // Passed through rather than flattened: the client reads this text to
       // decide whether a refused thinking level is worth retrying without one.
@@ -609,6 +661,14 @@ export const createLlamaRoutes = (env = {}) => {
     }
 
     const write = openNdjson(res);
+    let connected = true;
+    res.on('close', () => { connected = false; });
+    const publish = (frame) => {
+      if (jobId && !appendChatFrame(jobId, frame)) return;
+      if (res.writableLength > 1024 * 1024) { connected = false; res.destroy(); }
+      if (!connected || res.writableEnded) return;
+      try { write(frame); } catch (e) { connected = false; }
+    };
     const translator = new ChatTranslator(body.model);
     const reader = upstream.body.getReader();
     const decoder = new TextDecoder();
@@ -621,25 +681,29 @@ export const createLlamaRoutes = (env = {}) => {
         // reading: the usage-and-timings chunk is the last thing on the wire
         // and arrives without a trailing blank line more often than not.
         buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+        if (buffer.length > 4 * 1024 * 1024) throw new Error('Model event exceeded the memory limit');
         if (done) buffer += '\n\n';
 
         const { events, rest } = sseEvents(buffer);
         buffer = rest;
         for (const event of events) {
           if (event.done) continue;          // "[DONE]"; the real end is below
-          for (const frame of translator.accept(event.payload)) write(frame);
+          for (const frame of translator.accept(event.payload)) publish(frame);
         }
         if (done) break;
       }
-      write(translator.finish());
+      publish(translator.finish());
+      if (jobId) finishChatJob(jobId);
     } catch (e) {
       // A mid-stream failure cannot become a status code, so it becomes a
       // frame. Silence here is a spinner that never stops.
       if (!controller.signal.aborted) {
-        write({ model: body.model, error: String(e.message || e), done: true, done_reason: 'error' });
+        publish({ model: body.model, error: String(e.message || e), done: true, done_reason: 'error' });
       }
+      if (jobId) finishChatJob(jobId);
     } finally {
-      res.end();
+      reader.releaseLock();
+      if (!res.destroyed) res.end();
     }
   });
 
@@ -823,6 +887,7 @@ export const createLlamaRoutes = (env = {}) => {
       while (true) {
         const { done, value } = await reader.read();
         buffer += done ? decoder.decode() : decoder.decode(value, { stream: true });
+        if (buffer.length > 4 * 1024 * 1024) throw new Error('Model event exceeded the memory limit');
         if (done) buffer += '\n\n';
         const { events: parsed, rest } = sseEvents(buffer);
         buffer = rest;

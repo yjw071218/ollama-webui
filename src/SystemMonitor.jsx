@@ -46,13 +46,18 @@ const store = {
   history: { cpu: [], gpu: [], ram: [], vram: [] },
   listeners: new Set(),
   timer: null,
+  controller: null,
 };
 
 const emit = () => { store.listeners.forEach(fn => fn()); };
 
 const poll = async () => {
+  if (store.controller || !store.listeners.size) return;
+  const controller = new AbortController();
+  store.controller = controller;
+  const timeout = setTimeout(() => controller.abort(), 8000);
   try {
-    const res = await fetch('/system/stats');
+    const res = await fetch('/system/stats', { signal: controller.signal });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     if (!data.ok) throw new Error(data.error || 'unavailable');
@@ -76,9 +81,12 @@ const poll = async () => {
     store.stats = data;
     store.error = '';
   } catch (e) {
-    store.error = e.message || String(e);
+    if (!controller.signal.aborted) store.error = e.message || String(e);
+  } finally {
+    clearTimeout(timeout);
+    if (store.controller === controller) store.controller = null;
   }
-  emit();
+  if (store.listeners.size) emit();
 };
 
 /** Subscribes to the shared stats; polling runs only while someone is listening. */
@@ -103,6 +111,7 @@ export const useSystemStats = (active = true) => {
       if (store.listeners.size === 0 && store.timer) {
         clearInterval(store.timer);
         store.timer = null;
+        store.controller?.abort();
       }
     };
   }, [active]);
@@ -327,6 +336,7 @@ const Alerts = ({ raised }) => {
           {alert.kind === 'thermal' ? <Thermometer size={13} /> : <TriangleAlert size={13} />}
           <span>
             {alert.kind === 'vram' && t('sysmon.alertVram', { free: formatBytes(alert.free) })}
+            {alert.kind === 'commit' && t('sysmon.alertCommit', { free: formatBytes(alert.free) })}
             {alert.kind === 'offloaded' && t('sysmon.alertOffloaded', {
               model: alert.model,
               percent: Math.round(alert.onGpu * 100),
@@ -363,11 +373,13 @@ const Residency = ({ running }) => {
       <div className="sysmon-title"><Layers size={13} /> {t('sysmon.residency')}</div>
       {rows.length === 0 ? (
         <div className="usage-detail">{t('models.noneLoaded')}</div>
-      ) : rows.map(row => (
-        <div className="sysmon-residency" key={row.name}>
+      ) : rows.map((row, i) => (
+        <div className="sysmon-residency" key={`${row.source}-${row.name}-${i}`}>
           <div className="sysmon-residency-head">
-            <span className="sysmon-model-name" title={row.name}>{row.name}</span>
+            <span className="sysmon-model-name" title={row.approximate ? t(row.source === 'ace-step' ? 'models.aceApproximate' : 'models.comfyApproximate') : row.name}>{row.name}</span>
             {row.quantisation && <span className="sysmon-chip">{row.quantisation}</span>}
+            {row.source === 'comfyui' && <span className="sysmon-chip">ComfyUI</span>}
+            {row.source === 'ace-step' && <span className="sysmon-chip">ACE-Step</span>}
             <span className="sysmon-model-size">{formatBytes(row.total)}</span>
           </div>
 
@@ -603,6 +615,14 @@ export const SystemMonitor = ({ runningModels = [], perfKey = 'perfRuns', curren
           detail={`${formatBytes(stats.memory.used)} / ${formatBytes(stats.memory.total)}`}
         />
         <Sparkline points={view(history.ram)} />
+        {/* RAM plus the page file: what loading a model actually draws on. */}
+        {stats.commit?.total > 0 && (
+          <UsageBar
+            value={(stats.commit.used / stats.commit.total) * 100}
+            label={t('sysmon.commit')}
+            detail={`${formatBytes(stats.commit.used)} / ${formatBytes(stats.commit.total)} · ${t('sysmon.commitFree', { size: formatBytes(stats.commit.free) })}`}
+          />
+        )}
       </section>
 
       {stats.gpus.length > 0 ? (
@@ -664,6 +684,15 @@ export const SystemStrip = ({ onOpen, inHeader = false }) => {
     { key: 'cpu', label: 'CPU', value: stats.cpu.usage, hint: stats.cpu.model },
     gpu && { key: 'gpu', label: 'GPU', value: gpu.utilization, hint: gpu.name },
     { key: 'ram', label: 'RAM', value: memoryPct, hint: `${formatBytes(stats.memory.used)} / ${formatBytes(stats.memory.total)}` },
+    // Commit, only once it is getting short: a chip that is always there is a chip nobody reads.
+    stats.commit?.total > 0 && stats.commit.used / stats.commit.total >= 0.7
+      ? {
+          key: 'commit',
+          label: 'VM',
+          value: (stats.commit.used / stats.commit.total) * 100,
+          hint: `${t('sysmon.commit')}: ${formatBytes(stats.commit.used)} / ${formatBytes(stats.commit.total)}`,
+        }
+      : null,
     gpu && gpu.memoryTotal
       ? {
           key: 'vram',

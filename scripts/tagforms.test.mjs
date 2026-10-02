@@ -9,6 +9,12 @@
 // departures from the documented form, any one of which was enough for no
 // pattern to match. Every reader of tool tags now reads them in the documented
 // form whatever form was written.
+//
+// Reported again later, with the closing tag left off altogether:
+//
+//   <TOOL_GENERATE_IMAGE style="anime" negative="" from="none" prompt="…">
+//
+// The prompt is right there, so that is a call too, and it now runs.
 import fs from 'node:fs';
 import path from 'node:path';
 import { Readable } from 'node:stream';
@@ -31,6 +37,7 @@ const REPORTED = 'I will animate her now.\n\n<TOOL_GENERATE_VIDEO from="last_ima
 const CANON = '<TOOL_GENERATE_VIDEO from="last_image" duration="5">[0s-2s] A woman looks at the viewer, blinking slowly.\n  [2s-5s] She smiles and waves as the camera zooms in.</TOOL_GENERATE_VIDEO>';
 
 const T = await load('src/tools.js');
+const { parseAssistantMessage } = await load('src/messageParts.js');
 eq('the reported call is read in the documented form', T.canonicalToolTags(REPORTED), `I will animate her now.\n\n${CANON}`);
 eq('the documented form is left as it is', T.canonicalToolTags(CANON), CANON);
 check('and reading twice changes nothing', T.canonicalToolTags(T.canonicalToolTags(REPORTED)) === T.canonicalToolTags(REPORTED));
@@ -48,11 +55,30 @@ eq('a search\'s query stays where search_files wants it',
   T.canonicalToolTags('<TOOL_SEARCH_FILES path="C:\\x" query="todo"/>'), '<TOOL_SEARCH_FILES path="C:\\x" query="todo"></TOOL_SEARCH_FILES>');
 eq('while a web search\'s becomes its body', T.canonicalToolTags('<TOOL_WEB_SEARCH query="cats" />'), '<TOOL_WEB_SEARCH>cats</TOOL_WEB_SEARCH>');
 eq('a tag still being written is left alone', T.canonicalToolTags('<TOOL_GENERATE_VIDEO from="la'), '<TOOL_GENERATE_VIDEO from="la');
-eq('and so is one that opens and never closes', T.canonicalToolTags('Write <TOOL_TIME> to ask.'), 'Write <TOOL_TIME> to ask.');
+eq('and so is one that opens and never closes with nothing to run', T.canonicalToolTags('Write <TOOL_TIME> to ask.'), 'Write <TOOL_TIME> to ask.');
+// Reported second: the closing tag left off entirely, the prompt in an
+// attribute. Nothing was drawn and the tag was shown to the person as text.
+eq('an unclosed opening tag carrying its prompt is still the call',
+  T.canonicalToolTags('<TOOL_GENERATE_IMAGE style="anime" negative="" from="none" prompt="1girl, solo, classroom, sunset lighting.">'),
+  '<TOOL_GENERATE_IMAGE style="anime" negative="" from="none">1girl, solo, classroom, sunset lighting.</TOOL_GENERATE_IMAGE>');
+eq('  and what the model wrote after it is kept',
+  T.canonicalToolTags('Here you go.\n<TOOL_GENERATE_VIDEO from="last_image" prompt="she waves">\nDone!'),
+  'Here you go.\n<TOOL_GENERATE_VIDEO from="last_image">she waves</TOOL_GENERATE_VIDEO>\nDone!');
+eq('  an unclosed tag with no prompt to run is left alone',
+  T.canonicalToolTags('<TOOL_GENERATE_IMAGE style="anime" from="none">'), '<TOOL_GENERATE_IMAGE style="anime" from="none">');
+eq('  as is one whose body is the payload, which was cut off',
+  T.canonicalToolTags('<TOOL_WRITE_FILE path="C:\\x.txt">hello'), '<TOOL_WRITE_FILE path="C:\\x.txt">hello');
+check('  reading twice changes nothing here either',
+  T.canonicalToolTags(T.canonicalToolTags('<TOOL_GENERATE_IMAGE prompt="a cat">'))
+    === T.canonicalToolTags('<TOOL_GENERATE_IMAGE prompt="a cat">'));
+{
+  const blocks = parseAssistantMessage('<TOOL_GENERATE_IMAGE style="anime" negative="" from="none" prompt="a cat on a wall">');
+  eq('  and it shows as a step rather than as text', blocks.map(b => b.type), ['tool_call']);
+  eq('    with its prompt as the body', blocks[0].content, 'a cat on a wall');
+}
 eq('a tool result is not a call', T.canonicalToolTags('<TOOL_RESULT>x</TOOL_RESULT>'), '<TOOL_RESULT>x</TOOL_RESULT>');
 
 // Read as a call, and run as one.
-const { parseAssistantMessage } = await load('src/messageParts.js');
 {
   const blocks = parseAssistantMessage(REPORTED);
   eq('it shows as a step, not as text', blocks.map(b => b.type), ['text', 'tool_call']);

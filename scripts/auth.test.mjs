@@ -118,6 +118,27 @@ const makeClient = () => {
 
 /* ------------------------------------------------------- register and session */
 
+// Real HTTP chunks can split a multibyte name or saved answer. Decode them
+// as one UTF-8 stream before JSON.parse, including on account/sync routes.
+const unicodeName = '한글 사용자 😀';
+const fragmentedBody = Buffer.from(JSON.stringify({ name: unicodeName,
+  email: 'unicode@example.com', password: 'correct horse battery' }));
+const splitAt = fragmentedBody.indexOf(Buffer.from('한')) + 1;
+const fragmentedReply = await new Promise((resolve, reject) => {
+  const req = http.request(ORIGIN + '/api/auth/register', { method: 'POST',
+    headers: { 'Content-Type': 'application/json', 'Content-Length': fragmentedBody.length } }, res => {
+    res.setEncoding('utf8');
+    let body = '';
+    res.on('data', chunk => { body += chunk; });
+    res.on('end', () => resolve({ status: res.statusCode, body: JSON.parse(body) }));
+  });
+  req.on('error', reject);
+  req.write(fragmentedBody.subarray(0, splitAt));
+  setTimeout(() => req.end(fragmentedBody.subarray(splitAt)), 20);
+});
+eq('a split UTF-8 request is accepted', fragmentedReply.status, 200);
+eq('its Korean and emoji survive account persistence', fragmentedReply.body.user?.name, unicodeName);
+
 const alice = makeClient();
 
 let r = await alice.post('/api/auth/register', {
@@ -127,6 +148,10 @@ eq('registering succeeds', r.status, 200);
 check('and returns the account', !!r.body.user?.id);
 eq('with no password material on it', r.body.user.hash, undefined);
 check('and a CSRF token', !!r.body.csrfToken);
+eq('Risu sync requires authentication', (await makeClient().get('/api/risu/sync')).status, 401);
+eq('Risu sync rejects missing CSRF', (await alice.post('/api/risu/sync', { revision: 0, data: { characters: [], assets: {} } }, { 'x-csrf-token': '' })).status, 403);
+eq('Risu sync accepts authenticated account snapshot', (await alice.post('/api/risu/sync', { revision: 0, data: { characters: [], assets: {} } })).status, 200);
+eq('Risu sync reads its account revision', (await alice.get('/api/risu/sync')).body.revision, 1);
 
 const firstSession = alice.cookie('webui_session');
 check('a session cookie is set', !!firstSession);
@@ -278,14 +303,45 @@ const upToDate = await bob.get(`/api/auth/sync?since=${r.body.rev}`);
 eq('an up-to-date device receives nothing', upToDate.body.records.length, 0);
 check('and is told so', upToDate.body.complete);
 
-// Unknown kinds are refused rather than stored.
+/* Unknown kinds are refused rather than stored -- and refused on their own.
+ *
+ * This used to fail the whole request, and the cost of that was an account
+ * that stopped syncing entirely: the browser uploaded two record kinds the
+ * server had never been told about, and took every chat, setting and document
+ * in the same batch down with them. One record the server cannot store is not
+ * a reason to refuse the four hundred beside it. */
 r = await bob.post('/api/auth/sync', {
-  since: 0, ownerId: bobId, records: [{ kind: 'malware', id: 'x', updatedAt: 1, payload: {} }],
+  since: 0,
+  ownerId: bobId,
+  records: [
+    { kind: 'malware', id: 'x', updatedAt: 1, payload: {} },
+    { kind: 'chat', id: 'beside-it', updatedAt: 9000, payload: { id: 'beside-it', title: 'Still stored' } },
+  ],
 });
-eq('an unknown record kind is refused', r.status, 400);
+eq('a batch with an unknown kind in it is still accepted', r.status, 200);
+eq('  the record beside it is stored', r.body.applied, 1);
+eq('  the unknown one is not', r.body.refused?.length, 1);
+check('  and it is named, with a reason', /Unknown record kind/i.test(r.body.refused?.[0]?.reason || ''));
+r = await bob.get('/api/auth/sync?since=0');
+check('so the good record is in the account', r.body.records.some(x => x.id === 'beside-it'));
+check('and the unknown one is not', !r.body.records.some(x => x.kind === 'malware'));
+
+/* The Studio's two kinds, which are the ones that were missing. */
+r = await bob.post('/api/auth/sync', {
+  since: 0,
+  ownerId: bobId,
+  records: [
+    { kind: 'studio', id: 'all', updatedAt: 9100, payload: '{"anima-base":{"steps":28}}' },
+    { kind: 'studioJobs', id: 'all', updatedAt: 9100, payload: '[{"id":"j1"}]' },
+  ],
+});
+eq('the Studio settings and gallery are stored', r.body.applied, 2);
+check('and nothing about them was refused', !r.body.refused);
 
 r = await bob.get('/api/auth/stats');
-eq('the account reports what it holds', r.body.chats, 1);
+// Two: the one uploaded above, and the one that rode in beside a record the
+// server could not store and survived it.
+eq('the account reports what it holds', r.body.chats, 2);
 eq('for the right owner', r.body.ownerId, bobId);
 
 /* -------------------------------------------------------------- no session */
@@ -579,6 +635,48 @@ eq('its sessions are gone',
 eq('its passkeys are gone',
   leftovers.prepare('SELECT COUNT(*) AS n FROM credentials WHERE user_id = ?').get(aliceId).n, 0);
 leftovers.close();
+
+/* ------------------------------------------------ a published picture
+
+   `/api/share/image` is the only address a shared picture has. Not being able
+   to reach it any other way is the point: revoking a link has to stop the
+   bytes, not merely the page that framed them.
+
+   Only the refusals are exercised here -- everything past them proxies
+   ComfyUI, which a test cannot assume is running. The refusals are the half
+   that matters anyway: a token that names nothing, and a token that names a
+   conversation, must both answer exactly as a made-up one does. */
+
+const noSession = makeClient();
+r = await noSession.get('/api/share/image?token=' + 'z'.repeat(32));
+eq('an unknown token gets nothing', r.status, 404);
+check('and is not told why', /not available/i.test(r.body?.error || ''));
+
+r = await noSession.get('/api/share/image');
+eq('no token at all gets the same', r.status, 404);
+
+// A chat's token names a share, and it still must not serve a picture.
+const chatShare = await bob.post('/api/share/create', {
+  chatId: 'c-for-picture-test',
+  title: 'a conversation',
+  snapshot: { title: 'a conversation', messages: [{ role: 'user', content: 'hello' }] },
+});
+eq('a conversation can still be published', chatShare.status, 200);
+r = await noSession.get('/api/share/image?token=' + encodeURIComponent(chatShare.body.token));
+eq('but its token serves no picture', r.status, 404);
+
+// And one published as a picture is readable, without a session, as a picture.
+const picShare = await bob.post('/api/share/create', {
+  title: '1girl, kitchen',
+  picture: { filename: 'mtx1_00001_.png', subfolder: 'webui', type: 'output', prompt: '1girl, kitchen' },
+});
+eq('a picture can be published', picShare.status, 200);
+r = await noSession.get('/api/share/view?token=' + encodeURIComponent(picShare.body.token));
+eq('  and read by a stranger', r.status, 200);
+eq('  as a picture', r.body.share.kind, 'picture');
+eq('  with its prompt as the caption', r.body.share.picture.prompt, '1girl, kitchen');
+check('  and no filename, which would be a second way to the bytes',
+  r.body.share.file === undefined && !JSON.stringify(r.body.share).includes('mtx1_00001_'));
 
 server.close();
 console.log(`\n${pass} passed, ${fail} failed`);

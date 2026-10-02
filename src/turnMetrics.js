@@ -76,6 +76,16 @@ export const turnMetrics = (group) => {
     ttft: legs.find(m => Number.isFinite(m.ttft))?.ttft ?? last.ttft,
     load: summed('load'),
     promptEval: summed('promptEval'),
+    // Draft tokens proposed and kept, over every leg that used a draft.
+    ...(legs.some(m => Number.isFinite(m.draftN)) ? {
+      draftN: legs.reduce((n, m) => n + count(m.draftN), 0),
+      draftAccepted: legs.reduce((n, m) => n + count(m.draftAccepted), 0),
+    } : {}),
+    // What a subscription CLI said the turn would have cost, and read from
+    // the cache, over every leg that said. See server/cliModels.js.
+    ...(legs.some(m => Number.isFinite(m.costUsd)) ? { costUsd: summed('costUsd') } : {}),
+    ...(legs.some(m => Number.isFinite(m.cachedTokens)) ? { cachedTokens: summed('cachedTokens') } : {}),
+    ...(legs.some(m => m.resumed) ? { resumed: true } : {}),
     // How many requests this took. The footer says so when it is more than
     // one, because "18.3s" for a single question otherwise looks like a lie.
     legs: legs.length,

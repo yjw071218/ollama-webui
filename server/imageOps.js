@@ -79,6 +79,86 @@ export const removeBackgroundGraph = ({ image, objectInfo }) => {
   };
 };
 
+/* ------------------------------------------------------- lifting the shadows
+
+   There is no node in this ComfyUI that removes a shadow. Of everything named
+   for one, `LayerStyle: DropShadow` adds one, `LayerMask: Shadow & Highlight
+   Mask` only says where they are, and `MagnificImageRelight` is a paid partner
+   API rather than anything that runs here.
+
+   `LayerColor: Color of Shadow & Highlight` is what is left, and it is enough
+   for what people mean. It finds the shadows by luminance and changes what
+   they look like: brought up towards the light and drained of the colour cast
+   they carry. On the flat and anime-coloured work this install mostly makes,
+   that *is* removing the shadow -- the shadow is a block of darker colour and
+   nothing is hidden behind it. On a photograph it lifts a shadow rather than
+   deleting it, because what the shadow covers was never photographed.
+
+   Deterministic, and seconds rather than minutes: no sampler, no model, no
+   waiting behind a generation. The same bargain as taking a background out. */
+
+/* How far to go.
+ *
+ * `shadow_brightness` is a multiplier, so 1 is unchanged and 3 is the node's
+ * ceiling. 2.1 lifts a flat shade most of the way to its base colour without
+ * flattening the picture into paper -- past about 2.4 the forms stop reading.
+ *
+ * The saturation comes down because a shade is not only darker, it is more
+ * saturated and hue-shifted; lifting the brightness alone leaves a coloured
+ * ghost exactly where the shadow was.
+ *
+ * `shadow_range` is how much of the tonal scale counts as shadow. The node's
+ * default of 0.25 catches only the deepest; 0.45 reaches the mid-shadows that
+ * cel shading is actually made of. */
+export const SHADOW_LIFT = {
+  brightness: 2.1,
+  saturation: 0.55,
+  range: 0.45,
+};
+
+/** The node that does it, whichever of the two versions is installed. */
+const SHADOW_NODES = ['LayerColor: ColorofShadowHighlightV2', 'LayerColor: Color of Shadow & Highlight'];
+
+export const removeShadowGraph = ({ image, objectInfo, strength = 1 }) => {
+  const missing = missingOf(objectInfo, ['LoadImage', 'SaveImage']);
+  if (missing.length) return { missing };
+  const node = SHADOW_NODES.find(name => objectInfo?.[name]);
+  // Named as the pack, not as the node: "install ComfyUI-LayerStyle" is
+  // something somebody can act on.
+  if (!node) return { missing: ['LayerColor: Color of Shadow & Highlight'] };
+
+  /* `strength` scales the whole move rather than any one dial, so half means
+     half a lift and not a lift of half the picture. 1 is the default above. */
+  const amount = Math.min(2, Math.max(0, Number(strength) || 1));
+  const toward = (value, from = 1) => from + (value - from) * amount;
+
+  return {
+    prompt: {
+      1: { class_type: 'LoadImage', inputs: { image }, _meta: { title: 'Picture' } },
+      2: {
+        class_type: node,
+        inputs: {
+          image: ['1', 0],
+          shadow_brightness: Math.round(toward(SHADOW_LIFT.brightness) * 100) / 100,
+          shadow_saturation: Math.round(toward(SHADOW_LIFT.saturation) * 100) / 100,
+          shadow_hue: 0,
+          shadow_level_offset: 0,
+          shadow_range: SHADOW_LIFT.range,
+          // The lit half is left alone. Lifting the shadows already raises the
+          // picture; touching the highlights as well blows them out.
+          highlight_brightness: 1,
+          highlight_saturation: 1,
+          highlight_hue: 0,
+          highlight_level_offset: 0,
+          highlight_range: 0.25,
+        },
+        _meta: { title: 'Shadows lifted' },
+      },
+      3: save(['2', 0]),
+    },
+  };
+};
+
 /**
  * Bigger, with the detail an upscaler invents rather than the blur a resize
  * makes. `factor` is 2 or 4; `size` is the picture's own, so the result can be
@@ -136,6 +216,59 @@ export const tagGraph = ({ image, objectInfo, threshold = 0.35 }) => {
   return {
     prompt: {
       1: { class_type: 'LoadImage', inputs: { image }, _meta: { title: 'Picture' } },
+      2: {
+        class_type: 'WD14Tagger|pysssss',
+        inputs: {
+          image: ['1', 0],
+          model: models.includes(TAGGER) ? TAGGER : (models[0] || TAGGER),
+          threshold,
+          character_threshold: 0.85,
+          replace_underscore: true,
+          trailing_comma: false,
+          exclude_tags: '',
+        },
+        _meta: { title: 'Tags' },
+      },
+    },
+  };
+};
+
+/**
+ * A finished video, tagged a frame at a time.
+ *
+ * What the safeguard knows about a video was its prompt, because a film cannot
+ * be put through the picture classifier in the browser. The tagger can look at
+ * frames, though, and a video is frames: VHS's loader takes a file ComfyUI
+ * wrote (`name [output]`), and decodes only what is asked for -- about ten
+ * frames spread over the clip, at 512px, which is what the tagger reads at
+ * anyway. Loading every frame instead would be a 2K clip, interpolated to 48fps,
+ * decoded in full: gigabytes of memory to look at ten pictures.
+ *
+ * `duration` spreads the frames over the whole clip; without it they are one a
+ * second, up to twenty. The tagger answers per frame -- its output is a list.
+ */
+export const videoTagGraph = ({ video, objectInfo, duration = 0, frames = 10, threshold = 0.35 }) => {
+  const missing = missingOf(objectInfo, ['VHS_LoadVideo', 'WD14Tagger|pysssss']);
+  if (missing.length) return { missing };
+  const seconds = Number(duration) > 0 ? Number(duration) : 0;
+  const rate = seconds ? Math.min(Math.max(frames / seconds, 0.5), 4) : 1;
+  const cap = seconds ? frames : 20;
+  const models = optionsOf(objectInfo, 'WD14Tagger|pysssss', 'model');
+  return {
+    prompt: {
+      1: {
+        class_type: 'VHS_LoadVideo',
+        inputs: {
+          video,
+          force_rate: Math.round(rate * 100) / 100,
+          custom_width: 0,
+          custom_height: 512,
+          frame_load_cap: cap,
+          skip_first_frames: 0,
+          select_every_nth: 1,
+        },
+        _meta: { title: 'Frames' },
+      },
       2: {
         class_type: 'WD14Tagger|pysssss',
         inputs: {

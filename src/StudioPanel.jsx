@@ -4,7 +4,7 @@ import {
   TriangleAlert, Copy, Check, Trash2, Upload, X, Plus, ChevronDown,
   Star, Search, ShieldCheck, ImagePlus, FileImage, Undo2, Square,
   MoreHorizontal, Scaling, Eraser, Clapperboard, Grid3x3, LayoutGrid, Maximize2, Wand2, Share2,
-  Bookmark, BookmarkPlus, Plus as PlusIcon, ListOrdered,
+  Bookmark, BookmarkPlus, Plus as PlusIcon, ListOrdered, Contrast,
 } from 'lucide-react';
 import './studio.css';
 import { copyText } from './clipboard.js';
@@ -19,6 +19,7 @@ import { stampSetting, getSetting } from './settingsStore.js';
 import { JobProgress, useJobStream, previewUrl, FailureNote } from './studioProgress.jsx';
 import { TagPrompt } from './TagPrompt.jsx';
 import { joinPrompt, hasPrompt, onWeightKey } from './promptTags.js';
+import { applyMonochrome, monochromeParts } from './monochrome.js';
 import {
   DESCRIBE_PROMPT, tagsFromFrames, readDescription, composePrompt,
   isDescribable, imageOnClipboard,
@@ -730,6 +731,7 @@ export const StudioPanel = ({
 
   const promptRef = useRef(null);
   const fileRef = useRef(null);
+  const poseFileRef = useRef(null);
   const pollers = useRef(new Map());
 
   useEffect(() => setJobs(loadHistory(scope)), [scope]);
@@ -1007,10 +1009,14 @@ export const StudioPanel = ({
     submitting.current = true;
     setQueueing(true);
     setNotice('');
-    const body = {
+    /* Black and white is applied box by box -- see src/monochrome.js -- on the
+       way out, so the boxes themselves keep what was typed. */
+    const mono = !!form.monochrome && model.kind === 'image';
+    const parts = mono ? { ...form, ...monochromeParts(form) } : form;
+    let body = {
       model: model.id,
-      prompt: joinPrompt(form, { foldArtist }),
-      ...(has.artist ? { artist: (form.artist || '').trim() } : {}),
+      prompt: joinPrompt(parts, { foldArtist }),
+      ...(has.artist ? { artist: (parts.artist || '').trim() } : {}),
       ...(has.negative ? { negative: (form.negative || '').trim() } : {}),
       size: `${form.width}x${form.height}`,
       steps: form.steps,
@@ -1043,10 +1049,21 @@ export const StudioPanel = ({
         : {}),
       // See src/inpaint.js: nothing where neither dial has been moved.
       ...(form.referenceImage ? inpaintFields() : {}),
+      /* Draw in the pose of this picture. See applyPoseGuide on the server. */
+      ...(has.pose && form.poseImage ? {
+        poseImage: form.poseImage,
+        poseStrength: form.poseStrength ?? 1,
+        poseDetect: form.poseDetect !== false,
+      } : {}),
     };
     // The checkpoint picker is `model` on the wire too, but `model` is already
     // the workflow's id — so it travels as `model_file` and is renamed here.
     if (body.model_file) { body.modelFile = body.model_file; delete body.model_file; }
+
+    /* And the rest of black and white: the negative, and the style LoRAs,
+       which are the reason it needs a switch at all -- see src/monochrome.js
+       for what was measured. */
+    if (mono) body = applyMonochrome(body, { characterLoras: characters.map(one => one.lora) });
 
     /* One job, queued. Returns the seed it was given, or null. */
     const submitOne = async (request, n, sweep = null) => {
@@ -1061,6 +1078,9 @@ export const StudioPanel = ({
         parts: { lead: form.lead || '', artist: form.artist || '', prompt: form.prompt || '', tail: form.tail || '' },
         model: model.id, modelLabel: model.label, kind: model.kind,
         loras: request.loras,
+        /* What the stack was before the switch took the style LoRAs out, so
+           loading this back and switching it off gets them back. */
+        ...(mono ? { monochrome: true, formLoras: (form.loras || []).filter(l => l.name) } : {}),
         size: `${form.width}×${form.height}`,
         // What this one actually ran at, which for a sweep is not what the
         // form says: the card has to name the value it is showing.
@@ -1294,8 +1314,12 @@ export const StudioPanel = ({
    *
    * The tagger goes first because it is the half worth having: if the vision
    * model is missing or fails, the tags still land.
+   *
+   * It replaces the box rather than adding to it. "One like this" is a prompt
+   * for *this* picture, and appended to the last one it is two pictures'
+   * worth of tags pulling against each other.
    */
-  const describeImage = useCallback(async (file, { replace = false } = {}) => {
+  const describeImage = useCallback(async (file, { replace = true } = {}) => {
     if (!file || !isDescribable(file)) return;
     describeRef.current?.abort();
     const controller = new AbortController();
@@ -1350,7 +1374,7 @@ export const StudioPanel = ({
   };
 
   /** A reference image, uploaded into ComfyUI so a workflow can load it. */
-  const pickReference = async (event) => {
+  const pickReference = async (event, field = 'referenceImage') => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
@@ -1359,7 +1383,7 @@ export const StudioPanel = ({
     try {
       const res = await fetch('/studio/upload', { method: 'POST', body: data });
       const out = await res.json();
-      if (out.success) set('referenceImage', out.name);
+      if (out.success) set(field, out.name);
     } catch (e) { /* the field simply stays empty */ }
   };
 
@@ -1427,7 +1451,8 @@ export const StudioPanel = ({
          box the subject belongs in, and the other three are empty. */
       ...(job.parts || { lead: '', artist: '', prompt: job.prompt, tail: '' }),
       negative: job.negative || '',
-      ...(job.loras ? { loras: job.loras } : {}),
+      ...(job.formLoras || job.loras ? { loras: job.formLoras || job.loras } : {}),
+      monochrome: !!job.monochrome,
       ...(job.seed !== undefined ? { seed: String(job.seed), lockSeed: true } : {}),
     }));
     promptRef.current?.focus();
@@ -1927,6 +1952,21 @@ export const StudioPanel = ({
                     : <ImagePlus size={11} aria-hidden="true" />}
                   <span>{t('describe.button')}</span>
                 </button>
+                {/* Black and white, as one press. Beside the picture button
+                    because both change what this prompt becomes; only for
+                    pictures, since a clip's prompt is sentences. */}
+                {model?.kind === 'image' && (
+                  <button
+                    type="button"
+                    className={`studio-describe studio-mono ${form.monochrome ? 'is-on' : ''}`}
+                    aria-pressed={!!form.monochrome}
+                    onClick={() => set('monochrome', !form.monochrome)}
+                    title={t('studio.monoHelp')}
+                  >
+                    <Contrast size={11} aria-hidden="true" />
+                    <span>{form.monochrome ? t('studio.mono') : t('studio.color')}</span>
+                  </button>
+                )}
               </span>
               <TagPrompt
                 value={form.prompt || ''}
@@ -1966,6 +2006,29 @@ export const StudioPanel = ({
             </label>
             {quietPart('tail', t('studio.tail'), t('studio.tailPlaceholder'))}
           </div>
+
+          {/* What black and white will send, box by box. The boxes keep what
+              was typed, so without this the switch would change the picture
+              and nothing on screen would say how. Only the boxes it changed. */}
+          {form.monochrome && model?.kind === 'image' && (() => {
+            const sent = monochromeParts(form);
+            const rows = [['lead', t('studio.lead')], ['artist', t('studio.artist')], ['prompt', t('studio.main')], ['tail', t('studio.tail')]]
+              .filter(([key]) => (sent[key] || '') !== String(form[key] || '').trim());
+            return (
+              <div className="studio-mono-preview" aria-live="polite">
+                <div className="studio-mono-preview-title">
+                  <Contrast size={11} aria-hidden="true" />
+                  {t('studio.monoSent')}
+                </div>
+                {rows.map(([key, label]) => (
+                  <div key={key} className="studio-mono-preview-row">
+                    <span>{label}</span>
+                    <code>{sent[key] || t('studio.monoEmpty')}</code>
+                  </div>
+                ))}
+              </div>
+            );
+          })()}
 
           {/* Prompt blocks, by name.
               *
@@ -2312,6 +2375,44 @@ export const StudioPanel = ({
                       onChange={e => set('region', e.target.value)}
                     />
                   </label>
+                )}
+              </Group>
+            )}
+
+            {/* Another picture's pose, kept while the prompt decides everything
+                else. Only where the pose guide is installed; see
+                applyPoseGuide in server/workflows.js. */}
+            {has.pose && (
+              <Group label={t('studio.pose')} summary={form.poseImage ? [form.poseImage] : []}
+                open={!!form.poseImage}>
+                <p className="studio-note">{t('studio.poseHelp')}</p>
+                <div className="studio-reference is-wide">
+                  {form.poseImage && <RefThumb name={form.poseImage} level={level} t={t} />}
+                  <input ref={poseFileRef} type="file" accept="image/*" hidden
+                    onChange={e => pickReference(e, 'poseImage')} />
+                  <button type="button" className="studio-upload" onClick={() => poseFileRef.current?.click()}>
+                    <Upload size={13} /> {t('studio.pose')}
+                  </button>
+                  {form.poseImage && (
+                    <span className="studio-reference-name">
+                      {form.poseImage}
+                      <button type="button" className="icon-btn" aria-label={t('studio.removeLora')}
+                        onClick={() => set('poseImage', '')}><X size={12} /></button>
+                    </span>
+                  )}
+                </div>
+                {form.poseImage && (
+                  <>
+                    <Range label={t('studio.poseStrength')} value={form.poseStrength ?? 1} step={0.05}
+                      min={0.2} max={1.5} onChange={v => set('poseStrength', v)} />
+                    {has.poseDetect && (
+                      <label className="studio-field is-wide" style={{ flexDirection: 'row', alignItems: 'center', gap: '0.5rem' }}>
+                        <input type="checkbox" checked={form.poseDetect === false}
+                          onChange={e => set('poseDetect', !e.target.checked)} />
+                        <span>{t('studio.poseIsSkeleton')}</span>
+                      </label>
+                    )}
+                  </>
                 )}
               </Group>
             )}

@@ -25,6 +25,7 @@
 import localforage from 'localforage';
 import { api, ApiError, currentTabSession } from './session.jsx';
 import { ownerOfScope } from './profileScope.js';
+import { mergeJobs, trimJobs } from './studioTools.js';
 import { waitFor, isOverdue } from './coalesce.js';
 import {
   readScopeSettings, writeScopeSettings, removeScopedKey,
@@ -63,11 +64,23 @@ const keysFor = (scope) => ({
      prompt written on a phone stayed on that phone — and the same shape, one
      small object read and written whole. */
   studio: `studioSettings:${scope}`,
+  /* And the prompt blocks kept by name -- a character, a lighting recipe, the
+     quality words that suit one checkpoint. The same shape as the personas and
+     the sampling presets beside them: one named list, read and written whole.
+     See src/studioPresets.js. */
+  studioPrompts: `studioPrompts:${scope}`,
+  /* And who it has been taught to draw: a LoRA's name, the word that summons
+     it, and how hard to apply it. The trained file is not in here -- it lives
+     in the ComfyUI that made it, which is the one serving this app. See
+     src/characters.js. */
+  characters: `characters:${scope}`,
   /* And what has been made. The pictures themselves are not carried: an entry
      holds the prompt, the settings and a `/studio/view` URL, which resolves
      through whichever machine is serving this app — so a phone opening the
      same server sees the same gallery without a byte of image data crossing
-     the sync. */
+     the sync.
+     *
+     * Not a whole-list record, though it looks like one. See `studioJob`. */
   studioJobs: `studioHistory:${scope}`,
 });
 
@@ -76,7 +89,7 @@ const keysFor = (scope) => ({
  * express. One record each, with its own timestamp. Listed once because the
  * collect and apply sides have to agree, and a kind added to one and forgotten
  * in the other is a record that uploads and never comes back down. */
-const WHOLE_LISTS = ['folders', 'presets', 'personas', 'profile', 'studio', 'studioJobs'];
+const WHOLE_LISTS = ['folders', 'presets', 'personas', 'profile', 'studio', 'studioPrompts', 'characters'];
 
 /* The Studio's two records, which are applied like the others but reported
    apart from them. Every other list is read into state once, at mount, so a
@@ -84,12 +97,30 @@ const WHOLE_LISTS = ['folders', 'presets', 'personas', 'profile', 'studio', 'stu
    (see the `webui:studio-synced` event). Counting them as ordinary lists made
    every job the Studio ran — queued, running, done, each one a write — end in
    a page reload. */
-const STUDIO_LISTS = new Set(['studio', 'studioJobs']);
+const STUDIO_LISTS = new Set(['studio', 'studioPrompts', 'characters']);
 
 // Where this device's place in the account's history is remembered. Per scope,
 // because two accounts on one browser are two independent positions.
 const revKey = (scope) => `syncRev@${scope}`;
 const sentKey = (scope) => `syncSent@${scope}`;
+
+// Keep an initial/recovery upload below the server's 32 MB request limit.
+// One oversized chat must not prevent every newer chat from being uploaded.
+export const uploadBatch = records => {
+  const batch = [], refused = [];
+  let bytes = 0, remaining = 0;
+  const encoder = new TextEncoder();
+  for (const record of [...records].sort((a, b) => b.updatedAt - a.updatedAt)) {
+    const size = encoder.encode(JSON.stringify(record)).byteLength;
+    if (!record.deleted && encoder.encode(JSON.stringify(record.payload)).byteLength > 8 * 1024 * 1024) {
+      refused.push({ kind: record.kind, id: record.id, reason: '대화에 포함된 첨부파일 등의 크기가 동기화 한도 8MB를 초과했습니다.' });
+      continue;
+    }
+    if (batch.length >= 100 || (batch.length > 0 && bytes + size > 8 * 1024 * 1024)) { remaining++; continue; }
+    batch.push(record); bytes += size;
+  }
+  return { batch, refused, remaining };
+};
 
 export const readRev = (scope) => {
   try { return Number(localStorage.getItem(revKey(scope))) || 0; } catch (e) { return 0; }
@@ -123,7 +154,122 @@ export const resetSyncPosition = (scope) => {
   } catch (e) { /* private mode */ }
 };
 
+/* ------------------------------------------------- pictures, not their bytes
+
+   A generated picture is kept in the chat as a data URL -- the whole PNG, in
+   base64, at the size it was saved. One of these is around thirteen megabytes,
+   and the sync refuses any single record over eight: a conversation with one
+   picture in it could not be uploaded at all, which is what "the pictures do
+   not reach my phone" turned out to mean.
+
+   Nothing has to cross, though. The bytes are already on the machine serving
+   this app, and `/studio/view` hands them back by name -- which is exactly how
+   the Studio's own gallery has always synced ("not a byte of image data
+   crossing the sync"). So what goes up is the address rather than the picture,
+   and on the other device it lands in the same field: an `<img src>` and a
+   `fetch()` cannot tell the two apart, so nothing downstream has to know.
+
+   Only the copy being uploaded is changed. What this browser holds is left as
+   it is, so a picture already on screen does not start depending on the server
+   being reachable. */
+
+// Every save node in every workflow writes under this prefix -- see
+// `stampOutputs` in server/workflows.js, which sets it on all of them.
+const OUTPUT_SUBFOLDER = 'webui';
+
+/** Where a picture's bytes can be fetched from, or '' if that cannot be said. */
+export const pictureUrl = (picture) => {
+  if (typeof picture?.url === 'string' && picture.url) return picture.url;
+  const filename = picture?.filename || picture?.file?.filename;
+  if (!filename || typeof filename !== 'string') return '';
+  return `/studio/view?${new URLSearchParams({
+    filename, subfolder: OUTPUT_SUBFOLDER, type: 'output',
+  })}`;
+};
+
+/**
+ * One picture with its bytes swapped for an address, where there is one.
+ *
+ * The same picture back when there is nothing to swap -- an address is already
+ * an address, and a chat that came down from the account and goes up again
+ * must not read as changed. `localChanges` compares by timestamp, but the
+ * caller uses identity to decide whether the message was touched at all.
+ */
+const asAddress = (picture) => {
+  if (!picture || typeof picture !== 'object') return picture;
+  const url = String(picture.dataUrl || '').startsWith('data:') ? pictureUrl(picture) : '';
+  // The one it was drawn instead of, which is a whole picture of its own.
+  const other = picture.retouch?.other;
+  const inner = other ? asAddress(other) : other;
+  if (!url && inner === other) return picture;
+  return {
+    ...picture,
+    ...(url ? { dataUrl: url } : {}),
+    ...(inner !== other ? { retouch: { ...picture.retouch, other: inner } } : {}),
+  };
+};
+
+/**
+ * A chat as it should be uploaded: every generated picture by address.
+ *
+ * Pictures the reader *attached* are left alone. Those have no copy on the
+ * server -- they came off a phone's camera roll -- so an address for them
+ * would name nothing, and a chat that is too big because of one is a chat the
+ * server refuses and says so.
+ */
+export const withoutPictureBytes = (chat) => {
+  const messages = chat?.messages;
+  if (!Array.isArray(messages)) return chat;
+  let touched = false;
+  const next = messages.map((message) => {
+    if (!Array.isArray(message?.generated) || !message.generated.length) return message;
+    const generated = message.generated.map(asAddress);
+    if (generated.every((picture, i) => picture === message.generated[i])) return message;
+    touched = true;
+    return { ...message, generated };
+  });
+  return touched ? { ...chat, messages: next } : chat;
+};
+
 /* ------------------------------------------------------------- local reads */
+
+/* ------------------------------------------------------------- the gallery
+
+   One record per job, not one for the list.
+
+   It was one for the list, and the shape was the bug. Two devices can both be
+   right about a gallery -- the phone finished three pictures this machine
+   never saw, this machine is running one the phone has never heard of -- and a
+   single row cannot hold both: whoever uploads last overwrites it, and the
+   other device's pictures are gone from the account before anyone could merge
+   them. Merging on the way down does not rescue it either, because the upload
+   in the same request has already replaced the row.
+
+   Per job, none of that arises. Two devices writing about different jobs are
+   writing to different records and neither touches the other; a job both know
+   is resolved by its own timestamp, like a chat; and forgetting one becomes a
+   tombstone, which a whole-list record could never express at all.
+
+   The list in storage is still a list -- that is what the panel reads. It is
+   only the wire that is per job. */
+
+/** The jobs this device holds, as an array. */
+const readJobs = (key) => {
+  try {
+    const parsed = JSON.parse(localStorage.getItem(key) || '[]');
+    return Array.isArray(parsed) ? parsed.filter(job => job && job.id != null) : [];
+  } catch (e) {
+    return [];
+  }
+};
+
+/* When a job last changed, for the conflict rule.
+ *
+ * `savedAt` is stamped by the panel as it writes, precisely so that a job
+ * whose state moved on -- or that was starred an hour after it was made -- is
+ * newer than the copy another device holds. The two older fields are the
+ * fallback for jobs written before that existed. */
+const jobStamp = (job) => Number(job?.savedAt) || Number(job?.finishedAt) || Number(job?.startedAt) || 0;
 
 /**
  * Every record this device holds for one account.
@@ -139,7 +285,17 @@ export const collectLocal = async (scope) => {
   const chats = (await localforage.getItem(keys.chats)) || [];
   for (const chat of chats) {
     if (chat?.id == null) continue;
-    out.push({ kind: 'chat', id: String(chat.id), updatedAt: chat.updatedAt || 0, payload: chat });
+    // By address rather than by value -- see `withoutPictureBytes`.
+    // Built lazily: a sync looks at every chat's stamp but uploads only the
+    // few that changed, and stripping ~100 MB of chats on every sync (once a
+    // second while a reply streams) was most of the time a sync took.
+    const record = { kind: 'chat', id: String(chat.id), updatedAt: chat.updatedAt || 0 };
+    let built;
+    Object.defineProperty(record, 'payload', {
+      enumerable: true,
+      get: () => (built ??= withoutPictureBytes(chat)),
+    });
+    out.push(record);
   }
 
   const documents = (await named('knowledge').getItem(keys.knowledge)) || [];
@@ -152,6 +308,11 @@ export const collectLocal = async (scope) => {
   for (const memory of memories) {
     if (memory?.id == null) continue;
     out.push({ kind: 'memory', id: String(memory.id), updatedAt: memory.createdAt || 0, payload: memory });
+  }
+
+  // One record per job. See the note above `readJobs`.
+  for (const job of readJobs(keys.studioJobs)) {
+    out.push({ kind: 'studioJob', id: String(job.id), updatedAt: jobStamp(job), payload: job });
   }
 
   const stamps = settingStamps(scope);
@@ -223,6 +384,8 @@ export const applyLocal = async (scope, records) => {
         if (map.delete(record.id)) applied[counter]++;
         continue;
       }
+      // A malformed server response must not erase a valid local record.
+      if (record.payload === null || record.payload === undefined) continue;
       const current = map.get(record.id);
       // The record only wins if it is genuinely newer. An older copy arriving
       // late — another device catching up — must not undo a local edit.
@@ -238,6 +401,45 @@ export const applyLocal = async (scope, records) => {
   await mergeList(localforage, keys.chats, 'chat', 'updatedAt', 'chats');
   await mergeList(named('knowledge'), keys.knowledge, 'document', 'addedAt', 'documents');
   await mergeList(named('memory'), keys.memory, 'memory', 'createdAt', 'memories');
+
+  /* --- the gallery, job by job ---
+   *
+   * The same rule as the chats above it: a record wins only if it is genuinely
+   * newer than the copy here, a tombstone removes one, and nothing is counted
+   * unless something actually changed. What is different is only where it
+   * lands -- one array in localStorage rather than one key per item, because
+   * that is the shape the panel reads.
+   *
+   * Counted as a studio change, which makes the Studio re-read in place. An
+   * ordinary list change reloads the page, and a gallery that gains a job
+   * every time another device finishes one would reload it constantly. */
+  const jobRecords = byKind('studioJob');
+  if (jobRecords.length) {
+    const before = localStorage.getItem(keys.studioJobs);
+    const byId = new Map(readJobs(keys.studioJobs).map(job => [String(job.id), job]));
+    const incoming = [];
+    for (const record of jobRecords) {
+      const id = String(record.id);
+      const mine = byId.get(id);
+      if (record.deleted) {
+        // Forgotten on the other device. Kept here if it has changed here since.
+        if (mine && jobStamp(mine) <= record.updatedAt) byId.delete(id);
+        continue;
+      }
+      // Ours is later news. Strictly later: an equal stamp is a tie, and
+      // `mergeJobs` settles ties by how far along each copy is, which is the
+      // rule that stops a device that last saw a job running from undoing the
+      // one that saw it finish.
+      if (mine && jobStamp(mine) > record.updatedAt) continue;
+      incoming.push(record.payload);
+    }
+    const merged = trimJobs(mergeJobs([...byId.values()], incoming));
+    const next = JSON.stringify(merged);
+    if (next !== before) {
+      try { localStorage.setItem(keys.studioJobs, next); } catch (e) { /* quota */ }
+      applied.studio++;
+    }
+  }
 
   /* --- whole lists ---
    *
@@ -308,14 +510,26 @@ export const applyLocal = async (scope, records) => {
  * account comes down again. That is what a new device does, and what the
  * "replace this device from the account" button does.
  */
+const applyTouched = (a) => Object.values(a || {}).some(n => Number(n) > 0);
+
 export const syncOnce = async (scope, { full = false } = {}) => {
   const ownerId = ownerOfScope(scope);
   if (!ownerId) throw new Error('There is no signed-in account to sync with.');
 
   if (full) resetSyncPosition(scope);
 
+  // Older clients marked the post-request local state as uploaded, including
+  // edits that happened while the request was in flight. Re-send those records
+  // once, retaining keys so pending deletions still become tombstones.
+  const ackVersionKey = `syncSentAckVersion@${scope}`;
+  if (localStorage.getItem(ackVersionKey) !== '2') {
+    writeSent(scope, Object.fromEntries(Object.keys(readSent(scope)).map(key => [key, -1])));
+    localStorage.setItem(ackVersionKey, '2');
+  }
+
   const since = readRev(scope);
-  const { changed, local } = full ? { changed: [], local: [] } : await localChanges(scope);
+  const { changed: pendingChanges, local } = full ? { changed: [], local: [] } : await localChanges(scope);
+  const { batch: changed, refused: oversized, remaining } = uploadBatch(pendingChanges);
 
   let result;
   try {
@@ -354,12 +568,22 @@ export const syncOnce = async (scope, { full = false } = {}) => {
    * a newer local edit, and a newer local edit marked as sent is one that never
    * leaves this device. So in a full sync, only what matches is marked; the
    * rest goes up on the next ordinary one. */
-  const uploaded = new Set(changed.map(r => `${r.kind}:${r.id}`));
+  const refused = new Set((result.refused || []).map(r => `${r.kind}:${r.id}`));
+  const refusalListComplete = (result.refusedCount || 0) <= refused.size;
+  const uploaded = new Map(changed.filter(r => !refused.has(`${r.kind}:${r.id}`) && refusalListComplete).map(r => [`${r.kind}:${r.id}`, r.updatedAt]));
   const onServer = new Map((result.records || []).map(r => [`${r.kind}:${r.id}`, r.updatedAt]));
-  const sent = {};
-  for (const record of await collectLocal(scope)) {
+  const sent = readSent(scope);
+  for (const record of changed) {
     const key = `${record.kind}:${record.id}`;
-    if (!full || uploaded.has(key) || onServer.get(key) === record.updatedAt) {
+    if (record.deleted && uploaded.get(key) === record.updatedAt) delete sent[key];
+  }
+  // Re-reading every store only matters when this sync wrote into them;
+  // otherwise the snapshot from before the upload has the same stamps, and an
+  // edit made mid-flight just stays unmarked and goes up next time.
+  const afterApply = (full || applyTouched(applied)) ? await collectLocal(scope) : local;
+  for (const record of afterApply) {
+    const key = `${record.kind}:${record.id}`;
+    if (uploaded.get(key) === record.updatedAt || onServer.get(key) === record.updatedAt) {
       sent[key] = record.updatedAt;
     }
   }
@@ -369,8 +593,14 @@ export const syncOnce = async (scope, { full = false } = {}) => {
     applied,
     sent: changed.length,
     rejected: result.rejected || 0,
+    /* What the server would not store, and why. Not an error -- the rest of
+       the batch landed -- but not silence either: a record that cannot sync
+       will never sync, and the only way anyone finds out is if it is said.
+       See `applyChanges` in server/records.js. */
+    refused: [...oversized, ...(result.refused || [])],
+    refusedCount: oversized.length + (result.refusedCount || 0),
     rev: result.rev || since,
-    complete: result.complete !== false,
+    complete: result.complete !== false && remaining === 0,
     received: (result.records || []).length,
     // Whether anything the user would notice actually changed here.
     changedLocally: applied.chats + applied.settings + applied.documents
@@ -403,6 +633,9 @@ export const syncFully = async (scope, { full = false, maxRounds = 20 } = {}) =>
       changedLocally: total.changedLocally + result.changedLocally,
       received: total.received + result.received,
       sent: total.sent + result.sent,
+      // Gathered across the rounds, or a refusal in the first one is lost.
+      refused: [...total.refused, ...result.refused].slice(0, 20),
+      refusedCount: total.refusedCount + result.refusedCount,
     } : result;
     if (result.complete) break;
   }
@@ -447,6 +680,8 @@ export const subscribeToAccount = ({ onRev, onOpen, onClose } = {}) => {
     const url = `/api/auth/events?session=${encodeURIComponent(currentTabSession() || 'new')}`;
     source = new EventSource(url);
 
+    // A (re)connect is also a moment of not knowing what was missed while
+    // the stream was down, so the caller is asked to check.
     source.addEventListener('open', () => { if (!stopped) onOpen?.(); });
 
     source.addEventListener('rev', (event) => {
@@ -474,11 +709,27 @@ export const subscribeToAccount = ({ onRev, onOpen, onClose } = {}) => {
     });
   };
 
+  /* A phone that comes back is the moment the stream matters most, and the
+     moment it is most likely to be down: the network dropped it while the
+     screen was off, and the 20-second retry timer was frozen with the page.
+     So being looked at, or getting a network back, reconnects at once. */
+  const wake = () => {
+    if (stopped || document.hidden || source) return;
+    if (retry) { clearTimeout(retry); retry = null; }
+    open();
+  };
+  document.addEventListener('visibilitychange', wake);
+  window.addEventListener('online', wake);
+  window.addEventListener('pageshow', wake);
+
   open();
 
   return () => {
     stopped = true;
     if (retry) clearTimeout(retry);
+    document.removeEventListener('visibilitychange', wake);
+    window.removeEventListener('online', wake);
+    window.removeEventListener('pageshow', wake);
     source?.close();
     source = null;
   };
@@ -556,11 +807,19 @@ export const createSyncScheduler = ({
     // it are new, and their ceiling should be measured from now.
     pendingSince = 0;
     inFlight = once();
+    let succeeded = false;
     try {
-      return await inFlight;
+      succeeded = await inFlight;
+      return succeeded;
     } finally {
       inFlight = null;
-      if (queued && !stopped) { queued = false; schedule(); }
+      if (!succeeded && !stopped) {
+        // A quiet desktop still has unsent chats after a failed upload. Server
+        // revision polling cannot detect these local-only changes.
+        queued = false;
+        if (timer) clearTimeout(timer);
+        timer = setTimeout(() => { timer = null; run(); }, 5000);
+      } else if (queued && !stopped) { queued = false; schedule(); }
     }
   };
 

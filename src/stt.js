@@ -77,9 +77,9 @@ export const pickMimeType = (isSupported) => {
  */
 export const transcribe = async (blob, { language = '', model = 'Systran/faster-whisper-small', signal } = {}) => {
   const form = new FormData();
-  // The extension matters to some servers, and Opus in a WebM container is
-  // what a browser records.
-  form.append('file', blob, 'speech.webm');
+  // The extension matters to some servers. Opus in a WebM container is what a
+  // browser records; hands-free sends WAV it encoded itself (src/vad.js).
+  form.append('file', blob, blob?.type === 'audio/wav' ? 'speech.wav' : 'speech.webm');
   form.append('model', model);
   form.append('response_format', 'json');
   if (language) form.append('language', language);

@@ -33,7 +33,7 @@ await bundle.write({ file: out, format: 'esm' });
 await bundle.close();
 const {
   MAX_ATTEMPTS, backoffMs, loadQueue, saveQueue, isRetryable,
-  makeEntry, enqueue, removeEntry, noteAttempt, nextDue, stalled,
+  makeEntry, enqueue, removeEntry, noteAttempt, nextDue, stalled, heldReason, carryAttempt,
 } = await import(pathToFileURL(out).href);
 
 let pass = 0, fail = 0;
@@ -170,6 +170,53 @@ check('only one retry runs at a time', /retryingRef\.current/.test(app));
 check('a held question whose chat is gone is dropped rather than misfiled',
   /its chat no longer exists/.test(app));
 check('the queue is on screen', /className="send-queue"/.test(app));
+
+/* -------------------------------------------- a retry that fails again
+
+   Reported: "전송하지 못해서 보관해 두었습니다" over and over. A retry takes the
+   entry out before sending, and the failed send queued itself as a new entry
+   with no attempts -- so the count never grew, the four-attempt limit was never
+   reached, and a server that kept refusing (short of RAM behind a finished
+   video) was asked every four seconds, the notice raised each time. */
+{
+  const same = (name, got, want) => check(name, JSON.stringify(got) === JSON.stringify(want), `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+  const scope = 'retry-carry';
+  saveQueue(scope, []);
+  const first = carryAttempt(makeEntry({ sessionId: 1, model: 'm', text: 'q', at: 1000 }), null, new Error('Ollama returned HTTP 503'));
+  enqueue(scope, first);
+  let clock = 10_000;
+  let rounds = 0;
+  // The retry driver and the failing send, as App.jsx runs them.
+  for (; rounds < 20; rounds += 1) {
+    clock += 60_000;
+    const due = nextDue(loadQueue(scope), clock);
+    if (!due) break;
+    const previous = { id: due.id, at: due.at, attempts: (due.attempts || 0) + 1 };
+    removeEntry(scope, due.id);
+    enqueue(scope, carryAttempt(makeEntry({ sessionId: 1, model: 'm', text: 'q', at: clock }), previous, new Error('Ollama returned HTTP 503'), clock));
+  }
+  eq('a question that keeps failing stops after the limit instead of retrying for ever', rounds, MAX_ATTEMPTS);
+  same('  still one entry, the same one', loadQueue(scope).map(e => [e.id, e.attempts]), [[first.id, MAX_ATTEMPTS]]);
+  eq('  and it is left waiting to be asked about', stalled(loadQueue(scope)).length, 1);
+  same('a refusal says what it was about',
+    [
+      heldReason(new Error('Ollama returned HTTP 503: {"error":"시스템 여유 RAM이 부족하여 새 작업을 시작하지 않았습니다."}')),
+      heldReason(new Error('Ollama returned HTTP 503: {"error":"ComfyUI is generating. Try chatting after it finishes"}')),
+      heldReason(new Error('Ollama returned HTTP 503: {"error":"Two inference requests are already running."}')),
+      heldReason(new TypeError('Failed to fetch')),
+      heldReason(new Error('HTTP 502')),
+    ],
+    ['ram', 'drawing', 'busy', 'network', 'other']);
+  const app = fs.readFileSync(path.resolve(HERE, '../src/App.jsx'), 'utf8');
+  check('the retry hands its entry to the send, and the send keeps it',
+    /retryOfRef\.current = \{ id: due\.id, at: due\.at, attempts: \(due\.attempts \|\| 0\) \+ 1 \};/.test(app)
+    && /\}\), retryOf, err\);/.test(app));
+  check('  the notice is raised once, with the reason, not on every retry',
+    /if \(!retryOf\) \{\s*\n\s*toast\(t\('queue\.heldBecause', \{ reason: t\(`queue\.why\.\$\{heldReason\(err\)\}`\) \}\)/.test(app));
+  const vram = fs.readFileSync(path.resolve(HERE, '../server/vram.js'), 'utf8');
+  check('the server asks an idle ComfyUI to let go of its RAM before refusing a question for want of it',
+    /if \(memoryPressure\(\) && !\(await vram\.releaseComfyMemory\(\)\)\) assertMemoryAvailable\(\);/.test(vram));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

@@ -178,7 +178,7 @@ export const loadTags = (file = TAG_FILE) => {
 };
 
 /** For tests, and for picking up an edited file without a restart. */
-export const forgetTags = () => { cache = null; exact = null; };
+export const forgetTags = () => { cache = null; exact = null; series = null; };
 
 /* ----------------------------------------------------------- exact lookup
 
@@ -207,6 +207,162 @@ export const findTag = (index, phrase) => {
     exact = { index, map };
   }
   return exact.map.get(tagKey(phrase)) ?? -1;
+};
+
+/* ------------------------------------------ a tag as a model writes it
+
+   Reported: the model writes `iseri nina (blue archive)`, and two separate
+   things are wrong with it.
+
+   The parentheses are the first. To every one of these encoders `(...)` is
+   emphasis -- `(blue archive)` reads as "weight these two words by 1.1" -- so a
+   character tag written plainly is not the character's name at all. What
+   danbooru carries, and what the model has seen during training, is
+   `iseri nina \(blue archive\)`, escaped; the unescaped form draws somebody
+   else entirely.
+
+   The second is the series. `iseri nina (genshin impact)` is a tag that does
+   not exist, and a tag that does not exist contributes noise and nothing else.
+   The list is right here and knows there is exactly one `iseri nina (...)` in
+   two hundred thousand tags, so it can be corrected from the file rather than
+   argued with in the system prompt.
+
+   Nothing is touched that the list does not recognise. A prompt is somebody's
+   words, and a helpful rewrite of a phrase this file has never heard of is a
+   rewrite nobody asked for. */
+
+/** `(` and `)` that are not already escaped, escaped. */
+export const escapeTagParens = (text) => String(text || '').replace(/(?<!\\)([()])/g, '\\$1');
+
+/* `(subject:1.2)` -- a weight, not a tag. The tag is inside it. */
+const WEIGHTED = /^\(\s*([\s\S]+?)\s*:\s*(-?\d+(?:\.\d+)?)\s*\)$/;
+
+/** What comes before the parenthesised part: `iseri nina (blue archive)` → `iseri nina`. */
+export const tagBase = (phrase) => {
+  const key = tagKey(phrase);
+  const at = key.indexOf(' (');
+  return at === -1 ? key : key.slice(0, at).trim();
+};
+
+/* Every tag of the form `name (something)`, grouped by the name in front, built
+   once per index. The alternative is a scan of two hundred thousand rows per
+   tag in the prompt, which is forty milliseconds each and forty tags a
+   prompt. */
+let series = null;
+
+const seriesMap = (index) => {
+  if (series?.index === index) return series.map;
+  const map = new Map();
+  for (let i = 0; i < index.names.length; i += 1) {
+    const key = tagKey(index.names[i]);
+    if (!key.includes(' (')) continue;
+    const base = key.slice(0, key.indexOf(' (')).trim();
+    if (!base) continue;
+    const held = map.get(base);
+    if (held) held.push(i); else map.set(base, [i]);
+  }
+  series = { index, map };
+  return map;
+};
+
+/** Every `name (something)` tag sharing this name, most used first. */
+export const seriesFor = (index, base) =>
+  (seriesMap(index).get(tagKey(base)) || []).map(i => index.names[i]);
+
+/**
+ * One tag, as the list would have it written.
+ *
+ * `fromModel` is the whole of the difference between correcting and meddling.
+ * A prompt typed into the Studio's box is somebody writing tags on purpose,
+ * with autocomplete beside them; the only thing safe to do to it is escape the
+ * brackets of tags that really exist. A prompt a language model wrote is a
+ * different thing: it is confidently wrong about which series a character is
+ * from, and a series that is wrong is not a small inaccuracy -- `blue archive`
+ * in a prompt drags the whole picture towards Blue Archive, which is exactly
+ * what nobody asked for.
+ *
+ * So, in order:
+ *
+ *   * a tag the list knows, with brackets in it -- escaped, and nothing else.
+ *     `hoshino (blue archive)` is real and the only thing wrong with it is that
+ *     the brackets read as emphasis;
+ *   * a tag the list does not know whose name has exactly one parenthesised
+ *     form -- that form. The wrong series corrected from the file;
+ *   * (a model's prompt only) a name the list knows with something invented
+ *     after it -- `iseri nina (blue archive)`, where `iseri nina` is a tag and
+ *     the two together are not. The brackets are dropped. They were a guess,
+ *     and a guess about a franchise is not free: it is a tag that exists
+ *     nowhere pulling the picture somewhere nobody asked for;
+ *   * anything else -- left exactly as written. `arisu (blue archive)` has
+ *     twenty `arisu (...)` tags and is none of them, and "which arisu" is not
+ *     a question this file can answer.
+ */
+export const fixTagPhrase = (index, phrase, { fromModel = false } = {}) => {
+  const tag = String(phrase || '').trim();
+  if (!tag || !index?.size) return tag;
+  // Somebody already escaped it. Their prompt, their spelling.
+  if (/\[()]/.test(tag)) return tag;
+
+  if (findTag(index, tag) !== -1) return escapeTagParens(tag);
+
+  const base = tagBase(tag);
+  if (!base || base === tagKey(tag)) {
+    // No brackets at all: only a name with exactly one form is safe to finish.
+    const only = seriesFor(index, base);
+    return only.length === 1 && base !== '' ? escapeTagParens(only[0]) : tag;
+  }
+
+  const variants = seriesFor(index, base);
+  if (variants.length === 1) return escapeTagParens(variants[0]);
+
+  /* The name is a tag on its own and the bracket is not part of any tag. From a
+     model that is an invented series, and inventing one is worse than leaving
+     it out. From a person it is their words. */
+  if (fromModel && findTag(index, base) !== -1) return base;
+  return tag;
+};
+
+/**
+ * A whole prompt, tag by tag.
+ *
+ * Split on commas, which is what a tag prompt is. A weight around a tag --
+ * `(iseri nina (blue archive):1.2)` -- is kept and its inside fixed: the
+ * emphasis was deliberate and the tag inside it was not meant to be emphasis at
+ * all, which is the whole confusion this untangles.
+ */
+export const fixTagPrompt = (index, prompt, options) => fixTagPromptReport(index, prompt, options).text;
+
+/**
+ * The same, and what it changed.
+ *
+ * A correction nobody can see is one nobody can trust or argue with. The
+ * prompt recorded beside a picture used to change silently, so there was no way
+ * to tell that `iseri nina (blue archive)` had become `iseri nina` -- nor, more
+ * usefully, to notice when the *list* was the thing that was wrong, which it is
+ * for any tag danbooru added after the file was made. `changes` is what the
+ * picture's settings show.
+ *
+ * Escaping alone is not reported. It changes nothing a person would read as a
+ * different tag, and a list of every bracket that was escaped would bury the
+ * one line that matters.
+ */
+export const fixTagPromptReport = (index, prompt, { fromModel = false } = {}) => {
+  const text = String(prompt ?? '');
+  const changes = [];
+  if (!text.trim() || !index?.size) return { text, changes };
+  const fixedText = text.split(',').map((segment) => {
+    const core = segment.trim();
+    if (!core) return segment;
+    const weight = WEIGHTED.exec(core);
+    const inner = weight ? weight[1] : core;
+    const fixed = fixTagPhrase(index, inner, { fromModel });
+    const rebuilt = weight ? `(${fixed}:${weight[2]})` : fixed;
+    if (rebuilt === core) return segment;
+    if (tagKey(fixed) !== tagKey(inner)) changes.push({ from: inner, to: fixed });
+    // The spacing around it was somebody's; only the tag changes.
+    return segment.replace(core, rebuilt);
+  }).join(',');
+  return { text: fixedText, changes };
 };
 
 /* ------------------------------------------------------------ searching
@@ -294,6 +450,12 @@ export const searchTags = (index, query, limit = 15) => {
   }));
 };
 
+/** Every tag used often enough to be useful as an LLM candidate. */
+export const tagsAboveCount = (index, minimum = 1000) => {
+  const threshold = Number(minimum) || 1000;
+  return index.names.filter((_, i) => index.counts[i] > threshold);
+};
+
 /* ================================================== a post, from its link
 
    Pasting a link is the fastest way to describe a picture somebody has already
@@ -336,6 +498,38 @@ export const apiUrlFor = ({ site, id, host } = {}) => {
     case 'konachan': return `https://${host}/post.json?tags=id:${id}`;
     default: return null;
   }
+};
+
+/* Danbooru's own other front doors.
+ *
+ * `danbooru.donmai.us` is blocked by several countries' ISPs, this one
+ * included: the connection is refused in under a tenth of a second, which is a
+ * block rather than an outage. These are Danbooru's own instances of the same
+ * database -- the same post ids, the same API, the same tags -- and measured
+ * from the machine this runs on, they answer in about two thirds of a second
+ * while the main host answers not at all.
+ *
+ * Tried in the order written: `safebooru.donmai.us` first because it is the
+ * long-standing mirror, `betabooru.donmai.us` after it.
+ *
+ * Deliberately not applied to the other sites. gelbooru is blocked here too
+ * and has no mirror to fall back to, and inventing hostnames for it would mean
+ * three failed connections instead of one before saying so. */
+export const DANBOORU_MIRRORS = ['safebooru.donmai.us', 'betabooru.donmai.us'];
+
+/**
+ * Every address worth trying for one post, best first.
+ *
+ * One entry for everything that is not danbooru. A caller walks the list and
+ * stops at the first that answers; see the `/studio/booru` route.
+ */
+export const apiUrlsFor = (post) => {
+  const first = apiUrlFor(post);
+  if (!first) return [];
+  if (post?.site !== 'danbooru') return [first];
+  return [first, ...DANBOORU_MIRRORS
+    .filter(host => host !== post.host)
+    .map(host => apiUrlFor({ ...post, host }))];
 };
 
 /**
@@ -404,3 +598,77 @@ export const firstPost = (payload) => {
   if (payload && typeof payload === 'object' && Object.keys(payload).length) return payload;
   return null;
 };
+
+/* ---------------------------------------------------- keeping the list current
+
+   The tag list is now the authority for correcting prompts -- a bracket it does
+   not know is removed from a model's prompt -- so a list that is out of date
+   corrects things wrongly: a character danbooru added last month is, to this
+   file, a character nobody has ever heard of. These are the pure halves of
+   `scripts/update-tags.mjs`; the network half is in the script. */
+
+/** One row of the file, quoted the way `parseCsv` reads it back. */
+export const csvRow = (fields) => fields.map((field) => {
+  const text = String(field ?? '');
+  return /[",\n\r]/.test(text) ? `"${text.replace(/"/g, '""')}"` : text;
+}).join(',');
+
+/**
+ * Danbooru's API tag, as a row of this file.
+ *
+ * The API speaks `arisu_(blue_archive)`; the file speaks `arisu \(blue archive\)`,
+ * the way a prompt has to be written -- see `cleanTag`. Returns null for anything
+ * that is not a live tag with posts.
+ */
+export const rowFromApiTag = (tag) => {
+  const name = cleanTag(tag?.name);
+  const count = Number(tag?.post_count);
+  if (!name || !Number.isFinite(count) || count <= 0 || tag?.is_deprecated) return null;
+  return { name, category: Number(tag?.category) || 0, count, description: '' };
+};
+
+/**
+ * The file's rows with the API's laid over them.
+ *
+ * What the file already has is kept -- above all its Korean descriptions, which
+ * are the reason the file exists and which danbooru does not have. What the API
+ * adds is the tags the file never heard of, today's post counts, and the
+ * category, which this file carries as 0 for every row and the API knows.
+ * Most used first, which is the order everything that reads the file assumes.
+ */
+export const mergeTagRows = (existing = [], fetched = []) => {
+  /* Every existing row is kept, including two that fold to the same key.
+     The file has pairs like that -- a spelling with underscores beside one with
+     spaces, a case variant -- and keying the rows by `tagKey` merged each pair
+     into one, so an update that was meant only to add tags removed sixty-four.
+     A row is a row; the key only decides which one the API's figures land on. */
+  const rows = existing.filter(row => row?.name).map(row => ({ ...row }));
+  const firstByKey = new Map();
+  rows.forEach((row) => {
+    const key = tagKey(row.name);
+    if (!firstByKey.has(key)) firstByKey.set(key, row);
+  });
+
+  let added = 0;
+  let updated = 0;
+  for (const row of fetched) {
+    if (!row?.name) continue;
+    const key = tagKey(row.name);
+    const held = firstByKey.get(key);
+    if (!held) {
+      const fresh = { ...row };
+      rows.push(fresh);
+      firstByKey.set(key, fresh);
+      added += 1;
+      continue;
+    }
+    const count = Math.max(Number(held.count) || 0, Number(row.count) || 0);
+    const category = held.category || row.category || 0;
+    if (count !== held.count || category !== held.category) updated += 1;
+    held.count = count;
+    held.category = category;
+  }
+  rows.sort((a, b) => (Number(b.count) || 0) - (Number(a.count) || 0));
+  return { rows, added, updated };
+};
+

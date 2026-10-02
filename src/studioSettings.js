@@ -158,8 +158,14 @@ export const restoreForm = (model, saved = {}) => {
     seed: '',
     lockSeed: false,
     referenceImage: '',
+    // A picture whose pose to follow, and how firmly. See applyPoseGuide.
+    poseImage: '',
+    poseStrength: 1,
+    poseDetect: true,
     // How many to make per press of Generate, each with its own seed.
     batch: 1,
+    // Black and white; see src/monochrome.js. A switch, applied when sending.
+    monochrome: false,
   };
 
   if (!saved || typeof saved !== 'object') return form;
@@ -176,6 +182,7 @@ export const restoreForm = (model, saved = {}) => {
   if (typeof saved.negative === 'string' && has.negative) form.negative = saved.negative;
   if (typeof saved.seed === 'string') form.seed = saved.seed;
   form.lockSeed = !!saved.lockSeed;
+  form.monochrome = !!saved.monochrome;
 
   // The numbers restore inside whatever the workflow now allows.
   form.width = inRange(saved.width, null, form.width);

@@ -14,9 +14,17 @@
   --btn-inactive: #E5E3DB;
   --btn-inactive-text: #A3A19C;
   --hover-bg: #EAE8E0;
-  --radius-lg: 24px;
-  --radius-md: 12px;
-  --radius-sm: 8px;
+  /* Four radii, and which one a thing gets is decided by its size rather
+     than by taste: a 20-pixel icon button and a 600-pixel panel curved the
+     same amount look like two unrelated shapes, because the curve reads as a
+     proportion of the edge it is on. `xs` exists because eleven different raw
+     values had grown up under it -- 3px, 4px, 6px, 7px, 9px, 10px -- none of
+     which was a decision. */
+  --radius-lg: 24px;   /* panels, sheets, the composer */
+  --radius-md: 12px;   /* cards, inputs, menus */
+  --radius-sm: 8px;    /* buttons, chips */
+  --radius-xs: 5px;    /* things under about 24px: ticks, badges, icon hits */
+  --radius-pill: 999px;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
 }
 
@@ -296,6 +304,9 @@ body {
 .messages-scroll-area {
   flex: 1;
   overflow-y: auto;
+  /* Never sideways: something too wide (a long command, a path, a table)
+     scrolls inside its own block, not the whole conversation. */
+  overflow-x: hidden;
   display: flex;
   flex-direction: column;
   align-items: center;
@@ -360,9 +371,23 @@ body {
 
 .message-content {
   max-width: 85%;
+  /* A flex item otherwise refuses to be narrower than its widest child, and
+     one long unbroken line pushes the row past the screen. */
+  min-width: 0;
+  overflow-wrap: anywhere;
   font-size: 1rem;
   line-height: 1.6;
 }
+.messages-wrapper { min-width: 0; }
+.message-content pre,
+.message-content table,
+.message-content .term,
+.message-content .agent-activity,
+.message-content .file-changes,
+.message-content .live-commands { max-width: 100%; }
+.message-content pre { overflow-x: auto; overflow-wrap: normal; }
+.message-content table { display: block; overflow-x: auto; overflow-wrap: normal; }
+.message-content img, .message-content video { max-width: 100%; height: auto; }
 
 /* User Text Bubble */
 .user-text {
@@ -528,7 +553,12 @@ body {
   align-items: center;
   justify-content: center;
   cursor: not-allowed;
-  transition: all 0.2s;
+  /* Named rather than `all`: `all` animates width, height, padding and every
+     custom property too, so a hover meant to change a colour ends up
+     animating layout. */
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
   margin-bottom: 0.35rem;
 }
 
@@ -693,7 +723,8 @@ body {
   cursor: pointer;
   padding: 0.5rem 0.75rem;
   border-radius: var(--radius-sm);
-  transition: all 0.2s;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .dropdown-trigger:hover {
@@ -777,10 +808,11 @@ body {
   color: var(--text-secondary);
   cursor: pointer;
   padding: 0.35rem;
-  border-radius: 4px;
+  border-radius: var(--radius-xs);
   display: flex;
   align-items: center;
-  transition: all 0.2s;
+  transition: background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
 }
 
 .action-btn:hover { 
@@ -1031,7 +1063,9 @@ body {
   border-radius: var(--radius-md);
   padding: 0.5rem 0.75rem;
   border: 1px solid var(--border-color);
-  transition: all 0.2s ease;
+  transition: border-color var(--dur-fast) var(--ease-out),
+    background-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur-fast) var(--ease-out);
 }
 
 .sidebar-search-inner:focus-within {
@@ -1180,3 +1214,43 @@ body {
   background-color: var(--border-color);
 }
 
+/* ========================================================= seeing where you are
+
+   This stylesheet describes the app's buttons, inputs, selects and links, and
+   until now it said nothing at all about focus. Every one of them inherited
+   whatever the browser draws by default -- which on a dark background, on a
+   button that has had its border removed, is frequently nothing. Somebody
+   navigating by keyboard could not tell where they were.
+
+   One ring, in the accent, everywhere. `:focus-visible` rather than `:focus`
+   so it appears for the keyboard and not for the mouse: a ring that flashes on
+   every click is the reason people turn outlines off, and turning outlines off
+   is how this happens in the first place.
+
+   `outline` rather than `box-shadow`, because outline follows the border box
+   through `border-radius` and cannot be clipped by an ancestor's `overflow:
+   hidden` -- which is exactly where a shadow ring disappears, on the controls
+   inside scrolling panels. */
+
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: 2px solid var(--btn-active);
+  outline-offset: 2px;
+  /* The offset leaves a gap; on a tinted row the gap has to be the row, not a
+     stripe of the page showing through. `currentColor` would fight the accent. */
+  border-radius: inherit;
+}
+
+/* Something focused inside a scroller must not have its ring clipped. Two
+   pixels of offset plus two of ring is four, and a panel with `overflow:
+   hidden` and a control flush to its edge eats all four. */
+:where(button, a, input, select, textarea):focus-visible { position: relative; z-index: 1; }
+
+/* A control that is already a circle keeps its shape. `inherit` above gives a
+   square ring to anything whose radius is set on a parent. */
+:where(.icon-btn, .avatar, .fab):focus-visible { border-radius: 50%; }
+
+@media (prefers-reduced-motion: no-preference) {
+  :where(a, button, input, select, textarea, summary):focus-visible {
+    transition: outline-color var(--dur-fast) var(--ease-out);
+  }
+}

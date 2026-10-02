@@ -1,0 +1,77 @@
+:root {
+  --webui-bg-main: #fff;
+  --webui-bg-primary: #f2f0e9;
+  --webui-surface: #fff;
+  --webui-text-primary: #1f1f1d;
+  --webui-text-secondary: #7a7874;
+  --webui-border-color: #e5e3db;
+  --webui-hover-bg: #eae8e0;
+  --webui-input-bg: #f2f0e9;
+  --webui-user-bubble: #f3f2ed;
+  --webui-btn-active: #d97757;
+  --webui-btn-active-text: #fff;
+  --webui-font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+  --risu-theme-bgcolor: var(--webui-bg-main) !important;
+  --risu-theme-darkbg: var(--webui-bg-primary) !important;
+  --risu-theme-textcolor: var(--webui-text-primary) !important;
+  --risu-theme-textcolor2: var(--webui-text-secondary) !important;
+  --risu-theme-borderc: var(--webui-border-color) !important;
+  --risu-theme-darkborderc: var(--webui-border-color) !important;
+  --risu-theme-selected: var(--webui-hover-bg) !important;
+  --risu-theme-darkbutton: var(--webui-input-bg) !important;
+  --risu-font-family: var(--webui-font-sans) !important;
+  --FontColorStandard: var(--webui-text-primary) !important;
+  --FontColorBold: var(--webui-text-primary) !important;
+  --FontColorItalic: var(--webui-text-secondary) !important;
+  --FontColorItalicBold: var(--webui-text-secondary) !important;
+  --FontColorQuote1: var(--webui-btn-active) !important;
+  --FontColorQuote2: var(--webui-btn-active) !important;
+}
+html, body { background: var(--risu-theme-bgcolor); color: var(--risu-theme-textcolor); font-family: var(--risu-font-family); }
+button, input, textarea, select { font-family: inherit; }
+button:focus-visible, [role='button']:focus-visible, input:focus-visible, textarea:focus-visible, select:focus-visible { outline: 2px solid var(--webui-btn-active); outline-offset: 3px; }
+.sidebar-avatar { border-radius: 14px; }
+.text-input-area { background: var(--webui-input-bg); font-size: 15px; line-height: 1.7; border-radius: 18px 0 0 18px; padding: 14px 16px; }
+.button-icon-send { background: var(--webui-input-bg); }
+.button-icon-send:hover { background: var(--webui-btn-active); color: var(--webui-btn-active-text); }
+.default-chat-screen .risu-chat { line-height: 1.8; }
+.webui-home { width: 100%; height: 100%; overflow: auto; color: var(--risu-theme-textcolor); background: var(--risu-theme-bgcolor); }
+.webui-home-inner { margin: 0; padding: 24px; }
+.webui-eyebrow { color: var(--risu-theme-textcolor2); font-size: 11px; letter-spacing: .12em; font-weight: 600; margin: 0 0 16px; }
+.webui-home h1 { font-size: 15px; line-height: 1.5; font-weight: 600; margin: 0; }
+.webui-home-intro { max-width: 560px; font-size: 14px; line-height: 1.8; color: var(--risu-theme-textcolor2); }
+.webui-home-actions { display: flex; gap: 8px; margin-left: auto; }
+.webui-home-actions button { display: inline-flex; align-items: center; gap: 8px; padding: 11px 16px; border: 1px solid var(--risu-theme-borderc); border-radius: 10px; font-size: 13px; cursor: pointer; background: var(--webui-surface); }
+.webui-home-actions button { padding: 7px 10px; font-size: 12px; background: transparent; }
+.webui-library-heading { display: flex; align-items: center; gap: 10px; padding-bottom: 16px; border-bottom: 1px solid var(--risu-theme-borderc); }
+.webui-library-heading h2 { font-size: 15px; font-weight: 600; }
+.webui-library-heading span { color: var(--risu-theme-textcolor2); font-size: 12px; }
+.webui-character-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; margin: 20px 0; }
+.webui-character { display: flex; align-items: flex-start; gap: 14px; padding: 18px; border: 1px solid var(--risu-theme-borderc); border-radius: 16px; text-align: left; background: var(--webui-surface); cursor: pointer; min-width: 0; transition: border-color .15s, background .15s; }
+.webui-character:hover { border-color: var(--webui-btn-active); background: var(--risu-theme-darkbg); }
+.webui-character img, .webui-character-initial { width: 52px; height: 62px; object-fit: cover; border-radius: 10px; flex-shrink: 0; }
+.webui-character-initial { display: grid; place-items: center; background: var(--risu-theme-darkbg); color: var(--risu-theme-textcolor2); font-size: 22px; }
+.webui-character-copy { min-width: 0; }
+.webui-character strong { display: block; overflow-wrap: anywhere; font-size: 14px; font-weight: 600; margin: 2px 0 7px; }
+.webui-character p { color: var(--risu-theme-textcolor2); font-size: 12px; line-height: 1.7; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.webui-library-empty { padding: 72px 24px; margin: 20px 0; text-align: center; color: var(--risu-theme-textcolor2); font-size: 13px; line-height: 1.9; }
+.webui-library-empty p:first-child { color: var(--risu-theme-textcolor); font-size: 16px; margin-bottom: 8px; }
+.webui-library-empty button { display: inline-flex; align-items: center; gap: 8px; border: 1px solid var(--risu-theme-borderc); border-radius: 8px; padding: 8px 12px; background: var(--webui-surface); text-decoration: none !important; }
+.webui-home-footer { display: flex; gap: 12px; margin-top: 36px; font-size: 11px; color: var(--risu-theme-textcolor2); }
+.webui-home-footer a:hover { text-decoration: underline; }
+.webui-library-tools { display: flex; gap: 10px; margin-top: 20px; }
+.webui-library-tools input { flex: 1; min-width: 0; }
+.webui-library-tools input, .webui-library-tools select { padding: 11px 12px; border: 1px solid var(--risu-theme-borderc); border-radius: 10px; background: var(--webui-surface); color: var(--risu-theme-textcolor); font-size: 13px; }
+.webui-library-empty button { margin-top: 10px; text-decoration: underline; cursor: pointer; }
+@media (max-width: 600px) {
+  input, textarea, select, .text-input-area { font-size: 16px; }
+  .text-input-area { line-height: 1.5; padding: 12px; }
+  .button-icon-send { min-width: 44px; min-height: 44px; }
+  .webui-library-empty { padding: 36px 12px; }
+  .webui-character { padding: 12px; border-radius: 10px; }
+  .webui-library-tools input, .webui-library-tools select { font-size: 16px; min-height: 44px; }
+  .webui-home-inner { padding: 20px 14px; }
+  .webui-home-actions { gap: 8px; }
+  .webui-home-actions button { padding: 10px 12px; }
+  .webui-character-grid { grid-template-columns: 1fr; }
+}

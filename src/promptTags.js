@@ -69,7 +69,44 @@ export const looksLikeBooruLink = (text) => {
   const value = String(text ?? '').trim();
   if (/\s/.test(value)) return false;
   if (!/^https?:\/\//i.test(value)) return false;
-  return /donmai\.us|safebooru\.org|gelbooru\.com|yande\.re|konachan\.(com|net)/i.test(value);
+  return BOORU_HOST.test(value);
+};
+
+const BOORU_HOST = /donmai\.us|safebooru\.org|gelbooru\.com|yande\.re|konachan\.(com|net)/i;
+
+/**
+ * The booru link somebody has just put in the box, found in the box itself.
+ *
+ * The paste event is not a reliable place to catch this on a phone. A link
+ * arriving from GBoard's clipboard chip, from the selection toolbar's Paste
+ * inside a WebView, or by drag-and-drop reaches a textarea as an `input` whose
+ * `inputType` is `insertFromPaste` -- or, in the worst of them, as nothing but
+ * a changed value. So the text is read afterwards instead, which catches every
+ * route in including the one that already worked.
+ *
+ * Returns the link and the prompt with it removed, or null. A *whole* value
+ * that is a link means the box was replaced by it; a link at the end of an
+ * existing prompt means it was pasted after one. Anything else -- a link with
+ * prose around it, two links -- is left alone, because a paragraph pasted into
+ * the prompt box should stay a paragraph.
+ */
+export const booruLinkIn = (text) => {
+  const value = String(text ?? '');
+  const whole = value.trim();
+  if (looksLikeBooruLink(whole)) return { url: whole, rest: '', replaced: true };
+
+  /* Otherwise: a link sitting on its own at the very end, which is what an
+     append-paste leaves behind. Anchored to the end so that a link somebody is
+     deliberately keeping in the middle of their prompt is not eaten. */
+  const tail = /(^|[\s,])(https?:\/\/\S+)$/.exec(value);
+  if (!tail) return null;
+  const url = tail[2];
+  if (!looksLikeBooruLink(url)) return null;
+  return {
+    url,
+    rest: value.slice(0, value.length - tail[2].length).replace(/[\s,]+$/, ''),
+    replaced: false,
+  };
 };
 
 /**

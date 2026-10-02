@@ -1,0 +1,125 @@
+﻿/* ==== Settings: tab icons, tool sub-tabs, change history, undo buttons ==== */
+.settings-tab { display: inline-flex; align-items: center; gap: 0.35rem; }
+.settings-tab-icon { flex-shrink: 0; opacity: 0.75; }
+.settings-tab.active .settings-tab-icon { opacity: 1; }
+
+.subtabs {
+  display: flex; gap: 0.25rem; padding: 0.25rem; margin-bottom: 1rem;
+  background: var(--surface-sunken); border: 1px solid var(--border-color); border-radius: 10px;
+  /* Wrapped, never scrolled: a hidden scrollbar left the last tabs cut off
+     with nothing to say they were there. */
+  flex-wrap: wrap; max-width: 100%; box-sizing: border-box;
+}
+.subtab {
+  flex: 1 1 auto; min-width: 0; display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+  padding: 0.45rem 0.75rem; border: none; border-radius: 7px; background: transparent;
+  color: var(--text-muted); font-size: 0.82rem; cursor: pointer; white-space: nowrap;
+  transition: background var(--dur-fast, 120ms), color var(--dur-fast, 120ms);
+}
+.subtab:hover { color: var(--text-primary); }
+.subtab.active { background: var(--bg-secondary, #1e1e1e); color: var(--text-primary); box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25); }
+
+.chg-panel { display: grid; gap: 0.6rem; }
+.chg-head { display: flex; gap: 0.4rem; align-items: center; }
+.chg-search {
+  flex: 1; display: flex; align-items: center; gap: 0.4rem; padding: 0.4rem 0.6rem;
+  border: 1px solid var(--border-color); border-radius: 8px; color: var(--text-muted);
+}
+.chg-search input { flex: 1; min-width: 0; border: none; background: transparent; color: var(--text-primary); outline: none; font-size: 0.85rem; }
+.chg-refresh { display: inline-flex; padding: 0.45rem; }
+.chg-help, .chg-empty { font-size: 0.75rem; color: var(--text-muted); }
+.chg-empty { padding: 1.5rem 0; text-align: center; }
+.chg-error { font-size: 0.78rem; color: var(--danger); }
+.chg-list { list-style: none; margin: 0; padding: 0; border: 1px solid var(--border-color); border-radius: 10px; overflow: hidden; }
+.chg-list:empty { display: none; }
+.chg-item { display: flex; align-items: center; gap: 0.55rem; padding: 0.55rem 0.7rem; border-top: 1px solid var(--border-color); }
+.chg-item:first-child { border-top: none; }
+.chg-item.is-restored { opacity: 0.55; }
+.chg-icon { color: var(--accent, #3b82f6); display: inline-flex; flex-shrink: 0; }
+.chg-main { flex: 1; min-width: 0; }
+.chg-name { font-size: 0.85rem; font-weight: 500; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.chg-path {
+  font-size: 0.7rem; color: var(--text-muted); font-family: var(--font-mono, ui-monospace, monospace);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap; direction: rtl; text-align: left; unicode-bidi: plaintext;
+}
+.chg-when { font-size: 0.72rem; color: var(--text-muted); flex-shrink: 0; font-variant-numeric: tabular-nums; }
+.chg-btn { display: inline-flex; padding: 0.35rem; color: var(--text-muted); }
+.chg-done { color: var(--success); display: inline-flex; padding: 0 0.4rem; }
+
+/* Undo: a labelled button, not a faint icon. */
+.chg-undo, .file-change-undo {
+  display: inline-flex; align-items: center; gap: 0.3rem; flex-shrink: 0;
+  padding: 0.25rem 0.6rem; border-radius: 999px; cursor: pointer; font-size: 0.74rem;
+  border: 1px solid color-mix(in srgb, var(--warning, #d97706) 55%, transparent);
+  background: color-mix(in srgb, var(--warning, #d97706) 10%, transparent);
+  color: var(--warning, #d97706);
+}
+.chg-undo:hover, .file-change-undo:hover { background: color-mix(in srgb, var(--warning, #d97706) 20%, transparent); }
+.chg-undo:disabled, .file-change-undo:disabled { opacity: 0.5; cursor: wait; }
+
+/* ==== Buttons ====
+   `btn-ghost` / `btn-primary` were used across the panels but never defined,
+   so they drew as the browser's grey system buttons. */
+.btn-ghost, .btn-primary {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+  padding: 0.45rem 0.85rem; border-radius: 8px; cursor: pointer;
+  font-family: var(--font-sans); font-size: 0.82rem; font-weight: 500; line-height: 1.2;
+  text-decoration: none; white-space: nowrap;
+  transition: background 120ms, border-color 120ms, color 120ms, opacity 120ms;
+}
+.btn-ghost {
+  background: transparent; color: var(--text-secondary, var(--text-primary));
+  border: 1px solid var(--border-color);
+}
+.btn-ghost:hover:not(:disabled) { background: var(--surface-sunken); color: var(--text-primary); }
+.btn-primary { background: var(--accent, #D97757); color: #fff; border: 1px solid transparent; }
+.btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
+.btn-ghost:disabled, .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn-ghost:focus-visible, .btn-primary:focus-visible { outline: 2px solid var(--accent, #D97757); outline-offset: 2px; }
+
+/* ==== Form controls in settings with no class of their own ====
+   :where() keeps these at zero specificity, so any styled control wins. */
+:where(.settings-modal) :where(textarea, select, input:not([type])),
+:where(.settings-modal) :where(input[type='text'], input[type='number'], input[type='search'], input[type='url'], input[type='password']) {
+  width: 100%; box-sizing: border-box;
+  background: var(--input-bg, var(--surface-sunken)); color: var(--text-primary);
+  border: 1px solid var(--border-color); border-radius: 8px;
+  padding: 0.6rem 0.75rem; font-family: var(--font-sans); font-size: 0.88rem; line-height: 1.5;
+  outline: none; transition: border-color 120ms, box-shadow 120ms;
+}
+:where(.settings-modal) :where(textarea) { resize: vertical; min-height: 84px; }
+:where(.settings-modal) :where(textarea, input, select):focus {
+  border-color: var(--accent, #D97757);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent, #D97757) 22%, transparent);
+}
+:where(.settings-modal) :where(textarea, input)::placeholder { color: var(--text-muted); opacity: 0.7; }
+:where(.settings-modal) :where(select) {
+  appearance: none; -webkit-appearance: none; padding-inline-end: 2rem; cursor: pointer;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='12' height='12' viewBox='0 0 24 24' fill='none' stroke='%23999' stroke-width='2.5' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat; background-position: right 0.7rem center;
+}
+:where(.settings-modal) :where(input[type='checkbox'], input[type='radio']) {
+  accent-color: var(--accent, #D97757); width: 1.05rem; height: 1.05rem; flex-shrink: 0; margin: 0;
+}
+/* A bare button (no class) in a panel: drawn like a ghost button. */
+:where(.settings-modal) :where(button:not([class])) {
+  display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.45rem 0.85rem;
+  border-radius: 8px; border: 1px solid var(--border-color); background: transparent;
+  color: var(--text-primary); font-family: var(--font-sans); font-size: 0.82rem; cursor: pointer;
+}
+:where(.settings-modal) :where(button:not([class]):disabled) { opacity: 0.45; cursor: not-allowed; }
+/* Buttons right under a field get a little air. */
+:where(.settings-modal) :where(textarea) + :where(button, div) { margin-top: 0.45rem; }
+
+@media (max-width: 860px) {
+  /* 16px stops iOS zooming into a field on focus. */
+  :where(.settings-modal) :where(textarea, select, input) { font-size: 16px; }
+  .btn-ghost, .btn-primary { min-height: 38px; }
+  .settings-tab-icon { display: none; }
+  /* On a phone: an even grid, three to a row, every tab visible. */
+  .subtabs { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); }
+  .subtab { padding: 0.5rem 0.3rem; font-size: 0.78rem; }
+  .subtab span { overflow: hidden; text-overflow: ellipsis; }
+  .chg-when { display: none; }
+  .file-change-undo, .chg-undo { min-height: 34px; padding-inline: 0.6rem; }
+}

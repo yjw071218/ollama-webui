@@ -41,6 +41,7 @@ import {
   changesSince, applyChanges, accountStats, sweepTombstones,
   OwnerMismatch, MAX_RECORD_BYTES, MAX_BATCH_RECORDS,
 } from './records.js';
+import { listRevisions, readRevision, recordsWithHistory } from './recordHistory.js';
 import {
   createShare, readShare, listShares, revokeShare, revokeAllShares, MAX_SHARE_BYTES,
 } from './shares.js';
@@ -49,9 +50,18 @@ import { normaliseOrigin } from './origin.js';
 import {
   fetchWithTimeout, fetchPageResponse, blockReason,
   htmlToText, decodeEntities, mainContent, readAsText, textOf,
-  marketFor, rankByRelevance,
+  marketFor, rankByRelevance, relevantResults, parseNaverResults,
 } from './webText.js';
-import { createLlamaRoutes, backendOf } from './llamacpp.js';
+import { createLlamaRoutes, backendOf, listModels as listLlamaModels } from './llamacpp.js';
+import {
+  browserSearchEnabled, searchGoogleInBrowser, readPageInBrowser, browserSearchStatus,
+} from './browserSearch.js';
+import { createSpeculativeRoutes } from './speculative.js';
+import { createOpenAiRoutes } from './openaiCompat.js';
+import { createApiKey, listApiKeys, revokeApiKey } from './apiKeys.js';
+import {
+  botUsername, makeLinkCode, linksOf as telegramLinksOf, unlink as telegramUnlink,
+} from './telegram.js';
 import { createStudioRoutes } from './studio.js';
 import { commitStats } from './resourceSafety.js';
 import { vramGuard } from './vram.js';
@@ -59,11 +69,14 @@ import { listSchedules, createSchedule, setScheduleEnabled, deleteSchedule } fro
 import { enginesFor, ENGINE_SPECS } from './engines.js';
 import { createMusicRoutes } from './music.js';
 import { createMcpRoutes } from './mcp.js';
+import { createCliRoutes } from './cliModels.js';
 import { readRequestBody } from './requestBody.js';
+import { createRisuRoutes } from './risuai.js';
+import { createRisuSyncHandler } from './risuSync.js';
 import { scanFolder, readFileBytes } from './folderWatch.js';
 import { readChatJob, replayChatJob, cancelChatJob, followChatJob, liveChatJobs } from './chatJobs.js';
 import {
-  pushPublicKey, rememberSubscription, forgetSubscription, lastFinished, subscriptionLabel,
+  pushPublicKey, rememberSubscription, forgetSubscription, lastFinished, subscriptionLabel, subscriptionLabels, labelFor,
 } from './push.js';
 
 
@@ -154,7 +167,8 @@ const trimResult = (r) => ({
 
 const searchBrave = async (query, limit, key) => {
   const res = await fetchWithTimeout(
-    `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`,
+    `https://api.search.brave.com/res/v1/web/search?q=${encodeURIComponent(query)}&count=${limit}`
+      + (isKorean(query) ? '&country=KR&search_lang=ko' : ''),
     15000,
     { 'X-Subscription-Token': key, Accept: 'application/json' }
   );
@@ -165,10 +179,18 @@ const searchBrave = async (query, limit, key) => {
   }));
 };
 
+/* A Korean query is asked of the Korean web: without it the APIs answer from
+   their English-leaning default index, which is where Korean events and
+   communities are thinnest. */
+const isKorean = (query) => /[가-힣]/.test(query);
+
 const searchTavily = async (query, limit, key) => {
   const res = await fetchWithTimeout('https://api.tavily.com/search', 20000, { 'Content-Type': 'application/json' }, {
     method: 'POST',
-    body: JSON.stringify({ api_key: key, query, max_results: limit, search_depth: 'basic' }),
+    body: JSON.stringify({
+      api_key: key, query, max_results: limit, search_depth: 'basic',
+      ...(isKorean(query) ? { country: 'south korea' } : {}),
+    }),
   });
   if (!res.ok) throw new Error(`Tavily HTTP ${res.status}`);
   const data = await res.json();
@@ -180,7 +202,7 @@ const searchTavily = async (query, limit, key) => {
 const searchSerper = async (query, limit, key) => {
   const res = await fetchWithTimeout('https://google.serper.dev/search', 15000, {
     'X-API-KEY': key, 'Content-Type': 'application/json',
-  }, { method: 'POST', body: JSON.stringify({ q: query, num: limit }) });
+  }, { method: 'POST', body: JSON.stringify({ q: query, num: limit, ...(isKorean(query) ? { gl: 'kr', hl: 'ko' } : {}) }) });
   if (!res.ok) throw new Error(`Serper HTTP ${res.status}`);
   const data = await res.json();
   return (data.organic || []).slice(0, limit).map(r => trimResult({
@@ -261,6 +283,20 @@ const searchBing = async (query, limit) => {
   }
 
   if (results.length === 0) throw new Error('Bing returned no parsable results');
+  return results;
+};
+
+/** Naver's search page: the key-free source that still answers Korean well. */
+const searchNaver = async (query, limit) => {
+  const res = await fetchWithTimeout(
+    `https://search.naver.com/search.naver?where=web&query=${encodeURIComponent(query)}`,
+    15000,
+    { Accept: 'text/html,application/xhtml+xml', 'Accept-Language': 'ko-KR,ko;q=0.9,en;q=0.8' }
+  );
+  if (res.status === 403 || res.status === 429) throw new Error(`Naver is rate-limiting this address (HTTP ${res.status})`);
+  if (!res.ok) throw new Error(`Naver HTTP ${res.status}`);
+  const results = parseNaverResults(await textOf(res), limit).map(trimResult);
+  if (results.length === 0) throw new Error('Naver returned no parsable results');
   return results;
 };
 
@@ -384,10 +420,21 @@ const searchWeb = async (query, limit = 5, env = {}, uiLanguage = 'en') => {
   if (env.SERPER_API_KEY) chain.push(['serper', () => searchSerper(query, limit, env.SERPER_API_KEY)]);
   if (env.SEARXNG_URL) chain.push(['searxng', () => searchSearxng(query, limit, env.SEARXNG_URL)]);
 
-  // Key-free providers, best first. Bing currently answers plain requests;
-  // DuckDuckGo rate-limits after a handful, so it sits below.
-  chain.push(['bing', () => searchBing(query, limit)]);
+  // Key-free providers, best first. Bing's page now answers a script with
+  // results about something else entirely -- "일러스타 페스 일정" came back as
+  // Zhihu threads and a 1973 horror film -- so DuckDuckGo goes first; when it
+  // rate-limits it cools down and Bing is still there behind it.
+  // Google in Chrome, when switched on (server/browserSearch.js). It paces
+  // itself; a search that is not its turn falls through to the next source.
+  if (browserSearchEnabled(env)) chain.push(['google-browser', () => searchGoogleInBrowser(query, limit, env)]);
+
+  // A Korean query goes to Naver first: it indexes Korean sites (blogs, cafes,
+  // namu.wiki, DC) the others barely reach, and it answers a plain request.
+  const korean = /[가-힣]/.test(query);
+  if (korean) chain.push(['naver', () => searchNaver(query, limit)]);
   chain.push(['duckduckgo', () => searchDuckDuckGo(query, limit)]);
+  if (!korean) chain.push(['naver', () => searchNaver(query, limit)]);
+  chain.push(['bing', () => searchBing(query, limit)]);
   chain.push(['marginalia', () => searchMarginalia(query, limit)]);
   chain.push(['wikipedia', () => searchWikipedia(query, limit)]);
 
@@ -399,6 +446,14 @@ const searchWeb = async (query, limit = 5, env = {}, uiLanguage = 'en') => {
     }
     try {
       const found = await run();
+      /* Results none of which mention the query are not an answer from this
+         provider, they are its failure: the next one is asked. Handing them on
+         made the model apologise for a search about a festival that had
+         returned a horror film. */
+      if (found.length > 0 && relevantResults(query, found).length === 0) {
+        attempts.push(`${name}: ${found.length} results, none about the query`);
+        continue;
+      }
       // Off-topic results are not weak evidence, they are a different subject,
       // and every one of them pushes a real source out of the read budget.
       const results = rankByRelevance(query, found).slice(0, limit);
@@ -429,7 +484,7 @@ const searchWeb = async (query, limit = 5, env = {}, uiLanguage = 'en') => {
  */
 export const createApiRoutes = (env = {}, options = {}) => {
   const { allowLocalFs = true } = options;
-  const routes = [];
+  const routes = [...createRisuRoutes({ env })];
   const route = (routePath, handler) => routes.push({ path: routePath, handler });
 
   route('/api/chat/replay', (req, res) => {
@@ -673,8 +728,30 @@ export const createApiRoutes = (env = {}, options = {}) => {
           const { url, limit } = JSON.parse(body || '{}');
           if (!url || !/^https?:\/\//i.test(url)) return json({ success: false, error: 'A http(s) URL is required' }, 400);
 
-          const response = await fetchPageResponse(url);
+          const cap = Number(limit) > 0 ? Number(limit) : 8000;
+          /* The page as Chrome renders it: for a site that refuses a plain
+             request or sends a shell that JavaScript fills in. Only with
+             WEB_SEARCH_BROWSER on; the plain read is always tried first. */
+          const inBrowser = async () => {
+            const page = await readPageInBrowser(url, env);
+            const text = htmlToText(mainContent(page.html));
+            return json({
+              success: true, url: page.url, contentType: 'text/html', charset: 'utf-8', via: 'browser',
+              truncated: text.length > cap, text: text.slice(0, cap),
+            });
+          };
+
+          let response;
+          try {
+            response = await fetchPageResponse(url);
+          } catch (e) {
+            if (browserSearchEnabled(env)) return await inBrowser();
+            throw e;
+          }
           if (!response.ok) {
+            if (browserSearchEnabled(env) && [401, 403, 429, 503].includes(response.status)) {
+              try { return await inBrowser(); } catch { /* the refusal below says more */ }
+            }
             return json({ success: false, status: response.status, error: blockReason(response.status) }, 400);
           }
 
@@ -688,7 +765,10 @@ export const createApiRoutes = (env = {}, options = {}) => {
           const { text: raw, charset } = await readAsText(response);
           const isMarkup = /html|xml/i.test(type) || /^\s*<(!doctype|html)/i.test(raw);
           const text = isMarkup ? htmlToText(mainContent(raw)) : raw;
-          const cap = Number(limit) > 0 ? Number(limit) : 8000;
+          // Next to nothing from a whole page is a page drawn by script.
+          if (isMarkup && text.trim().length < 300 && browserSearchEnabled(env)) {
+            try { return await inBrowser(); } catch { /* what little there was, below */ }
+          }
 
           json({
             success: true,
@@ -798,6 +878,7 @@ export const createApiRoutes = (env = {}, options = {}) => {
 
     /** The account this request is acting as, or null. */
     const currentUser = (req) => authenticate(req).user;
+    route('/api/risu/sync', createRisuSyncHandler({ guard }));
 
     /* Who the browser could switch to, so a tab can offer the choice.
 
@@ -1278,6 +1359,89 @@ export const createApiRoutes = (env = {}, options = {}) => {
       }
     });
 
+    /* Keys for /v1 (server/openaiCompat.js).
+         GET                      the account's keys, without the keys
+         POST { name }            a new key -- the one time it is shown
+         POST { revoke: id }      gone */
+    route('/api/auth/apikeys', async (req, res) => {
+      if (req.method === 'GET') {
+        const auth = guard(req, res, { methods: ['GET'] });
+        if (!auth) return;
+        return sendJson(res, { success: true, keys: listApiKeys(auth.user.id) });
+      }
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      try {
+        const body = await jsonBody(req);
+        if (body.revoke) {
+          const gone = revokeApiKey(auth.user.id, body.revoke);
+          return sendJson(res, { success: gone, keys: listApiKeys(auth.user.id) }, gone ? 200 : 404);
+        }
+        const made = createApiKey(auth.user.id, body.name);
+        sendJson(res, { success: true, created: made, keys: listApiKeys(auth.user.id) });
+      } catch (e) {
+        sendError(res, e);
+      }
+    });
+
+    /* Telegram (server/telegram.js).
+         GET                      whether the bot runs, its name, linked chats
+         POST { link: true }      a one-time code and the t.me link carrying it
+         POST { unlink: id }      forget a linked Telegram chat */
+    route('/api/auth/telegram', async (req, res) => {
+      if (req.method === 'GET') {
+        const auth = guard(req, res, { methods: ['GET'] });
+        if (!auth) return;
+        return sendJson(res, {
+          success: true,
+          configured: !!String(env.TELEGRAM_BOT_TOKEN || '').trim(),
+          bot: botUsername(),
+          links: telegramLinksOf(auth.user.id),
+        });
+      }
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      try {
+        const body = await jsonBody(req);
+        if (body.unlink) {
+          telegramUnlink(auth.user.id, body.unlink);
+          return sendJson(res, { success: true, links: telegramLinksOf(auth.user.id) });
+        }
+        const name = botUsername();
+        if (!name) return sendJson(res, { success: false, error: 'The Telegram bot is not running. Set TELEGRAM_BOT_TOKEN in .env and restart.' }, 409);
+        const code = makeLinkCode(auth.user.id);
+        sendJson(res, { success: true, code, bot: name, url: `https://t.me/${name}?start=${code}` });
+      } catch (e) {
+        sendError(res, e);
+      }
+    });
+
+    /* What a record used to be: the timeline behind "restore yesterday's
+       version". Read-only. Restoring is an ordinary edit made by the client
+       with the old payload, so it syncs, and is itself undoable, like any
+       other write. See server/recordHistory.js.
+
+         GET ?kind=chat                  records of that kind that have history
+         GET ?kind=chat&id=X             the revisions kept for one record
+         GET ?kind=chat&id=X&rev=N       one revision, whole */
+    route('/api/auth/history', (req, res) => {
+      const auth = guard(req, res, { methods: ['GET'] });
+      if (!auth) return;
+      try {
+        const q = new URL(req.url, 'http://x').searchParams;
+        const kind = q.get('kind') || 'chat';
+        const id = q.get('id');
+        const rev = q.get('rev');
+        if (!id) return sendJson(res, { success: true, records: recordsWithHistory(auth.user.id, kind) });
+        if (rev == null) return sendJson(res, { success: true, revisions: listRevisions(auth.user.id, kind, id) });
+        const revision = readRevision(auth.user.id, kind, id, rev);
+        if (!revision) return sendJson(res, { success: false, error: 'That version is not kept.', code: 'not-found' }, 404);
+        sendJson(res, { success: true, revision });
+      } catch (e) {
+        sendError(res, e);
+      }
+    });
+
     /* A doorbell, not a delivery.
      *
      * The event carries a revision number and nothing else; the client then
@@ -1370,7 +1534,7 @@ export const createApiRoutes = (env = {}, options = {}) => {
       if (!auth) return;
       try {
         const body = await jsonBody(req);
-        const kept = rememberSubscription(auth.user?.id || '', body.subscription, body.label || '');
+        const kept = rememberSubscription(auth.user?.id || '', body.subscription, labelFor(body.label || '', body.labels));
         sendJson(res, kept ? { success: true } : { success: false, error: 'That is not a push endpoint.' }, kept ? 200 : 400);
       } catch (e) {
         sendError(res, e);
@@ -1392,7 +1556,7 @@ export const createApiRoutes = (env = {}, options = {}) => {
        because the worker has no translations of its own. */
     route('/api/push/last', (req, res) => {
       const owner = authenticate(req).user?.id || '';
-      sendJson(res, { success: true, last: lastFinished(owner), label: subscriptionLabel(owner) });
+      sendJson(res, { success: true, last: lastFinished(owner), label: subscriptionLabel(owner), labels: subscriptionLabels(owner) });
     });
 
     /* ------------------------------------------------------- share links */
@@ -1529,6 +1693,10 @@ export const createApiRoutes = (env = {}, options = {}) => {
         }
       });
     });
+
+    /* Where Google-in-Chrome's pacing stands: how many searches this hour and
+       today, and whether it is resting after a CAPTCHA. Starts nothing. */
+    route('/api/browser-search/status', (req, res) => sendJson(res, { success: true, ...browserSearchStatus(env) }));
 
     route('/mcp/search',(req, res) => {
       let body = '';
@@ -1836,6 +2004,13 @@ export const createApiRoutes = (env = {}, options = {}) => {
       sendJson(res, { success: true, ...started });
     });
 
+  /* The OpenAI-compatible API, with the account's context. Authenticated by
+     API key inside the route; see server/openaiCompat.js. */
+  routes.push(...createOpenAiRoutes(env, {
+    backend: backendOf(env),
+    beforeInference: () => vramGuard(env).beforeInference(),
+  }));
+
   /* The inference backend.
    *
    * Under Ollama nothing is registered here and `/api/*` falls through to the
@@ -1848,6 +2023,25 @@ export const createApiRoutes = (env = {}, options = {}) => {
    * `npm run dev` and `npm start` cannot end up on different backends. */
   if (backendOf(env) === 'llamacpp') {
     for (const llamaRoute of createLlamaRoutes(env)) routes.push(llamaRoute);
+    // Draft models per model, in the preset file llama-server reads. See
+    // server/speculative.js.
+    const llamaBase = (env.LLAMACPP_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
+    routes.push(...createSpeculativeRoutes({
+      env,
+      allowLocalFs,
+      listModels: () => listLlamaModels(llamaBase),
+      /* A JSON content type cannot be sent cross-site without a preflight
+         this server never grants, so a page elsewhere cannot rewrite the
+         preset through a visitor's browser. */
+      guard: (req, res) => {
+        if (req.method === 'POST' && !/^application\/json/i.test(req.headers['content-type'] || '')) {
+          res.statusCode = 415;
+          res.end(JSON.stringify({ success: false, error: 'JSON required.' }));
+          return false;
+        }
+        return true;
+      },
+    }));
   }
 
   /* Pictures and video. Always mounted: unlike the backend switch these do not
@@ -1872,6 +2066,10 @@ export const createApiRoutes = (env = {}, options = {}) => {
      list and the name of the file they looked for, which is what lets the
      panel explain itself instead of 404ing. See server/mcp.js. */
   for (const mcpRoute of createMcpRoutes(env, { readBody: readRequestBody })) routes.push(mcpRoute);
+
+  /* What the signed-in CLIs are, and what they have done since start. See
+     server/cliModels.js. */
+  for (const cliRoute of createCliRoutes(env)) routes.push(cliRoute);
 
   return allowLocalFs
     ? routes

@@ -23,7 +23,7 @@ const out = path.resolve(HERE, '../node_modules/.tools-test-bundle.mjs');
 await bundle.write({ file: out, format: 'esm' });
 await bundle.close();
 const {
-  TOOL_SCHEMAS, toolNames, parseToolArgs, nativeCallToTag, supportsTools, toolCallsIn,
+  TOOL_SCHEMAS, toolNames, parseToolArgs, nativeCallToTag, supportsTools, toolCallsIn, mcpFileRoute,
 } = await import(pathToFileURL(out).href);
 
 let pass = 0, fail = 0;
@@ -273,6 +273,31 @@ check('pressing one opens the passage', /setOpenCitation\(\{ n, \.\.\.passage \}
     T2.parseToolArgs({ prompt: 'a<0xE3><0x80><0x80>b' }).prompt === 'a\u3000b');
   check('  and so is the tag a native call becomes',
     T2.nativeCallToTag('generate_music', { style: 'j-pop', lyrics: '光の粒が<0xE3><0x80><0x80>降り注ぐ街' }).includes('光の粒が\u3000降り注ぐ街'));
+}
+
+/* The built-in file tags, done by the filesystem server in mcp.json. A model
+   wrote <TOOL_LIST_DIR>, /localfs said "disabled", and it gave up while the
+   server it was allowed to use sat unused. */
+{
+  const fsTools = ['read_text_file', 'list_directory', 'write_file', 'search_files'].map(name => ({ server: 'files', name }));
+  const tools = [...fsTools, { server: 'files', name: 'read_resource', synthetic: true }];
+  const same = (a, b) => JSON.stringify(a) === JSON.stringify(b);
+  check('a list-dir tag goes to the server\'s list_directory',
+    same(mcpFileRoute('TOOL_LIST_DIR', tools, { path: 'C:\\x' }), { server: 'files', tool: 'list_directory', args: { path: 'C:\\x' } }));
+  check('a read-file tag to read_text_file',
+    mcpFileRoute('TOOL_READ_FILE', tools, { path: 'a.txt' })?.tool === 'read_text_file');
+  check('an older server\'s read_file does too',
+    mcpFileRoute('TOOL_READ_FILE', [{ server: 'old', name: 'read_file' }], { path: 'a' })?.tool === 'read_file');
+  check('a write carries the content',
+    same(mcpFileRoute('TOOL_WRITE_FILE', tools, { path: 'a.tex', content: 'x' })?.args, { path: 'a.tex', content: 'x' }));
+  const withBench = [...tools, { server: 'workbench', name: 'grep' }];
+  check('with the workbench, a search is a content search, as the tag means',
+    same(mcpFileRoute('TOOL_SEARCH_FILES', withBench, { path: 'D:\\', query: 'a.b(' }),
+      { server: 'workbench', tool: 'grep', args: { path: 'D:\\', pattern: 'a\\.b\\(', files_only: true, ignore_case: true } }));
+  check('without it, a search becomes a name glob, which is what the filesystem server matches',
+    mcpFileRoute('TOOL_SEARCH_FILES', tools, { path: 'D:\\', query: 'report' })?.args.pattern === '**/*report*');
+  check('with no filesystem server the tag keeps its own route', mcpFileRoute('TOOL_LIST_DIR', [{ server: 'git', name: 'git_log' }], { path: 'x' }) === null);
+  check('and a tag that is not a file tag is not rerouted', mcpFileRoute('TOOL_WEB_SEARCH', tools, {}) === null);
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

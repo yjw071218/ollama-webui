@@ -207,9 +207,78 @@ for (const key of ['sysmon.residency', 'sysmon.offloaded', 'sysmon.disk',
 }
 
 const css = fs.readFileSync(path.join(ROOT, 'src/extras.css'), 'utf8');
-for (const cls of ['sysmon-alert', 'sysmon-residency', 'sysmon-disk', 'sysmon-window']) {
+for (const cls of ['sysmon-alert', 'sysmon-residency', 'sysmon-disk', 'sysmon-window', 'manager-chip']) {
   check(`.${cls} is styled`, css.includes(`.${cls}`));
 }
+
+/* ------------------------------------ the picture and video models, too
+
+   Asked for: the loaded list should show what ComfyUI holds, not only Ollama.
+   They share one card, and a 20GB video model sitting in memory is the thing
+   worth seeing. */
+
+const S = await import(pathToFileURL(path.join(ROOT, 'server/studio.js')).href);
+{
+  const rows = S.comfyResident({ models: [
+    { name: 'MiniMaxH3VideoVAE', size: 5 * GB, size_vram: 5 * GB, device: 'cuda:0' },
+    { name: 'MiniMaxH3', size: 20 * GB, size_vram: 4.4 * GB, device: 'cuda:0' },
+    { name: 'MiniMaxH3TEModel_', size: 15 * GB, size_vram: 20 * GB, device: 'cuda:0' },
+    { name: 'broken', size: 0 },
+  ] });
+  check('each ComfyUI model is a row, largest first',
+    JSON.stringify(rows.map(r => r.name)) === JSON.stringify(['MiniMaxH3', 'MiniMaxH3TEModel', 'MiniMaxH3VideoVAE']),
+    JSON.stringify(rows.map(r => r.name)));
+  check('marked as ComfyUI\'s', rows.every(r => r.source === 'comfyui' && !r.approximate));
+  eq('never more on the card than the model is', rows[1].size_vram, 15 * GB);
+
+  const [h3] = M.residency(rows);
+  near('and read like a language model: how much is on the GPU', h3.onGpu, 0.22);
+  eq('with where it came from', h3.source, 'comfyui');
+  eq('a video model bigger than the card is not a quantisation problem',
+    M.alerts({ running: rows }).filter(a => a.kind === 'offloaded').length, 0);
+  eq('an Ollama model half on the CPU still is',
+    M.alerts({ running: [...rows, { name: 'spills:30b', size: 20 * GB, size_vram: 8 * GB }] })
+      .filter(a => a.kind === 'offloaded').map(a => a.model).join(), 'spills:30b');
+  eq('Ollama\'s rows say so', M.residency([{ name: 'x', size: GB, size_vram: GB }])[0].source, 'ollama');
+}
+{
+  const stats = (held) => ({ devices: [{ torch_vram_total: held }] });
+  const [one] = S.comfyResident(null, stats(14 * GB));
+  check('without the extension, what ComfyUI holds is one row, marked approximate',
+    one?.name === 'ComfyUI' && one.size === 14 * GB && one.approximate === true, JSON.stringify(one));
+  eq('and nothing when it holds nothing', S.comfyResident(null, stats(100 * 1024 * 1024)).length, 0);
+  eq('nor when ComfyUI is not running', S.comfyResident(null, null).length, 0);
+  eq('an empty report is an empty list, not a guess', S.comfyResident({ models: [] }, stats(14 * GB)).length, 0);
+}
+
+const app = fs.readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8').replace(/\r\n/g, '\n');
+const studio = fs.readFileSync(path.join(ROOT, 'server/studio.js'), 'utf8').replace(/\r\n/g, '\n');
+check('the list asks every server holding a model -- Ollama, ComfyUI and ACE-Step', /Promise\.all\(\[read\('\/api\/ps'\), read\('\/studio\/loaded'\), read\('\/music\/loaded'\)\]\)/.test(app));
+check('which answer at /studio/loaded', /route\('\/studio\/loaded'/.test(studio) && /\/webui\/loaded/.test(studio));
+check('a ComfyUI row unloads through ComfyUI, not Ollama', /onClick=\{unloadComfyModels\}/.test(app));
+// The call goes through `postJson` now, which says what came back when the
+// answer is a web page rather than data -- see src/jsonFetch.js.
+check('only when nothing is being drawn', /postJson\('\/studio\/cancel'[\s\S]{0,160}body: JSON\.stringify\(\{\}\)/.test(app));
+check('the monitor names ComfyUI\'s rows', /row\.source === 'comfyui'/.test(panel));
+for (const key of ['models.comfyBusy', 'models.comfyApproximate']) {
+  eq(`every language has "${key}"`, (i18n.split(`'${key}':`).length - 1), 12);
+}
+const extension = fs.readFileSync(path.join(ROOT, 'comfyui/ollama_webui_memory/__init__.py'), 'utf8');
+check('the ComfyUI extension adds the route', /routes\.get\('\/webui\/loaded'\)/.test(extension));
+check('from ComfyUI\'s own list, with both figures',
+  /current_loaded_models/.test(extension) && /model_memory\(\)/.test(extension) && /model_loaded_memory\(\)/.test(extension));
+check('and loads as a custom node package', /^NODE_CLASS_MAPPINGS = \{\}$/m.test(extension));
+
+/* Reported as: every picture failed with a CPU/CUDA mismatch in the PiD
+   upscaler, with 0.6GB "usable" on a card that was 11GB free. A VRAM-Manager
+   node had frozen what a language model held at ComfyUI's start into
+   EXTRA_RESERVED_VRAM for the whole session. */
+check('the extension puts a frozen reserve back to ComfyUI\'s own',
+  /mm\.EXTRA_RESERVED_VRAM = own/.test(extension) && /held > own \+ 512 \* MB/.test(extension));
+check('worked out as ComfyUI does, --reserve-vram first',
+  /args\.reserve_vram is not None/.test(extension) && /600 \* MB/.test(extension) && /total_vram > 15 \* 1024/.test(extension));
+check('and again before every prompt', /add_on_prompt_handler\(_on_prompt\)/.test(extension) && /return json_data/.test(extension));
+check('and says what the reserve is', /'reserved': int\(getattr\(mm, 'EXTRA_RESERVED_VRAM'/.test(extension));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

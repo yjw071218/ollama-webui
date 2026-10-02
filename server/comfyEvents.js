@@ -40,6 +40,10 @@
  * it.
  */
 
+import { estimate, sampleOf, withinStep } from './studioTimings.js';
+
+export { withinStep };
+
 /* The binary preview frame.
  *
  *     [uint32 event type][uint32 image format][image bytes]
@@ -171,12 +175,36 @@ export const emptyJob = (id, { total = 0, nodes = {} } = {}) => ({
   total,
   nodes,
   error: null,
+  // The node that failed, and which stage that was -- see `reduce`.
+  errorNode: '',
+  errorPhase: '',
   startedAt: null,
   updatedAt: Date.now(),
   previewSeq: 0,
   // What the latest frame is -- `video/mp4` needs a <video>, not an <img>.
   previewMime: '',
+  /* When each node ran, in ms from the start, and when the one running now
+     began. What the next run of the same workflow is placed against; see
+     server/studioTimings.js. */
+  nodeTimes: {},
+  nodeSince: null,
+  /* When the step counter last moved, and how long a step has been taking:
+     what lets a step of a minute -- a video's -- move the bar while it runs,
+     rather than only when it ends. See `withinStep`. */
+  stepSince: null,
+  stepMs: null,
+  // Which timings this job learns from and adds to, most specific first.
+  profile: [],
 });
+
+/* The node that was running, closed at `now`: its start and how long it took. */
+const closeNode = (job, now) => {
+  if (!job.node || !job.nodeSince || !job.startedAt) return job.nodeTimes;
+  return {
+    ...job.nodeTimes,
+    [job.node]: { start: job.nodeSince - job.startedAt, dur: Math.max(0, now - job.nodeSince) },
+  };
+};
 
 /**
  * One websocket message, folded into one prompt's state.
@@ -186,14 +214,13 @@ export const emptyJob = (id, { total = 0, nodes = {} } = {}) => ({
  * for other prompts return the state untouched, which is how a second job
  * queued behind this one does not scribble on it.
  */
-export const reduce = (job, message) => {
+export const reduce = (job, message, now = Date.now()) => {
   const { type, data } = message || {};
   if (!type || !job) return job;
   // Every message that concerns a prompt names it. The ones that do not --
   // `status`, and the previews -- are handled elsewhere.
   if (data?.prompt_id && data.prompt_id !== job.id) return job;
 
-  const now = Date.now();
   const next = (patch) => ({ ...job, ...patch, updatedAt: now });
 
   switch (type) {
@@ -222,7 +249,9 @@ export const reduce = (job, message) => {
       // `node: null` is how older ComfyUI says the prompt is over. Newer ones
       // send `execution_success` as well; treating both as the end means
       // neither version leaves a job stuck at 99%.
-      if (node === null) return next({ state: 'done', node: null, phase: 'saving', step: 0, steps: 0 });
+      if (node === null) {
+        return next({ state: 'done', node: null, phase: 'saving', step: 0, steps: 0, nodeTimes: closeNode(job, now), nodeSince: null });
+      }
       const className = job.nodes?.[node]?.class || '';
       return next({
         state: 'running',
@@ -232,7 +261,13 @@ export const reduce = (job, message) => {
         phase: phaseOf(className),
         step: 0,
         steps: 0,
+        stepSince: null,
+        stepMs: null,
         done: job.done.includes(node) ? job.done : [...job.done, node],
+        nodeTimes: closeNode(job, now),
+        nodeSince: now,
+        // Heard before `execution_start`, which a reconnect can miss.
+        startedAt: job.startedAt || now,
       });
     }
 
@@ -240,7 +275,17 @@ export const reduce = (job, message) => {
       const max = Number(data?.max) || 0;
       const value = Number(data?.value) || 0;
       if (value === job.step && max === job.steps) return job;
-      return next({ state: 'running', step: value, steps: max });
+      /* A step's length, from the gap since the counter last moved --
+         averaged, so one slow step (the first, which loads the model onto the
+         card) does not become the figure. A counter that went back is a new
+         loop in the same node, and starts again. */
+      const grew = value > job.step && max === job.steps && job.stepSince;
+      const sample = grew ? (now - job.stepSince) / (value - job.step) : null;
+      const stepMs = value < job.step || max !== job.steps
+        ? null
+        : sample === null ? job.stepMs
+          : Math.round(job.stepMs ? job.stepMs * 0.6 + sample * 0.4 : sample);
+      return next({ state: 'running', step: value, steps: max, stepSince: now, stepMs });
     }
 
     case 'executed':
@@ -252,40 +297,100 @@ export const reduce = (job, message) => {
         error: data?.exception_message
           ? `${data.node_type || 'a node'}: ${data.exception_message}`
           : 'the workflow failed in ComfyUI',
+        // Which stage it stopped in, so the track can mark that one.
+        errorNode: data?.node_type || job.nodeClass || '',
+        errorPhase: data?.node_type ? phaseOf(data.node_type) : job.phase,
       });
 
     case 'execution_interrupted':
-      return next({ state: 'failed', error: 'stopped' });
+      return next({ state: 'failed', error: 'stopped', errorPhase: job.phase });
 
     case 'execution_success':
-      return next({ state: 'done', node: null, phase: 'saving' });
+      return next({ state: 'done', node: null, phase: 'saving', nodeTimes: closeNode(job, now), nodeSince: null });
 
     default:
       return job;
   }
 };
 
+/* What each stage is worth, before this workflow has ever been timed.
+ *
+ * A prior, not a measurement. The measurement is what replaces it: once a run
+ * has finished, `server/studioTimings.js` knows what every node in that graph
+ * actually took and the bar is driven by that instead. This is only for the
+ * first run of a workflow at a size -- and for the region edits and odd shapes
+ * that keep producing profiles nothing has seen before.
+ *
+ * The numbers are relative, and only their ratios matter. What they encode is
+ * the one fact that counting nodes misses: a graph of sixty nodes spends
+ * almost all of its time in one of them. Loaders, text nodes, string joins and
+ * switches are thousandths of a second each; a forty-step sampler is most of
+ * the minute; an upscaler and a face detailer are most of the rest.
+ */
+export const PHASE_WEIGHT = {
+  loading: 2,
+  prompt: 0.2,
+  sampling: 60,
+  decoding: 3,
+  detailing: 18,
+  upscaling: 12,
+  video: 10,
+  saving: 1,
+  working: 1,
+  queued: 0.2,
+};
+
+const weightOf = (job, id) => PHASE_WEIGHT[phaseOf(job?.nodes?.[id]?.class)] ?? 1;
+
 /** How far through, as a fraction, or null when there is nothing to go on. */
-export const fractionOf = (job) => {
+export const fractionOf = (job, now = Date.now()) => {
   if (!job || job.state === 'queued') return null;
   if (job.state === 'done') return 1;
-  /* Two numbers, and the finer one wins where it exists. Node count moves in
-     visible jumps and is meaningless while one node runs for a minute; the
-     step counter is smooth but only covers the node it belongs to. So node
-     progress sets the floor and the current node's steps fill the gap to the
-     next one. */
   if (!job.total) return null;
-  const finished = Math.min(job.done.length, job.total);
-  const base = finished / job.total;
+
+  /* Two numbers, and the finer one wins where it exists. Stage weight moves in
+     jumps and says nothing while one node runs for a minute; the step counter
+     is smooth but only covers the node it belongs to. So the finished nodes
+     set the floor and the current node's steps fill its own share of the gap.
+
+     Weighted rather than counted: see `PHASE_WEIGHT`. Counting nodes equally
+     is what put the bar at 85% in the first second of a run and left it there. */
+  const nodes = job.nodes && Object.keys(job.nodes).length ? job.nodes : null;
+  let total = 0;
+  let doneWeight = 0;
+  if (nodes) {
+    for (const id of Object.keys(nodes)) total += weightOf(job, id);
+    for (const id of job.done || []) {
+      if (id === job.node) continue;
+      doneWeight += weightOf(job, id);
+    }
+  } else {
+    // No graph to weigh -- the shape this had before, and still correct when
+    // the classes are not known.
+    total = job.total;
+    doneWeight = Math.min(job.done.length, job.total);
+  }
+  if (!(total > 0)) return null;
+
+  const base = doneWeight / total;
+  /* A node with no step counter is credited nothing while it runs.
+   *
+   * Crediting it a share of itself sounds kinder and makes the bar go
+   * backwards: half of a node is more than the quarter its fifth step is
+   * worth, so the first `progress` message would pull the bar down. A bar that
+   * retreats is worse than one that pauses, and the pause is what this did
+   * before -- the weighting above is the fix, not this. */
   if (!job.steps) return Math.min(base, 0.99);
-  const slice = (1 / job.total) * (job.step / job.steps);
-  return Math.min(base + slice, 0.99);
+  const mine = nodes && job.node ? weightOf(job, job.node) : 1;
+  return Math.min(base + (mine / total) * withinStep(job, now), 0.99);
 };
 
 /* ------------------------------------------------------------- the socket */
 
 const RETRY_MS = 3000;
 const KEEP_JOBS = 8;
+// How long a running job can go unheard of before the socket is assumed deaf.
+const SILENT_MS = 10000;
 
 /**
  * One connection to ComfyUI, shared by everything that wants to watch.
@@ -296,7 +401,7 @@ const KEEP_JOBS = 8;
  * dead socket that stays dead means the progress bar never works again until
  * this app is restarted too.
  */
-export const createComfyEvents = ({ base, clientId, WebSocketImpl = globalThis.WebSocket, log = () => {} }) => {
+export const createComfyEvents = ({ base, clientId, WebSocketImpl = globalThis.WebSocket, log = () => {}, timings = null }) => {
   const jobs = new Map();
   const listeners = new Set();
   const previews = new Map();          // prompt id -> { mime, body, seq }
@@ -305,6 +410,7 @@ export const createComfyEvents = ({ base, clientId, WebSocketImpl = globalThis.W
   let retry = null;
   let closed = false;
   let current = null;                  // which prompt the binary frames belong to
+  let reconnectedAt = 0;               // when a silent socket was last replaced -- see `nudge`
 
   const announce = (id) => {
     const job = jobs.get(id);
@@ -329,7 +435,13 @@ export const createComfyEvents = ({ base, clientId, WebSocketImpl = globalThis.W
      so they go to the prompt the last text message named, which is right
      because ComfyUI runs one prompt at a time. */
   const attach = (frame, { override = false } = {}) => {
-    if (!frame || !current) return;
+    if (!frame || !current || frame.body.byteLength > OVERRIDE_MAX_BYTES) return;
+    let retained = frame.body.byteLength;
+    for (const [id, preview] of [...previews].reverse()) {
+      if (id === current) continue;
+      retained += preview.body.byteLength;
+      if (retained > 32 * 1024 * 1024) previews.delete(id);
+    }
     /* A job whose override node is sending frames ignores the binary ones.
        With the node's suppression on there are none; with it off, both arrive
        for the same step and the card would flick between the moving clip and
@@ -353,6 +465,14 @@ export const createComfyEvents = ({ base, clientId, WebSocketImpl = globalThis.W
       return;
     }
 
+    /* A fresh socket is told which node is running, with no prompt named --
+       ComfyUI's hello to a client whose prompt is executing. It is the job
+       this socket was reopened for. */
+    if (message?.type === 'executing' && message.data && !message.data.prompt_id
+      && message.data.node !== null && message.data.node !== undefined && current) {
+      message.data = { ...message.data, prompt_id: current };
+    }
+
     const id = message?.data?.prompt_id;
     if (id) {
       current = message.type === 'execution_success' || message.type === 'execution_error' ? null : id;
@@ -361,9 +481,15 @@ export const createComfyEvents = ({ base, clientId, WebSocketImpl = globalThis.W
     if (!id) return;
 
     const before = jobs.get(id);
-    const after = reduce(before, message);
-    if (after === before) return;
+    const reduced = reduce(before, message);
+    // Heard from, whether or not it changed anything -- what `nudge` goes by.
+    const after = { ...reduced, heardAt: Date.now() };
     jobs.set(id, after);
+    if (reduced === before) return;
+    // A run that finished is what the next one of its kind is timed against.
+    if (after.state === 'done' && before.state !== 'done' && timings && after.profile?.length) {
+      timings.record(after.profile, sampleOf(after, after.updatedAt));
+    }
     forget();
     announce(id);
   };
@@ -387,6 +513,33 @@ export const createComfyEvents = ({ base, clientId, WebSocketImpl = globalThis.W
     ws.onclose = () => { socket = null; schedule(); };
   };
 
+  /* Replace a socket that is open and hears nothing. ComfyUI gives a client id
+     one socket, and forgets it without closing it when another connects under
+     the same id -- so from here it looks connected and simply goes quiet. */
+  const reconnect = () => {
+    if (closed) return;
+    const old = socket;
+    socket = null;
+    if (retry) { clearTimeout(retry); retry = null; }
+    if (!old) { connect(); return; }
+    /* The new one only once the old one has gone. ComfyUI forgets a client id
+       when any socket of it closes -- whichever socket is registered by then --
+       so a new socket opened first was forgotten the moment the old one's close
+       reached it, and was as deaf as the one it replaced. */
+    let done = false;
+    const next = () => {
+      if (done) return;
+      done = true;
+      const later = setTimeout(connect, 250);
+      later.unref?.();
+    };
+    old.onmessage = null;
+    old.onclose = next;
+    const fallback = setTimeout(next, 1500);
+    fallback.unref?.();
+    try { old.close(); } catch (e) { next(); }
+  };
+
   const schedule = () => {
     if (closed || retry) return;
     retry = setTimeout(() => { retry = null; connect(); }, RETRY_MS);
@@ -395,8 +548,12 @@ export const createComfyEvents = ({ base, clientId, WebSocketImpl = globalThis.W
   };
 
   return {
-    /** Start watching, and say what a prompt's nodes are so progress can be named. */
-    register(id, { total, nodes }) {
+    /**
+     * Start watching, and say what a prompt's nodes are so progress can be
+     * named. `profile` is which timings it is measured against and adds to --
+     * see server/studioTimings.js.
+     */
+    register(id, { total, nodes, profile = [] }) {
       connect();
       const existing = jobs.get(id);
       /* `total` and `nodes` are re-applied over `existing` because a job can be
@@ -409,11 +566,71 @@ export const createComfyEvents = ({ base, clientId, WebSocketImpl = globalThis.W
         total,
         nodes,
         phases: phasesOf(nodes),
+        profile,
+        registeredAt: Date.now(),
       });
       forget();
       return jobs.get(id);
     },
+    /**
+     * ComfyUI's queue says `id` is running. Called by whoever asked it.
+     *
+     * Reported: ComfyUI drawing away while the card said "queued". The socket
+     * had gone quiet -- see `reconnect` -- and a card fed only by it waits for
+     * ever. So what the queue says is believed: a job still "queued" here is
+     * marked running, and if nothing at all has been heard about it for
+     * SILENT_MS the socket is replaced, at most once per SILENT_MS. A job
+     * already heard from is left alone: a node can run for a minute without a
+     * word, and that is not a broken socket.
+     */
+    nudge(id, now = Date.now()) {
+      let job = jobs.get(id);
+      // A browser can reconnect after this process restarted, so the websocket
+      // may not have heard the prompt's start. The queue is authoritative for
+      // whether it is running; create a minimal state so the SSE subscriber
+      // still receives a live snapshot and future websocket messages can fill
+      // in the detailed progress.
+      if (!job) {
+        job = emptyJob(id);
+        jobs.set(id, job);
+        forget();
+      }
+      if (job.state === 'done' || job.state === 'failed') return;
+      if (job.state === 'queued') {
+        // ComfyUI runs one prompt at a time, and the queue says it is this one.
+        current = id;
+        job = {
+          ...job,
+          state: 'running',
+          phase: job.phase === 'queued' ? 'starting' : job.phase,
+          startedAt: job.startedAt || now,
+          updatedAt: now,
+          registeredAt: job.registeredAt || now,
+        };
+        jobs.set(id, job);
+        announce(id);
+      }
+      /* Whatever state it was put in above, it has still not been *heard*:
+         `heardAt` is only ever set by the socket. Asked again and again while
+         the job runs, so a socket that was given its ten seconds on the first
+         ask is looked at again on the next. */
+      if (!job.heardAt && now - (job.registeredAt || now) >= SILENT_MS && now - reconnectedAt >= SILENT_MS) {
+        current = id;
+        reconnectedAt = now;
+        log('ComfyUI is running a job this socket has not heard about; reconnecting');
+        reconnect();
+      }
+    },
+    /* Open the socket, if it is not open, before a prompt is queued: ComfyUI
+       tells only the sockets it has at the moment it speaks, and a job it
+       starts at once was otherwise half over by the time `register` opened one. */
+    open() { connect(); },
     get(id) { return jobs.get(id) || null; },
+    /** How far along a job is and how long it has left, from earlier runs; null with none. */
+    estimate(job, now = Date.now()) {
+      if (!timings || !job?.profile?.length) return null;
+      return estimate(timings.lookup(job.profile), job, now);
+    },
     preview(id) { return previews.get(id) || null; },
     subscribe(listener) {
       connect();
@@ -429,6 +646,9 @@ export const createComfyEvents = ({ base, clientId, WebSocketImpl = globalThis.W
       try { socket?.close(); } catch (e) { /* already gone */ }
       socket = null;
       listeners.clear();
+      jobs.clear();
+      previews.clear();
+      overridden.clear();
     },
   };
 };

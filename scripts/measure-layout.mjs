@@ -24,16 +24,16 @@ const BROWSERS = [
 const browser = BROWSERS.find(p => p && fs.existsSync(p));
 if (!browser) { console.error('No Edge or Chrome found.'); process.exit(1); }
 
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'measure-'));
-const child = spawn(browser, [
+// Its own profile, closed with its whole process tree and removed -- see chromeProfile.mjs.
+const { launchChrome } = await import('./chromeProfile.mjs');
+const chrome = launchChrome(browser, 'webui-chrome-measure-', [
   '--headless=new', '--disable-gpu', '--no-sandbox',
   // Windows display scaling otherwise makes --window-size disagree with the
   // emulated viewport, so the numbers describe one page and the screenshot
   // another. The override below is the single source of size.
   '--force-device-scale-factor=1',
-  `--remote-debugging-port=${PORT}`, `--user-data-dir=${profile}`,
-  'about:blank',
-], { stdio: 'ignore' });
+  `--remote-debugging-port=${PORT}`,
+]);
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
@@ -173,5 +173,4 @@ if (shot?.result?.data) {
 }
 
 ws.close();
-child.kill();
-try { fs.rmSync(profile, { recursive: true, force: true }); } catch (e) { /* windows lock */ }
+chrome.close();

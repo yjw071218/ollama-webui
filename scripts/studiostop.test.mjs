@@ -262,8 +262,8 @@ const app = fs.readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8');
 check('a conversation that stops drawing tells ComfyUI so',
   /const stopDrawing = \(id\) => \{[\s\S]{0,300}'\/studio\/cancel'/.test(app));
 // The film, and every picture job through the one watcher they now share.
-check('for the picture and the film alike',
-  /if \(!output\) stopDrawing\(queued\.id\);/.test(app) && /if \(!finished\) stopDrawing\(id\);/.test(app));
+check('pictures and films cancel only after explicit stop, preserving reloads',
+  /if \(!output && signal\?\.aborted\) stopDrawing\(queued\.id\);/.test(app) && /if \(!finished && signal\?\.aborted\) stopDrawing\(id\);/.test(app));
 check('and not with the signal that was just aborted',
   !/stopDrawing[\s\S]{0,400}signal/.test(app.slice(app.indexOf('const stopDrawing'), app.indexOf('const stopDrawing') + 400)));
 check('offered while anything is still running', /\{busy && \([\s\S]{0,200}stopEverything/.test(panel));

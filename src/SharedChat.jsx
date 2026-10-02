@@ -18,8 +18,8 @@ import remarkMath from 'remark-math';
 import rehypeKatex from 'rehype-katex';
 import rehypeHighlight from 'rehype-highlight';
 import 'katex/dist/katex.min.css';
-import { RefreshCcw, Sparkles, Link2Off, MessageSquare } from 'lucide-react';
-import { fetchShare } from './shareLink.js';
+import { RefreshCcw, Sparkles, Link2Off, MessageSquare, Image as ImageIcon } from 'lucide-react';
+import { fetchShare, sharedImageUrl } from './shareLink.js';
 import { useI18n } from './i18n.jsx';
 
 const Bubble = ({ message }) => (
@@ -106,12 +106,13 @@ export const SharedChat = ({ token }) => {
   }
 
   const when = new Date(share.sharedAt);
+  const isPicture = share.kind === 'picture';
 
   return (
     <div className="shared-page">
       <header className="shared-header">
         <div className="shared-header-inner">
-          <MessageSquare size={16} />
+          {isPicture ? <ImageIcon size={16} /> : <MessageSquare size={16} />}
           <h1>{share.title || t('share.untitled')}</h1>
           <span className="shared-when">
             {t('share.sharedOn', {
@@ -121,8 +122,19 @@ export const SharedChat = ({ token }) => {
         </div>
       </header>
 
-      <main className="shared-main">
-        {share.messages.map((message, i) => <Bubble key={i} message={message} />)}
+      <main className={`shared-main ${isPicture ? 'is-picture' : ''}`}>
+        {isPicture ? (
+          /* The picture itself, at whatever size the window allows, with the
+             prompt under it. The bytes come by token rather than by filename:
+             there is no second address for them, so revoking the link stops
+             the picture and not only the page. See `/api/share/image`. */
+          <figure className="shared-picture">
+            <img src={sharedImageUrl(token)} alt={share.picture?.prompt || ''} />
+            {share.picture?.prompt && <figcaption>{share.picture.prompt}</figcaption>}
+          </figure>
+        ) : (
+          share.messages.map((message, i) => <Bubble key={i} message={message} />)
+        )}
       </main>
 
       {/* Said plainly rather than implied by the missing composer: a reader

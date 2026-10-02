@@ -1,9 +1,9 @@
 /**
- * A prompt for Anima, as tags and a sentence.
+ * A prompt for Anima, as tags followed by one or two natural-language sentences.
  *
  * Anima was trained on danbooru tags *and* on natural-language captions, and
  * reads a prompt best as both: the tags first, which pin down exactly what is
- * in the picture in the vocabulary it learned it in, then a sentence for what
+ * in the picture in the vocabulary it learned it in, then one or two sentences for what
  * tags cannot say -- mood, light, how things relate.
  *
  * A language model asked for a picture writes prose. Some of that prose is
@@ -124,4 +124,44 @@ export const shapeAnimaPrompt = (prompt, index) => {
     .filter(Boolean)
     .join(', ');
   return { prompt: shaped, tags, sentence: text, changed: shaped !== source };
+};
+/**
+ * A shaped subject, back inside the boxes it came from.
+ *
+ * The Studio's prompt is four boxes and only one of them is written fresh for
+ * each picture. `shapeAnimaPrompt` is for that one: a subject asked for in
+ * conversation is prose, and Anima wants tags and a sentence. The other three
+ * are not prose. They are typed once, with autocomplete, and they are
+ * *positional* -- "masterpiece, best quality" in front is the whole reason a
+ * lead box exists.
+ *
+ * Reshaping the joined string instead moved the lead to the end and turned it
+ * into a sentence, which is how the Studio's boxes came to reach the graph and
+ * do nothing anybody could see.
+ *
+ * The order out is the order `joinPrompt` uses in the Studio, which is the
+ * order these prompts are read in:
+ *
+ *     lead, artist, subject, tail
+ *
+ * with the subject in the two pieces `shapeAnimaPrompt` made of it -- its tags,
+ * then whatever prose was left over as the final natural-language sentence(s).
+ *
+ * The tail is genuinely last. It was put with the subject's tags for a while,
+ * on the reasoning that both are tags; that is true, and it meant a subject
+ * with any prose in it pushed a sentence out behind the tail. A box whose
+ * whole purpose is to go last has to go last.
+ */
+export const framedAnimaPrompt = ({ lead = '', artist = '', tail = '', shaped } = {}) => {
+  const tidy = (part) => String(part || '').trim().replace(/^[,\s]+|[,\s]+$/g, '');
+  const sentence = shaped?.sentence
+    ? (/[.!?]$/.test(shaped.sentence) ? shaped.sentence : `${shaped.sentence}.`)
+    : '';
+  return [
+    tidy(lead),
+    tidy(artist),
+    tidy((shaped?.tags || []).join(', ')),
+    tidy(sentence),
+    tidy(tail),
+  ].filter(Boolean).join(', ');
 };

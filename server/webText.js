@@ -11,6 +11,8 @@
  * caught. They live here so that one can.
  */
 
+import { decodeCp949, KOREAN_LABEL } from './cp949.js';
+
 export const HTML_ENTITIES = {
   amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", nbsp: ' ', '#39': "'", '#x27': "'", '#x2F': '/',
 };
@@ -65,12 +67,13 @@ export const charsetFromType = (type) => {
 /**
  * A charset label from the document itself.
  *
- * Only the head is looked at, and only as Latin-1: the declaration is ASCII in
+ * Only the head is looked at -- the first 16KB, because Korean portals put
+ * kilobytes of inline script before the meta tag -- and only as Latin-1: the declaration is ASCII in
  * every encoding this can help with, and decoding the whole document to find
  * out how to decode the document is the circle being broken here.
  */
 export const charsetFromDocument = (bytes) => {
-  const head = Buffer.from(bytes.buffer, bytes.byteOffset, Math.min(bytes.length, 4096))
+  const head = Buffer.from(bytes.buffer, bytes.byteOffset, Math.min(bytes.length, 16384))
     .toString('latin1');
   const meta = /<meta[^>]+charset\s*=\s*["']?\s*([\w:.+-]+)/i.exec(head)
     // `<?xml version="1.0" encoding="EUC-KR"?>` — RSS feeds still do this.
@@ -104,6 +107,9 @@ export const isUtf8 = (bytes) => {
 };
 
 export const decodeBytes = (bytes, label) => {
+  /* Korean: CP949, as a browser reads it, not Node's narrower EUC-KR -- see
+     server/cp949.js for the diamonds that came from the difference. */
+  if (KOREAN_LABEL.test(String(label || ''))) return decodeCp949(bytes);
   try {
     return new TextDecoder(label, { fatal: false }).decode(bytes);
   } catch (e) {
@@ -312,6 +318,50 @@ export const termsOf = (query) => {
  * way. The score is how many distinct query terms the result mentions, so a
  * page matching three of them outranks one matching the same word twice.
  */
+/**
+ * Naver's web results, out of its search page.
+ *
+ * Naver answers a plain request with real results for a Korean query, which
+ * Bing no longer does (it hands a script Zhihu threads about something else)
+ * and DuckDuckGo does only until it starts rate-limiting. Its class names are
+ * mostly generated and change, so only the design-system ones are relied on:
+ * each result is an `fds-web-doc-root` block, its title the `headline1` text,
+ * its summary the three-line `ellipsis-3` text, its address the first outside
+ * link.
+ */
+export const parseNaverResults = (html, limit = 10) => {
+  const results = [];
+  for (const block of String(html || '').split(/fds-web-doc-root/).slice(1)) {
+    if (results.length >= limit) break;
+    const title = block.match(/<(?:span|a|div)[^>]*class="[^"]*text-type-headline1[^"]*"[^>]*>([\s\S]*?)<\/(?:span|a|div)>/i);
+    if (!title) continue;
+    const snippet = block.match(/<(?:span|a|div)[^>]*class="[^"]*text-ellipsis-3[^"]*"[^>]*>([\s\S]*?)<\/(?:span|a|div)>/i);
+    const links = [...block.matchAll(/href="(https?:\/\/[^"]+)"/gi)].map(m => decodeEntities(m[1]))
+      .filter(url => !/^https?:\/\/([a-z]+\.)*(keep|search)\.naver\.com\//i.test(url));
+    if (!links.length) continue;
+    results.push({
+      title: htmlToText(title[1]).slice(0, 200),
+      url: links[0].slice(0, 500),
+      snippet: snippet ? htmlToText(snippet[1]).replace(/\s+/g, ' ').slice(0, 400) : '',
+    });
+  }
+  return results;
+};
+
+/**
+ * Only the results that mention the query at all. Empty means the engine
+ * answered about something else -- which a query with no usable terms (all
+ * stopwords) cannot be judged by, so it keeps everything.
+ */
+export const relevantResults = (query, results) => {
+  const terms = termsOf(query);
+  if (terms.length === 0) return results;
+  return results.filter((result) => {
+    const haystack = `${result.title} ${result.snippet} ${result.url}`.toLowerCase();
+    return terms.some(term => haystack.includes(term));
+  });
+};
+
 export const rankByRelevance = (query, results) => {
   const terms = termsOf(query);
   if (terms.length === 0) return results;

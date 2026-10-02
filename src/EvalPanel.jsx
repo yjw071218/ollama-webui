@@ -37,13 +37,22 @@ import {
  */
 
 const store = localforage.createInstance({ name: 'ollama-webui', storeName: 'evals' });
+
+/* One model on purpose: a CLI over its limit is a failed case, not an answer
+   from whichever model CLI_FALLBACK names next (server/cliFallback.js). */
+const EVAL_HEADERS = { 'Content-Type': 'application/json', 'X-Cli-Fallback': 'off', 'X-Cli-Via': 'eval' };
 const keyFor = (userId) => `evals:${userId || 'guest'}`;
 
-export const EvalPanel = ({ userId, model, systemPrompt, promptName, options, onToast }) => {
+export const EvalPanel = ({ userId, model, models = [], systemPrompt, promptName, options, onToast }) => {
   const { t } = useI18n();
 
   const [text, setText] = useState('');
   const [runs, setRuns] = useState([]);
+  /* Who marks the answers. By default the model being tested marks itself,
+     which is what a machine with one model can do; a stronger judge -- a
+     subscription CLI -- marks a small local model far more reliably, and
+     costs one short answer per case. '' is "the model being tested". */
+  const [judge, setJudge] = useState('');
   const [busy, setBusy] = useState(null);      // { done, total, question }
   const abortRef = useRef(null);
 
@@ -53,6 +62,7 @@ export const EvalPanel = ({ userId, model, systemPrompt, promptName, options, on
       if (cancelled || !saved) return;
       setText(saved.text || '');
       setRuns(Array.isArray(saved.runs) ? saved.runs : []);
+      setJudge(typeof saved.judge === 'string' ? saved.judge : '');
     });
     return () => { cancelled = true; };
   }, [userId]);
@@ -67,7 +77,7 @@ export const EvalPanel = ({ userId, model, systemPrompt, promptName, options, on
     const started = Date.now();
     const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: EVAL_HEADERS,
       signal,
       body: JSON.stringify({
         model,
@@ -90,10 +100,10 @@ export const EvalPanel = ({ userId, model, systemPrompt, promptName, options, on
   const mark = async (testCase, answer, signal) => {
     const res = await fetch('/api/chat', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: EVAL_HEADERS,
       signal,
       body: JSON.stringify({
-        model,
+        model: judgeModel,
         stream: false,
         /* The judge does not think first. A marking that takes as long as the
            answer doubles the length of every run to produce the same 0-3. */
@@ -107,6 +117,8 @@ export const EvalPanel = ({ userId, model, systemPrompt, promptName, options, on
     const data = await res.json();
     return parseVerdict(decodeByteFallback(data.message?.content || ''));
   };
+
+  const judgeModel = judge && models.some(m => m.name === judge) ? judge : model;
 
   const run = async () => {
     const cases = parseSuite(text);
@@ -160,11 +172,14 @@ export const EvalPanel = ({ userId, model, systemPrompt, promptName, options, on
       model,
       promptName: promptName || null,
       settings: { temperature: options?.temperature },
+      // Kept with the run: marks from two different judges are not the same
+      // scale, and the comparison below says so.
+      judge: judgeModel,
       results,
     };
     /* Ten kept. Enough to see a direction and few enough that IndexedDB is not
        holding a year of generated prose nobody will read. */
-    const next = { text, runs: [record, ...runs].slice(0, 10) };
+    const next = { text, judge, runs: [record, ...runs].slice(0, 10) };
     setRuns(next.runs);
     persist(next);
   };
@@ -187,7 +202,7 @@ export const EvalPanel = ({ userId, model, systemPrompt, promptName, options, on
 
       <textarea
         value={text}
-        onChange={(e) => { setText(e.target.value); persist({ text: e.target.value, runs }); }}
+        onChange={(e) => { setText(e.target.value); persist({ text: e.target.value, judge, runs }); }}
         placeholder={t('evals.placeholder')}
         rows={8}
         style={{ width: '100%', marginTop: '0.5rem', fontFamily: 'var(--font-mono, monospace)', fontSize: '0.8rem' }}
@@ -195,6 +210,19 @@ export const EvalPanel = ({ userId, model, systemPrompt, promptName, options, on
       <div style={muted}>
         {t('evals.caseCount', { count: cases.length, scored: scorable })}
       </div>
+
+      <label style={{ ...muted, display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.5rem' }}>
+        {t('evals.judge')}
+        <select
+          value={judge}
+          disabled={!!busy}
+          onChange={(e) => { setJudge(e.target.value); persist({ text, judge: e.target.value, runs }); }}
+          style={{ minWidth: 0, flex: 1 }}
+        >
+          <option value="">{t('evals.judgeSelf')}</option>
+          {models.map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
+        </select>
+      </label>
 
       <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginTop: '0.5rem' }}>
         {busy ? (
@@ -237,6 +265,11 @@ export const EvalPanel = ({ userId, model, systemPrompt, promptName, options, on
           {/* Against the previous run, because "2.4 out of 3" means nothing on
               its own -- it is a property of how hard the questions are. What
               means something is that it was 2.1 before the prompt changed. */}
+          {diff && (previous.judge || previous.model) !== (latest.judge || latest.model) && (
+            <div style={{ ...muted, marginTop: '0.35rem', color: 'var(--danger)' }}>
+              {t('evals.judgeChanged', { before: previous.judge || previous.model, after: latest.judge || latest.model })}
+            </div>
+          )}
           {diff && (
             <div style={{ ...muted, marginTop: '0.35rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
               {diff.delta === null || Math.abs(diff.delta) < 0.005

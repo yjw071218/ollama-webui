@@ -8,6 +8,9 @@ building unless you configure something that does.
 
 ## Running it
 
+For RisuAI character roleplay, open **상황극**. Install its pinned runtime with
+`npm run risu:setup`; see [RisuAI setup, file formats and storage](integrations/risuai/README.md).
+
 ```bash
 npm install
 npm run dev        # UI only (expects `ollama serve` to already be running)
@@ -72,6 +75,7 @@ on your machine.
 | `VITE_GOOGLE_CLIENT_ID`, `VITE_KAKAO_REST_KEY` | Social sign-in (public by design — they identify the app, not you) |
 | `KAKAO_CLIENT_SECRET` | Kakao token exchange. **No `VITE_` prefix**, so it stays server-side and never reaches the browser bundle |
 | `BRAVE_API_KEY`, `TAVILY_API_KEY`, `SERPER_API_KEY`, `SEARXNG_URL` | Web search. Without one the search tool falls back to scraping, which works but is fragile |
+| `WEB_SEARCH_BROWSER=chrome` | Search Google in the installed Chrome (no window, its own profile), paced so it is not shown a CAPTCHA: 12–20 s between searches, 15 an hour, 100 a day, and 30 min → 24 h of rest if one appears anyway. Also reads pages that refuse a plain request or are drawn by script. See `server/browserSearch.js` |
 | `GPT_SOVITS_PATH`, `GPT_SOVITS_PYTHON`, `FFMPEG_BIN` | Voice output — see [`tts/README.md`](tts/README.md) |
 | `LLM_BACKEND`, `LLAMACPP_URL` | Which engine runs the model: `ollama` (default) or `llamacpp` — see [Choosing an engine](#choosing-an-engine) |
 | `COMFYUI_URL`, `*_CHECKPOINT` | Image and video generation — see [Pictures and video](#pictures-and-video) |
@@ -1308,9 +1312,131 @@ server that fails to start says why there and nowhere else. **HTTP** is the same
 posted to a URL, answered as either JSON or one SSE event at the server's discretion, with
 the session id echoed back on every later request.
 
+The older **SSE** transport — a long GET that first names where to POST — works too, for the
+many servers still speaking it: `"type": "sse"`, or a URL ending in `/sse`. An HTTP session
+the server forgot (it restarted) is started again and the call retried, and a 401 says to
+put a token in `"headers"` rather than just "HTTP 401".
+
 A tool from a server is offered to the model as `mcp_<server>_<tool>`, which is both how
 two servers can each have a `search` and how a name arriving from outside this repository
 is prevented from colliding with `read_file`. Settings → Tools lists what came back.
+
+**More of the protocol than tools.** A server with *resources* gets one more tool,
+`read_resource`, whose description names what there is to read. A server's *prompts* are
+listed in Settings → Tools and dropped into the message box on a click, arguments asked
+for first. Lists that come in pages are followed to the end, a server that says its tools
+changed is asked again, a request a server makes of the client (`ping`, `roots/list`) is
+answered rather than mistaken for a reply, and a picture a tool returns is named in the
+text instead of being inlined as a megabyte of base64.
+
+**Secrets and other clients' configs.** `${NAME}` and `${NAME:-fallback}` in any string are
+read from the environment and `.env`, so a token lives in `.env`. Servers you have already
+configured in Claude Code, Claude Desktop, Codex or Antigravity can be reused as they are:
+
+```json
+{ "mcpServers": { }, "import": ["claude-code", "codex", "claude-desktop", "antigravity"] }
+```
+
+(or `MCP_IMPORT=claude-code,codex` in `.env`). Each client's own spelling is understood —
+Codex's `enabled_tools`, `bearer_token_env_var` and `enabled = false`, Antigravity's
+`serverUrl` — and a server named in `mcp.json` wins over an imported one of the same name.
+`"deny": [...]` is the opposite of `"allow"`. Editing `mcp.json` restarts just the servers
+whose entry changed; there is no need to restart the app.
+
+**The subscription CLIs use the same servers.** With the tools toggle on, `claude-code:*`
+and `codex:*` models are handed the servers from `mcp.json` (allow/deny lists included) and
+run them in their own agent loop, and Claude Code also gets web search and page fetch —
+nothing that touches this machine otherwise. Their tool calls show up in the thinking as
+`[tool: server / name]`. Settings → Tools has a panel for the CLIs: installed or not, signed
+in or not, which servers each would get, and how the answers since start have gone.
+`CLI_MCP=false` / `CLI_WEB=false` turn this off.
+
+**The workbench: tools for working on code.** The filesystem server reads a file whole
+or by its head and tail, searches file names only, and writes without saying what changed —
+asked to add a feature to a 900 KB `App.jsx`, a model could not find anything in it, could
+not read its middle, could not run the tests, and stopped. `server/mcpWorkbench.mjs` is an
+MCP server of this repository's own with the rest: `read_file` by line range, `grep` over
+contents with context, `find_files`, `edit_file` (an exact, unique replacement), `write_file`
+and `run_command` (exit code and output; `--no-commands` leaves it out). Its arguments are
+the folders it may touch:
+
+```json
+"workbench": { "command": "node",
+               "args": ["C:\\path\\to\\ollama-webui\\server\\mcpWorkbench.mjs", "D:\\projects"] }
+```
+
+Every change comes back as a unified diff. The model checks its work against it, and the
+reader sees it: a CLI model's answer carries the diff of each file it changed, and for any
+other model a **Changed files** box above the answer lists them, with the diff a click
+away, instead of leaving it folded inside the tool steps.
+
+**Thinking and what is left of the subscription.** Headless, Claude Code has the API leave
+the reasoning out and Codex asks for no summary, so a CLI model's thinking panel was empty.
+Both are now asked for it (Claude's summarized thinking, Codex's detailed reasoning summary)
+whenever the chat's thinking is not switched off. For a CLI model the header shows the
+tightest usage window — "5h 58% left", or "limit · back in 2 hr" — and a click shows every
+window with its reset time. The figures are the CLI's own: Claude Code's `rate_limit_event`
+on each answer, Codex's `account/rateLimits/updated` and, before this app has run Codex at
+all, the last figures in Codex's session logs. They are kept in `server/data/cli-limits.json`
+with the time they were said; a window whose reset has passed reads as empty again.
+Antigravity reports nothing of the kind headless, so it has no figures.
+
+**When one is used up, another answers.** `CLI_FALLBACK=codex:gpt-5.5,agy:gemini-3.1-pro-high,qwen3:32b`
+names who answers when the model picked is over its limit (or not installed). A CLI that
+has said it is over its limit, with a reset still ahead, is not even started; one that
+refuses when asked is passed over as long as it had said nothing yet, so an answer is
+never two models' halves. A name that is not a CLI is a local model. The answer carries
+who wrote it — "claude-code:opus was over its limit — answered by codex:gpt-5.5" under
+the message — and a comparison or an evaluation, which ask for one model on purpose,
+never falls back. Whoever hit the limit is told when it resets: a push to a closed app
+(with "notify when done" on, over HTTPS), or a notification from the open one.
+
+**Picking a conversation back up.** Each answer used to be a fresh CLI process sent the
+whole conversation as one transcript, which the provider's prompt cache cannot match: the
+transcript grew by a turn *inside one message*. Now the history is hashed after each
+answer and the CLI's own session (Claude Code `--resume`, Codex `thread/resume`, agy
+`--conversation`) remembered under it. The next turn is split at its last answer; if
+everything up to there is exactly what that session saw, only the new message is sent
+and the rest is read from cache. An edit, a regeneration or another model is another
+hash, and the turn goes whole as before — so a session can never answer from a history
+the reader does not see. The footer says "resumed · 41,200 cached". `CLI_RESUME=false`
+turns it off.
+
+**What the CLIs were used for.** Every CLI answer — in a chat, a comparison, an evaluation
+or through the delegate below — is a line in `server/data/cli-usage.jsonl`: whose, which
+conversation, tokens, cache, and the API price Claude Code reports (what it would have
+cost; the subscription is not charged it). Settings → Tools sums it for today, seven and
+thirty days per CLI, and lists the conversations that used the most. The message footer
+shows the price of each answer.
+
+**Comparing and marking with them.** The comparison window has "one of each subscription
+CLI" — Claude, GPT and Gemini on the same question side by side, with each answer's price
+— and the synthesis can be written by any model, not only one of those that answered.
+The evaluation suite can be *marked* by a different model than the one being tested:
+a subscription CLI marking a small local model is far more reliable than the model marking
+itself, for one short answer per case. A run marked by a different judge than the last
+one says so, since the two scores are not the same scale.
+
+**Asking a bigger model, from a small one.** `server/mcpDelegate.mjs` is an MCP server
+with two tools, `list_models` and `ask`: a local model hands one self-contained question
+to a CLI model and carries on with the answer. The quota is spent on the step that needs
+it rather than on every turn. It is never handed to the CLIs themselves — a CLI that can
+ask a CLI is a loop that ends when the subscription does.
+
+```json
+"delegate": { "command": "node",
+              "args": ["C:\\path\\to\\ollama-webui\\server\\mcpDelegate.mjs", "--models", "claude-code:sonnet,codex:gpt-5.5"],
+              "timeout": 600000 }
+```
+
+`--models` limits which may be asked (default: all offered); `CLI_FALLBACK` applies to the
+CLI models in it unless `--no-fallback`.
+
+**Antigravity and MCP.** agy cannot be handed servers on its command line, but its agent
+files take `mcpServers`. With `CLI_AGY_MCP=on`, the chat agent the app writes for it gets
+the `mcp.json` servers (as `ollama-webui-chat-mcp`, none of your own agy servers or rules),
+and agy runs them itself like Claude Code and Codex do. It is off by default because the
+field is newer than the rest; Settings → Tools shows which way agy is using tools.
 
 > An MCP server is a program this app will run on your machine, with your account's
 > permissions, chosen by the contents of a file. That is the whole of the security model,

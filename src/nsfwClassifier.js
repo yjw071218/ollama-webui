@@ -40,12 +40,18 @@ export const cacheKey = (src) => {
 
 const memory = new Map();
 
+const trimMemory = () => {
+  while (memory.size > STORE_LIMIT) memory.delete(memory.keys().next().value);
+};
+
 const readStore = () => {
   try { return JSON.parse(localStorage.getItem(STORE) || '{}') || {}; } catch (e) { return {}; }
 };
 
 const remember = (key, scores) => {
+  memory.delete(key);
   memory.set(key, scores);
+  trimMemory();
   try {
     const all = readStore();
     all[key] = scores;
@@ -58,9 +64,17 @@ const remember = (key, scores) => {
 
 export const knownScores = (src) => {
   const key = cacheKey(src);
-  if (memory.has(key)) return memory.get(key);
+  if (memory.has(key)) {
+    const scores = memory.get(key);
+    memory.delete(key);
+    memory.set(key, scores);
+    return scores;
+  }
   const stored = readStore()[key];
-  if (stored) memory.set(key, stored);
+  if (stored) {
+    memory.set(key, stored);
+    trimMemory();
+  }
   return stored || null;
 };
 

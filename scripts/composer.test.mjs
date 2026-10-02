@@ -1,3 +1,5 @@
+import { createChatJobStore, followChatJob } from '../server/chatJobs.js';
+const replayStore = createChatJobStore();
 // The composer, as a stack.
 //
 // It used to be a single row: attach, microphone, telescope, the box you type
@@ -79,7 +81,7 @@ check('the chat request carries it', /\.\.\.think,/.test(app));
 // A model or an Ollama too old for levels refuses the whole request. Losing a
 // turn over a reasoning preference is the wrong trade.
 check('a refused level falls back to plain thinking rather than failing the turn',
-  /typeof wanted\.think === 'string'[\s\S]{0,400}askOllama\(\{ think: true \}\)/.test(app));
+  /typeof wanted\.think === 'string'[\s\S]{0,900}askOllama\(\{ think: true \}\)/.test(app));
 
 // The old three-way switch stored 'on'. It has to keep meaning something.
 check('a setting saved by the old switch still loads', /stored === 'on'/.test(app));
@@ -139,6 +141,22 @@ const MIME = {
 
 const server = http.createServer((req, res) => {
   const url = new URL(req.url, 'http://x');
+  /* "Is the generation this browser wrote down still a generation?" The app
+     asks before it takes the screen over for a saved job -- see the restore in
+     App.jsx. Answered from the same store the replay below reads. */
+  if (url.pathname === '/api/chat/live') {
+    const id = url.searchParams.get('id') || '';
+    const job = id ? replayStore.read(id) : null;
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ success: true, known: !!job, running: !!job && !job.finished }));
+    return;
+  }
+  if (url.pathname === '/api/chat/replay') {
+    const job = replayStore.read(url.searchParams.get('id'));
+    if (!job) { res.writeHead(404); res.end(); return; }
+    followChatJob(req, res, job, url.searchParams.get('offset'));
+    return;
+  }
   // Nothing is serving Ollama here, and nothing needs to be: what is under test
   // is where the controls land, not what they talk to. The model list is the
   // one exception -- the picker cannot be opened without one.
@@ -161,17 +179,17 @@ const server = http.createServer((req, res) => {
 });
 await new Promise(r => server.listen(HTTP_PORT, '127.0.0.1', r));
 
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'webui-composer-'));
-const child = spawn(browser, [
+// Its own profile, closed with its whole process tree and removed -- see chromeProfile.mjs.
+const { launchChrome } = await import('./chromeProfile.mjs');
+const chrome = launchChrome(browser, 'webui-chrome-composer-', [
   '--headless=new', '--disable-gpu', '--no-sandbox', '--force-device-scale-factor=1',
-  `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${profile}`, 'about:blank',
-], { stdio: 'ignore' });
+  `--remote-debugging-port=${CDP_PORT}`,
+]);
 
 const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 const cleanup = () => {
-  try { child.kill(); } catch (e) { /* gone */ }
   try { server.close(); } catch (e) { /* closed */ }
-  try { fs.rmSync(profile, { recursive: true, force: true }); } catch (e) { /* windows lock */ }
+  chrome.close();
 };
 
 let ws;
@@ -303,6 +321,9 @@ const added = await json(`(() => {
     // Each entry says what it does on a second line; a menu of bare verbs is
     // one nobody can choose from the first time.
     described: [...menu.querySelectorAll('.composer-menu-item em')].length,
+    // Screen capture and camera appear only where the browser has them
+    // (src/capture.js), so how many rows there should be depends on it.
+    expected: 3 + (navigator.mediaDevices?.getDisplayMedia ? 1 : 0) + (navigator.mediaDevices?.getUserMedia ? 1 : 0),
     // It opens upwards. The composer sits at the bottom of the window and a
     // menu dropped below it is off the screen.
     aboveTheRow: menu.getBoundingClientRect().bottom
@@ -312,8 +333,8 @@ const added = await json(`(() => {
 })()`);
 
 check('pressing + opens a menu', added.open === true);
-eq('holding the three things you can add to a message', added.items, 3);
-eq('each with a line saying what it does', added.described, 3);
+eq('holding the things you can add to a message', added.items, added.expected);
+eq('each with a line saying what it does', added.described, added.expected);
 check('and it opens upwards, not off the bottom of the window', added.aboveTheRow === true);
 check('while still fitting on the screen', added.onScreen === true);
 
@@ -449,6 +470,206 @@ check('the control row stays on screen',
   phone.rowRight > 0 && phone.rowRight <= phone.clientWidth + 1, `right edge at ${phone.rowRight}`);
 check('and the box is still most of the width',
   phone.boxWidth > phone.clientWidth * 0.7, `${phone.boxWidth} of ${phone.clientWidth}`);
+
+// A menu can exist in the DOM yet be clipped by its mobile wrapper.
+await evaluate(`(() => {
+  const trigger = document.querySelector('.composer-model-trigger');
+  if (trigger?.getAttribute('aria-expanded') === 'true') trigger.click();
+})()`);
+await sleep(250);
+const tap = await json(`(() => {
+  const r = document.querySelector('.composer-model-trigger').getBoundingClientRect();
+  return { x: r.x + r.width / 2, y: r.y + r.height / 2 };
+})()`);
+await send('Page.bringToFront');
+await send('Emulation.setTouchEmulationEnabled', { enabled: true });
+await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [tap] });
+await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+await sleep(350);
+const mobileMenu = await json(`(() => {
+  const item = document.querySelector('.composer-model-menu .composer-menu-item');
+  if (!item) return { visible: false };
+  const r = item.getBoundingClientRect();
+  const hit = document.elementFromPoint(r.x + r.width / 2, r.y + r.height / 2);
+  return { visible: item.contains(hit), top: r.top, bottom: r.bottom };
+})()`);
+check('a phone tap opens a visible, touchable model menu', mobileMenu.visible, JSON.stringify(mobileMenu));
+await click('.composer-model-menu .composer-menu-item');
+check('selecting a model closes the menu', await waitFor(`!document.querySelector('.composer-model-menu')`));
+
+/* And the top of it.
+ *
+ * Measured at 390x844: the composer sat 394px down the screen, the menu opened
+ * upward and stood 395px tall, and its heading came out at -9px -- off the top
+ * of the phone, unreachable, because the menu scrolls inside itself and there
+ * is nothing above it to scroll. The cap was a fraction of the viewport
+ * (`55dvh`) rather than the room actually above the trigger, and a menu that
+ * fits the cap can still not fit the gap.
+ *
+ * Squeezed here on purpose. A short viewport is a phone in landscape, and it is
+ * what the on-screen keyboard leaves of a tall one -- both are the everyday
+ * cases where the gap above the composer is small. */
+await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 560, deviceScaleFactor: 1, mobile: true });
+await sleep(600);
+await evaluate(`(() => {
+  const trigger = document.querySelector('.composer-model-trigger');
+  if (trigger?.getAttribute('aria-expanded') !== 'true') trigger?.click();
+})()`);
+await sleep(400);
+const squeezed = await json(`(() => {
+  const menu = document.querySelector('.composer-model-menu');
+  if (!menu) return { open: false };
+  const box = menu.getBoundingClientRect();
+  return {
+    open: true,
+    viewport: window.innerHeight,
+    top: Math.round(box.top),
+    bottom: Math.round(box.bottom),
+    height: Math.round(box.height),
+    // More to read than there is room for is fine -- that is what scrolling is
+    // for. Being *above the window* is not: nothing scrolls it back.
+    scrolls: menu.scrollHeight > menu.clientHeight + 1,
+  };
+})()`);
+check('the model menu opens with its top on screen', squeezed.open && squeezed.top >= 0, JSON.stringify(squeezed));
+check('  and its bottom above the composer', squeezed.bottom <= squeezed.viewport + 1, JSON.stringify(squeezed));
+check('  scrolling inside itself when the room is short rather than overflowing it',
+  squeezed.scrolls || squeezed.height < squeezed.viewport, JSON.stringify(squeezed));
+
+/* And nothing on top of it.
+ *
+ * On a phone the notices sit along the top of the screen -- moved there because
+ * at the bottom right they covered the model button. A menu that opens upward
+ * from the composer now reaches the top of the screen, so the notices covered
+ * its first rows instead: one screen up, the same bug, and the rows underneath
+ * a notice cannot be pressed. A notice is put here by hand rather than waited
+ * for, because which notices appear depends on how the server was started. */
+await evaluate(`(() => {
+  let stack = document.querySelector('.toast-stack');
+  if (!stack) {
+    stack = document.createElement('div');
+    stack.className = 'toast-stack';
+    document.body.appendChild(stack);
+  }
+  const notice = document.createElement('div');
+  notice.className = 'toast';
+  notice.id = 'planted-notice';
+  notice.style.minHeight = '96px';
+  notice.textContent = 'a notice long enough to cover the top of a menu';
+  stack.appendChild(notice);
+})()`);
+await sleep(300);
+const covered = await json(`(() => {
+  const menu = document.querySelector('.composer-model-menu');
+  const first = menu?.querySelector('.composer-menu-heading');
+  if (!first) return { open: false };
+  const box = first.getBoundingClientRect();
+  const hit = document.elementFromPoint(box.x + box.width / 2, box.y + box.height / 2);
+  return {
+    open: true,
+    onMenu: !!hit && !!menu.contains(hit),
+    hit: hit ? hit.tagName.toLowerCase() + '.' + (hit.className || '').toString().split(' ')[0] : null,
+  };
+})()`);
+check('a notice does not cover the top of the open menu', covered.open && covered.onMenu, JSON.stringify(covered));
+await evaluate(`document.getElementById('planted-notice')?.remove()`);
+
+await evaluate(`document.querySelector('.composer-model-trigger')?.click()`);
+await send('Emulation.setDeviceMetricsOverride', { width: 390, height: 780, deviceScaleFactor: 1, mobile: true });
+await sleep(400);
+
+// Reload a running job, then reload it again while more tokens are arriving.
+const recoveryJob = replayStore.begin('browser-recovery');
+replayStore.appendChunk(recoveryJob.id, JSON.stringify({ message: { content: '복구 첫부분 🎉' } }) + '\n');
+await evaluate(`localStorage.setItem('ollama-sessions', JSON.stringify([{
+  id: 'recovery-session', title: 'Recovery', updatedAt: Date.now(), createdAt: Date.now(),
+  messages: [{ role: 'user', content: '계속 답변해줘' }, { role: 'assistant', content: '' }]
+}])); localStorage.setItem('chatGeneration:guest', JSON.stringify({
+  sessionId: 'recovery-session', jobId: 'browser-recovery', messageIndex: 1, startedAt: Date.now()
+}));`);
+await send('Page.reload');
+/* Recovery follows the answer without taking the screen over: the chat being
+   read stays the chat being read, and a notice offers the way to the one that
+   is still arriving. Reported as the screen being dragged back to a finished
+   chat, so what is exercised here is what a person does -- press "go there". */
+const goToRecovering = () => evaluate(`(() => {
+  const go = document.querySelector('.busy-elsewhere button');
+  if (go) { go.click(); return 'went'; }
+  return 'already there';
+})()`);
+await waitFor(`!!document.querySelector('.busy-elsewhere button') || !!document.querySelector('.markdown-body.is-streaming')`, 10000);
+await goToRecovering();
+check('reload restores the active answer and streaming class', await waitFor(
+  `!![...document.querySelectorAll('.markdown-body.is-streaming')].find(x => x.textContent.includes('복구 첫부분 🎉'))`, 10000));
+replayStore.appendChunk(recoveryJob.id, JSON.stringify({ message: { content: ' 중간 이어쓰기' } }) + '\n');
+check('new tokens arrive live after reload', await waitFor(`document.body.textContent.includes('중간 이어쓰기')`));
+await sleep(1100);
+await send('Page.reload');
+await waitFor(`!!document.querySelector('.busy-elsewhere button') || !!document.querySelector('.markdown-body.is-streaming')`, 10000);
+await goToRecovering();
+check('a second reload reconnects to the same job', await waitFor(
+  `!![...document.querySelectorAll('.markdown-body.is-streaming')].find(x => x.textContent.includes('중간 이어쓰기'))`, 10000));
+replayStore.appendChunk(recoveryJob.id, JSON.stringify({ message: { content: ' 마지막 유지 😀' } }) + '\n');
+replayStore.appendChunk(recoveryJob.id, JSON.stringify({ done: true, eval_count: 123,
+  total_duration: 2000000000, eval_duration: 1000000000 }));
+replayStore.finish(recoveryJob.id);
+check('completion preserves the tail and token metrics', await waitFor(
+  `document.body.textContent.includes('마지막 유지 😀') && document.body.textContent.includes('123 tok')`));
+check('completion clears the generation marker', await waitFor(`!localStorage.getItem('chatGeneration:guest')`));
+
+/* ------------------------------------ a generation that is over and gone
+
+   Reported: "받는 중입니다" appearing and disappearing over and over, in a chat
+   whose answer had finished, while the screen kept jumping back to that chat --
+   and a server restart changing nothing, because what was stuck was in the
+   browser. The job id is kept in localStorage so an answer survives a reload;
+   the two paths that clear it both had holes, and the worst of them was a
+   picture key left behind by a turn that ended days ago, which vetoed the
+   clearing entirely.
+
+   What the app does now is ask first. A generation this server has never heard
+   of is one that is finished for good, whatever this browser wrote down. */
+await evaluate(`
+  localStorage.setItem('ollama-sessions', JSON.stringify([
+    { id: 'chat-a', title: 'Where I am looking', updatedAt: Date.now(), createdAt: Date.now(),
+      messages: [{ role: 'user', content: '여기 있어요' }] },
+    { id: 'chat-b', title: 'The one that finished', updatedAt: Date.now() - 1000, createdAt: Date.now() - 1000,
+      messages: [{ role: 'user', content: '끝난 대화' }, { role: 'assistant', content: '다 됐습니다' }] }
+  ]));
+  localStorage.setItem('chatGeneration:guest', JSON.stringify({
+    sessionId: 'chat-b', jobId: 'a-job-nobody-remembers', messageIndex: 1, startedAt: Date.now() - 86400000
+  }));
+  /* The key that used to hold the whole thing open: a picture key for a chat
+     nobody is looking at, recent enough to look live. Nothing cleans it -- the
+     app only ever removes the key of the chat on screen -- and while it is
+     there the generation below was never forgotten, so every load took the
+     screen over again. */
+  localStorage.setItem('chatDrawing:guest:chat-b', JSON.stringify({
+    id: 'a-prompt-id-nobody-remembers', prompt: 'a cat', startedAt: Date.now() - 60000
+  }));
+  // And one from a turn that ended a day ago, which is past believing.
+  localStorage.setItem('chatDrawing:guest:chat-c', JSON.stringify({
+    id: 'an-ancient-prompt-id', prompt: 'a dog', startedAt: Date.now() - 86400000
+  }));
+`);
+await send('Page.reload');
+await sleep(7000);
+
+check('a generation the server has never heard of is forgotten',
+  await waitFor(`!localStorage.getItem('chatGeneration:guest')`, 8000));
+/* The picture key is judged by its age and nothing else, because nothing else
+   is knowable about a chat nobody is looking at. One from a day ago is swept;
+   a recent one is left alone -- it may be a picture that really is being made
+   -- and the point is that it no longer holds the generation above open. */
+check('  a picture key old enough to be certain about is swept',
+  await waitFor(`!localStorage.getItem('chatDrawing:guest:chat-c')`, 8000));
+check('  and a recent one is left alone, without holding anything open',
+  await evaluate(`!!localStorage.getItem('chatDrawing:guest:chat-b')`));
+// The two things the reader actually saw.
+check('  nothing says a reply is arriving',
+  await evaluate(`!document.querySelector('.busy-elsewhere')`));
+check('  and the screen is not dragged to the chat that finished',
+  await evaluate(`!document.body.textContent.includes('다 됐습니다')`));
 
 cleanup();
 done();

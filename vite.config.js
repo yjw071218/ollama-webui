@@ -1,25 +1,41 @@
 // Before server/api.js, which reaches node:sqlite. See server/quiet.js.
 import './server/quiet.js';
+import { ensureManagedOllama } from './server/ollamaRuntime.js';
 
 import { defineConfig, loadEnv } from 'vite'
 import react from '@vitejs/plugin-react'
 import { createApiRoutes } from './server/api.js';
 import { normaliseOrigin } from './server/origin.js';
 import { backendOf } from './server/llamacpp.js';
-import { vramGuard, isInference } from './server/vram.js';
+import { cliInterceptor } from './server/cliModels.js';
+import { inferenceHook, isInference, vramGuard } from './server/vram.js';
+import { startScheduleRunner } from './server/serverSchedules.js';
+import { resumeLongVideos } from './server/studio.js';
 
 // The API is shared with the production server (server/index.js) so that
 // `npm run dev` and `npm start` cannot drift apart.
 const apiPlugin = (env = {}) => ({
   name: 'ollama-webui-api',
-  configureServer(server) {
+  async configureServer(server) {
+    await ensureManagedOllama(env);
+    // The dev server answers an account's schedules too; see server/serverSchedules.js.
+    startScheduleRunner(env, { beforeInference: () => vramGuard(env).beforeInference() });
+    resumeLongVideos(env);
     // Ahead of everything, the llama.cpp routes and the Ollama proxy alike:
-    // ComfyUI lets go of the card before a language model is loaded onto it.
-    // See server/vram.js.
-    const vram = vramGuard(env);
+    // ComfyUI lets go of the card before a language model is loaded onto it,
+    // and while one of our videos is being drawn the model answers from the
+    // CPU instead. See server/vram.js.
+    // Claude, GPT and Gemini through the signed-in CLIs, ahead of both: they
+    // use none of the card. See server/cliModels.js.
+    const cliModels = cliInterceptor(env);
+    server.middlewares.use((req, res, next) => {
+      if (!(req.url || '').startsWith('/api/')) return next();
+      cliModels(req, res, next);
+    });
+    const inference = inferenceHook(env);
     server.middlewares.use((req, res, next) => {
       if (!isInference((req.url || '').split('?')[0])) return next();
-      vram.beforeInference().catch(() => {}).finally(() => next());
+      inference(req, res, next);
     });
     for (const { path, handler } of createApiRoutes(env)) {
       server.middlewares.use(path, handler);
@@ -47,6 +63,11 @@ export default defineConfig(({ mode }) => {
       // 5174 and every social sign-in fails with a redirect-URI mismatch.
       port: 5173,
       strictPort: true,
+      /* The engines are whole installs -- a Python runtime and its site-packages,
+         model weights, hundreds of thousands of files -- and none of them is
+         source. A watcher left to walk them is the startup stall and the memory
+         creep this app has already been through once. */
+      watch: { ignored: ['**/engines/**', '**/integrations/risuai/upstream/**'] },
       // Loopback only is the default, and it makes `npm run dev` invisible to
       // the phone this app is meant to be used from — the one device where the
       // mobile layout can actually be looked at. `npm start` has bound beyond
@@ -88,6 +109,15 @@ export default defineConfig(({ mode }) => {
           '/api': {
             target: env.OLLAMA_URL || 'http://localhost:11434',
             changeOrigin: true,
+            /* A body server/cliModels.js already read, to see which model it
+               named, is not in the request stream any more. It is written
+               here instead; the proxy's own pipe of the spent stream then
+               only ends the request. */
+            configure: (proxy) => proxy.on('proxyReq', (proxyReq, req) => {
+              if (!req.rawBody) return;
+              proxyReq.setHeader('Content-Length', req.rawBody.length);
+              proxyReq.write(req.rawBody);
+            }),
           },
         }),
         '/tts-api': {

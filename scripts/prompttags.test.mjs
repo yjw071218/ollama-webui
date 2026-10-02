@@ -13,12 +13,17 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const P = await import(pathToFileURL(path.join(ROOT, 'src/promptTags.js')).href);
 
+const read = (file) => fs.readFileSync(path.resolve(HERE, '..', file), 'utf8');
+
 let pass = 0, fail = 0;
 const check = (name, cond, detail = '') => {
   if (cond) { pass++; console.log(`PASS  ${name}`); }
   else { fail++; console.log(`FAIL  ${name}${detail ? `  -> ${detail}` : ''}`); }
 };
 const eq = (name, got, want) => check(name, got === want, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+// The same, for the ones that answer with an object.
+const same = (name, got, want) => check(name, JSON.stringify(got) === JSON.stringify(want),
+  `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
 
 /* --------------------------------------------------- which tag is the caret in
 
@@ -148,7 +153,10 @@ check('in the order they are joined',
    and a dropdown over them would be in the way of the thing being set. */
 check('only the subject box completes', (panel.match(/<TagPrompt/g) || []).length === 1);
 check('and it is the one that takes pasted links', /onBooru=\{fillFromBooru\}/.test(panel));
-check('the four are joined on the way out', /prompt: joinPrompt\(form, \{ foldArtist \}\)/.test(panel));
+// `parts` is the form itself unless black and white rewrote the boxes; see src/monochrome.js.
+check('the four are joined on the way out',
+  /prompt: joinPrompt\(parts, \{ foldArtist \}\)/.test(panel)
+  && /const parts = mono \? \{ \.\.\.form, \.\.\.monochromeParts\(form\) \} : form;/.test(panel));
 check('the artists go separately where the workflow can take them',
   /has\.artist \? \{ artist: /.test(panel));
 // Rebuilding the four boxes by splitting the joined string back up would be
@@ -172,8 +180,11 @@ check('spell-check and autocorrect are off', /spellCheck=\{false\}/.test(tagProm
    in a box nobody had clicked. Only typing (or Ctrl+Space) asks for it. */
 check('suggestions wait for typing in the focused box',
   /if \(!armed\.current \|\| document\.activeElement !== box\.current\)/.test(tagPrompt));
+/* The change handler now has a booru link to look for first, so the arming
+   is no longer the line immediately before the onChange call. What matters
+   is unchanged: an ordinary keystroke arms the list, and leaving disarms. */
 check('typing arms them and leaving the box disarms them',
-  /armed\.current = true;\s*onChange\(e\.target\.value\)/.test(tagPrompt)
+  /armed\.current = true;\s*onChange\(next\);/.test(tagPrompt)
   && /onBlur=\{\(\) => \{ armed\.current = false;/.test(tagPrompt));
 check('Ctrl+Space asks for them without a keystroke', /event\.ctrlKey && \(event\.code === 'Space'/.test(tagPrompt));
 
@@ -246,6 +257,72 @@ check('every prompt box takes the keys', (panel.match(/onWeightKey\(e, v => set\
 const server = fs.readFileSync(path.join(ROOT, 'server/workflows.js'), 'utf8');
 check('the artist box is emptied of its author default too',
   /'positive', 'negative', 'artist'/.test(server));
+
+/* ============================================ a link that arrives without a paste
+
+   Reported: pasting a booru link into the prompt box does nothing on a phone.
+   The handler was `onPaste`, and a `paste` event carrying usable
+   `clipboardData` is not what every mobile paste produces -- GBoard's
+   clipboard chip, the Paste in a WebView's selection toolbar, and
+   drag-and-drop all arrive as an `input` whose `inputType` is
+   `insertFromPaste`, or as nothing but a changed value.
+
+   So the link is recognised from the text afterwards, which catches every
+   route in including the one that already worked. */
+
+same('a box that is nothing but a link is a replacement',
+  P.booruLinkIn('https://danbooru.donmai.us/posts/123'),
+  { url: 'https://danbooru.donmai.us/posts/123', rest: '', replaced: true });
+
+eq('  and the surrounding space does not change that',
+  P.booruLinkIn('  https://safebooru.org/index.php?page=post&s=view&id=9  ').replaced, true);
+
+same('a link on the end of a prompt is an addition, and keeps the prompt',
+  P.booruLinkIn('1girl, blue hair, https://danbooru.donmai.us/posts/123'),
+  { url: 'https://danbooru.donmai.us/posts/123', rest: '1girl, blue hair', replaced: false });
+
+eq('  however the paste separated them',
+  P.booruLinkIn('1girl, blue hair\nhttps://danbooru.donmai.us/posts/123').rest, '1girl, blue hair');
+
+/* Anything else is prose that happens to contain a URL, and pasting a
+   paragraph into the prompt box should paste a paragraph. */
+check('a link with words after it is left alone',
+  P.booruLinkIn('look at https://danbooru.donmai.us/posts/1 it is good') === null);
+check('a link to somewhere else is left alone',
+  P.booruLinkIn('1girl, https://example.com/x') === null);
+check('and an ordinary prompt is left alone',
+  P.booruLinkIn('1girl, blue hair') === null && P.booruLinkIn('') === null);
+
+/* ---- and what the box does with it ---- */
+{
+  const tags = read('src/TagPrompt.jsx');
+  check('the change handler looks for a link the paste event never reported',
+    /const link = onBooru && !busy\.current \? booruLinkIn\(next\) : null;/.test(tags));
+  /* Both a `paste` and the `change` after it see the same link. Two fetches
+     write the tags in twice. */
+  check('  and only one of the two routes claims it', /busy\.current = true;/.test(tags));
+
+  /* Selecting the whole box and pasting is the one gesture that unambiguously
+     means "this, instead of that" -- in every text field there has ever been.
+     It used to append to what was selected. */
+  check('a paste over the whole box replaces rather than appends',
+    /el\.selectionStart === 0 && el\.selectionEnd >= String\(value \|\| ''\)\.length/.test(tags));
+
+  const panel = read('src/StudioPanel.jsx');
+  check('  and the prompt becomes the post\'s tags, not both',
+    /prompt: replace \? String\(data\.prompt \|\| ''\) : add\(base\(f\.prompt\), data\.prompt\)/.test(panel));
+  /* The artists are not written at all any more: that box is a standing
+     choice -- the style this install draws in -- and a pasted reference is
+     about the subject of one picture. Overwriting it silently, every time
+     somebody pasted a link, was not what pasting a link means. */
+  check('  and the artist box is left alone entirely',
+    !/artist: replace \? data\.artists/.test(panel)
+    && !/artist: add\(f\.artist, data\.artists\)/.test(panel));
+  /* The link is taken out of the box before the fetch, so a failure has to put
+     back what was around it. */
+  check('a fetch that fails gives the prompt back',
+    /if \(rest !== null\) setForm\(f => \(\{ \.\.\.f, prompt: rest \}\)\);/.test(panel));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

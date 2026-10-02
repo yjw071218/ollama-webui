@@ -88,13 +88,52 @@ export const snapshotBytes = (snapshot) => {
   try { return new Blob([JSON.stringify(snapshot)]).size; } catch (e) { return 0; }
 };
 
-export const createShare = async ({ chatId, title, snapshot, expiresInDays }) => {
+export const createShare = async ({ chatId, title, snapshot, picture, expiresInDays }) => {
   const data = await api('/api/share/create', {
     method: 'POST',
-    body: { chatId: String(chatId ?? ''), title, snapshot, expiresInDays },
+    body: { chatId: String(chatId ?? ''), title, snapshot, picture, expiresInDays },
   });
   return { id: data.id, token: data.token, expiresAt: data.expiresAt, url: shareUrl(data.token) };
 };
+
+/* --------------------------------------------------------- one picture
+
+   The same link, of one picture instead of a conversation.
+
+   What travels is the name of the file ComfyUI wrote, never the bytes: an
+   11 MB PNG would not fit in a share row, and copying it would mean revoking
+   the link left a copy behind. So the row names the file and
+   `/api/share/image` is the only way to reach it -- which is what makes
+   "revoke" mean the picture stops answering too, and not merely the page
+   around it. */
+
+/** The three fields that name an output, from a URL the app already holds. */
+export const outputRef = (url) => {
+  const query = String(url || '').split('?')[1] || '';
+  const found = new URLSearchParams(query);
+  const filename = found.get('filename') || '';
+  if (!filename) return null;
+  return { filename, subfolder: found.get('subfolder') || '', type: found.get('type') || 'output' };
+};
+
+/**
+ * A picture from a chat or from the Studio, as something a link can be made of.
+ *
+ * A chat picture knows its own address (`url`), or can say its filename and be
+ * found under the folder every workflow writes to. A Studio job carries the
+ * output it made, which is an address already. Returns null when neither is
+ * true, because a picture nobody can fetch is not one to publish a link to.
+ */
+export const picturePayload = (picture, { subfolder = 'webui' } = {}) => {
+  const ref = outputRef(picture?.url)
+    || (picture?.filename ? { filename: picture.filename, subfolder, type: 'output' } : null);
+  if (!ref) return null;
+  return { ...ref, prompt: String(picture?.prompt || '').slice(0, 2000) };
+};
+
+/** Where a published picture's bytes are. Relative, like `shareUrl`. */
+export const sharedImageUrl = (token) =>
+  `/api/share/image?${new URLSearchParams({ token })}`;
 
 export const listShares = async () => (await api('/api/share/list')).shares || [];
 

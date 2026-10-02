@@ -16,6 +16,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const B = await import(pathToFileURL(path.join(ROOT, 'server/booruTags.js')).href);
+const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\r\n/g, '\n');
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = '') => {
@@ -78,13 +79,20 @@ const index = B.loadTags(FIXTURE);
    What survives is the front of that row, which is a real tag with a real
    count and is worth keeping; what has to be dropped is the spill, whose
    "name" is half a Korean sentence and whose "count" is the other half. */
-eq('the fixture loads, spill excluded', index.size, 7);
+// Fifteen rows: seven of the original shapes, and eight character and
+// copyright tags added for the escaping and the series correction below.
+eq('the fixture loads, spill excluded', index.size, 15);
 check('the front of a broken row is kept', index.names.includes('witch'), index.names.join(' | '));
 check('and the spill is not', !index.names.some(n => n.includes('말하는 경향이')), index.names.join(' | '));
 
 // Ordered by how many pictures carry the tag, so a query that matches many
 // still leads with the one people mean.
 eq('the most used tag comes first', index.names[0], '1girl');
+{
+  const popular = B.tagsAboveCount(index, 1000);
+  check('popular tags use a strict count threshold',
+    popular.includes('1girl') && !popular.includes('rare'));
+}
 
 /* ----------------------------------------------------------- searching */
 
@@ -221,6 +229,9 @@ check('and so is an empty object', B.firstPost({}) === null);
 
 const studio = fs.readFileSync(path.join(ROOT, 'server/studio.js'), 'utf8');
 check('the tag route exists', /'\/studio\/tags'/.test(studio));
+check('the design route exposes all popular tags',
+  /'\/studio\/design-tags'/.test(studio)
+  && /tagsAboveCount\(index, 1000\)/.test(studio));
 check('and the booru one', /'\/studio\/booru'/.test(studio));
 /* A missing tag file has to be reported rather than answered with an empty
    list: "no suggestions" and "the file is gone" look identical from the
@@ -237,6 +248,250 @@ const csv = path.join(ROOT, 'assets', 'danbooru-tags.csv');
 check('the tag file is in the project', fs.existsSync(csv));
 if (fs.existsSync(csv)) {
   check('and it is the big one', fs.statSync(csv).size > 10 * 1024 * 1024);
+}
+
+/* ============================================== danbooru, on a network that blocks it
+
+   Measured from the machine this runs on: `danbooru.donmai.us` refuses the
+   connection in 0.06 seconds -- an ISP block, not an outage -- while
+   `safebooru.donmai.us` and `betabooru.donmai.us` answer 200. Those are
+   Danbooru's own instances of the same database, so the post ids are the same
+   ones and the tags that come back are the same tags. */
+
+{
+  const danbooru = B.apiUrlsFor({ site: 'danbooru', id: '5000000', host: 'danbooru.donmai.us' });
+  check('a danbooru post has more than one door', danbooru.length > 1, String(danbooru.length));
+  check('  the one that was asked for comes first',
+    danbooru[0].includes('danbooru.donmai.us'), danbooru[0]);
+  check('  and the mirrors carry the same post id',
+    danbooru.every(url => url.includes('/posts/5000000.json')), danbooru.join(' '));
+  /* A link that already names a mirror must not list that mirror twice: the
+     second attempt would be the same refusal, more slowly. */
+  check('a link that already names a mirror does not repeat it',
+    new Set(B.apiUrlsFor({ site: 'danbooru', id: '7', host: 'safebooru.donmai.us' })).size === 2);
+
+  /* Only danbooru. gelbooru is blocked here too and has no mirror to fall back
+     to; inventing hostnames for it would mean three failed connections instead
+     of one before saying so. */
+  eq('every other site has exactly one', B.apiUrlsFor({ site: 'safebooru', id: '7' }).length, 1);
+  eq('and an unknown site has none', B.apiUrlsFor({ site: 'nope' }).length, 0);
+}
+
+{
+  const studioSrc = fs.readFileSync(path.join(ROOT, 'server/studio.js'), 'utf8');
+  check('the route walks them, stopping at the first that answers',
+    /for \(const api of apis\)/.test(studioSrc));
+  /* A refused connection moves on; an *answer* does not, however unwelcome. A
+     404 from the first host is the real answer about that post id, and asking
+     a mirror would produce the same 404 more slowly. */
+  check('  and a 404 is an answer, not a reason to try the next one',
+    /if \(!upstream\.ok\) \{[\s\S]{0,200}has no post/.test(studioSrc));
+  check('  saying which door it came through when it was not the first',
+    /reached && reached !== post\.host \? \{ via: reached \}/.test(studioSrc));
+}
+
+
+/* ============================ a tag as a model writes it, and as one is read
+
+   Reported: the model writes `iseri nina (blue archive)`, and two separate
+   things are wrong with it.
+
+   The brackets are the first, and they are the silent one. To every one of
+   these image encoders `(...)` is *emphasis* -- `(blue archive)` means "weight
+   these two words by 1.1" -- so a character tag written plainly is not a name
+   at all. Danbooru's own form, and the form these models were trained on, is
+   `hoshino \(blue archive\)`.
+
+   The series is the second: a character attached to the wrong franchise is a
+   tag that exists nowhere, and contributes noise and nothing else.
+
+   The tag list the Studio already reads for autocomplete is the authority for
+   both, and nothing it does not recognise is touched -- a prompt is somebody's
+   words, and a helpful rewrite of a phrase this file has never heard of is a
+   rewrite nobody asked for. */
+
+eq('brackets are escaped', B.escapeTagParens('hoshino (blue archive)'), 'hoshino \\(blue archive\\)');
+eq('  and not escaped twice', B.escapeTagParens('hoshino \\(blue archive\\)'), 'hoshino \\(blue archive\\)');
+eq('  including a bracket with nothing in it', B.escapeTagParens('()'), '\\(\\)');
+
+eq('the name in front of the brackets', B.tagBase('hoshino (blue archive)'), 'hoshino');
+eq('  written either way', B.tagBase('hoshino \\(blue archive\\)'), 'hoshino');
+eq('  and a tag with no brackets is all name', B.tagBase('1girl'), '1girl');
+
+/* A real tag. The only thing wrong with it is the brackets, so that is the
+   only thing that changes. */
+eq('a real character tag is escaped and left alone otherwise',
+  B.fixTagPhrase(index, 'hoshino (blue archive)'), 'hoshino \\(blue archive\\)');
+eq('  and one already escaped is not touched',
+  B.fixTagPhrase(index, 'ganyu \\(genshin impact\\)'), 'ganyu \\(genshin impact\\)');
+eq('an ordinary tag is left exactly as it is', B.fixTagPhrase(index, '1girl'), '1girl');
+
+/* A name the list knows with something invented after it. `iseri nina` is a
+   tag; `iseri nina (blue archive)` is not, and she has nothing to do with that
+   game. The brackets were a guess, and a guessed franchise is not a harmless
+   extra -- `blue archive` in a prompt pulls the whole picture towards that
+   game's characters and art. So it goes. */
+eq('an invented series is dropped from a model’s prompt',
+  B.fixTagPhrase(index, 'iseri nina (blue archive)', { fromModel: true }), 'iseri nina');
+/* And is not touched in somebody's own. The Studio's box is a person writing
+   tags on purpose with autocomplete beside them; editing their words is not
+   this function's business. */
+eq('  and left alone in one somebody typed',
+  B.fixTagPhrase(index, 'iseri nina (blue archive)'), 'iseri nina (blue archive)');
+eq('  the same rule for any invented bracket',
+  B.fixTagPhrase(index, 'smile (wide)', { fromModel: true }), 'smile');
+
+/* And what it must not do. There are two `arisu (...)` tags in the fixture and
+   this is neither of them; "which arisu" is not a question the file can
+   answer, and guessing is worse than leaving it. */
+eq('an unknown tag with brackets is left as written',
+  B.fixTagPhrase(index, 'arisu (blue archive)'), 'arisu (blue archive)');
+eq('  as is a phrase the list has never heard of',
+  B.fixTagPhrase(index, 'a girl standing in the rain'), 'a girl standing in the rain');
+
+/* ------------------------------------------------------------ a whole prompt */
+
+eq('every tag in a prompt, one at a time',
+  B.fixTagPrompt(index, '1girl, hoshino (blue archive), blush'),
+  '1girl, hoshino \\(blue archive\\), blush');
+
+// A weight was deliberate. The tag inside it was not meant to be one, which is
+// the whole confusion being untangled.
+eq('a weight is kept and its tag fixed inside it',
+  B.fixTagPrompt(index, '(hoshino (blue archive):1.2), smile'),
+  '(hoshino \\(blue archive\\):1.2), smile');
+eq('  and a weight around an ordinary word is not a tag to fix',
+  B.fixTagPrompt(index, '(masterpiece:1.4), 1girl'), '(masterpiece:1.4), 1girl');
+
+eq('a whole prompt from a model loses its invented brackets',
+  B.fixTagPrompt(index, 'iseri nina (blue archive), smile', { fromModel: true }),
+  'iseri nina, smile');
+eq('  and keeps the brackets of tags that are real',
+  B.fixTagPrompt(index, 'iseri nina (blue archive), hoshino (blue archive)', { fromModel: true }),
+  'iseri nina, hoshino \\(blue archive\\)');
+eq('  while a prompt somebody typed is only ever escaped',
+  B.fixTagPrompt(index, 'iseri nina (blue archive), smile'),
+  'iseri nina (blue archive), smile');
+
+eq('spacing around a tag is the writer’s', B.fixTagPrompt(index, '1girl,  blush  , smile'), '1girl,  blush  , smile');
+eq('an empty prompt is an empty prompt', B.fixTagPrompt(index, ''), '');
+// No tag file: nothing is known, so nothing is changed.
+eq('with no list at all, a prompt is left alone',
+  B.fixTagPrompt({ size: 0 }, 'hoshino (blue archive)'), 'hoshino (blue archive)');
+
+/* --------------------------------------------------------------- the wiring */
+
+const generateRoute = read('server/studio.js');
+check('the generate route corrects the prompt it was given',
+  /const fixedPrompt = fixTagPromptReport\(index, job\.prompt, \{ fromModel \}\);/.test(generateRoute)
+  && /job\.prompt = fixedPrompt\.text;/.test(generateRoute));
+check('  and the negative, which is tags too',
+  /const fixedNegative = fixTagPromptReport\(index, job\.negative, \{ fromModel \}\);/.test(generateRoute)
+  && /job\.negative = fixedNegative\.text;/.test(generateRoute));
+/* Only a conversation sends `chat`, so it is what tells a model's words from a
+   person's -- and the difference decides whether a bracket may be dropped. */
+check('  knowing whose words it is correcting', /const fromModel = !!job\.chat;/.test(generateRoute));
+// A clip's prompt is a timeline of sentences, not tags. Nothing in it would
+// match a tag, but it is not a prompt this has any business reading.
+check('  and leaves a video prompt alone', /if \(definition\.kind !== 'video'\)/.test(generateRoute));
+// Whether the tag list corrected it or a wildcard chose, what is recorded
+// beside the picture is what ComfyUI was actually given.
+check('  reporting what was actually sent',
+  /\.\.\.\(!shaped\?\.changed && \(tagged \|\| job\.prompt !== typedPrompt\) \? \{ prompt: job\.prompt \} : \{\}\)/.test(generateRoute));
+
+const app = read('src/App.jsx');
+check('the model is told how a character tag is written',
+  /A character tag is written the way danbooru writes it/.test(app));
+// Telling it the guess will be removed is what takes the upside out of
+// guessing; "write the name alone if unsure" on its own had not.
+check('  and that a series it is unsure of will be removed',
+  /Put a series in brackets ONLY when you are certain/.test(app)
+  && /a bracket that is not in it is\s*\n\s*removed/.test(app));
+check('  and what unescaped brackets actually mean',
+  /brackets mean \*emphasis\*/.test(app));
+check('  with escaped examples, not plain ones',
+  /"hoshino \\\\\(blue archive\\\\\)", "ganyu \\\\\(genshin impact\\\\\)"/.test(app));
+check('the native tool schema says the same',
+  /"hoshino \\\\\(blue archive\\\\\)", "ganyu \\\\\(genshin impact\\\\\)"/.test(read('src/tools.js')));
+// Both spellings are one tag when a character is being taken out of a prompt.
+check('and a character is matched in either spelling',
+  /const sameTag = \(tag\) =>/.test(read('src/characters.js')));
+
+
+/* ------------------------------------------------ saying what was corrected
+
+   A correction nobody can see is one nobody can trust or argue with -- and the
+   useful argument is the one where the *list* is wrong, which it is for any
+   tag danbooru added after the file was made. */
+{
+  const report = B.fixTagPromptReport(index, 'iseri nina (blue archive), hoshino (blue archive), smile', { fromModel: true });
+  deep('a correction is reported as what it was and what it became',
+    report.changes, [{ from: 'iseri nina (blue archive)', to: 'iseri nina' }]);
+  // Escaping changes nothing a person would read as a different tag, and a list
+  // of every bracket escaped would bury the one line that matters.
+  check('  and escaping alone is not a correction',
+    !report.changes.some(c => /hoshino/.test(c.from)), JSON.stringify(report.changes));
+  eq('  while the text is the same as fixTagPrompt gives',
+    report.text, B.fixTagPrompt(index, 'iseri nina (blue archive), hoshino (blue archive), smile', { fromModel: true }));
+}
+check('the route sends the corrections back', /\.\.\.\(corrections\.length \? \{ corrections \} : \{\}\)/.test(read('server/studio.js')));
+check('the chat keeps them on the picture', /queued\.corrections\?\.length \? \{ corrections: queued\.corrections \}/.test(read('src/App.jsx')));
+{
+  const { settingsRows } = await import(pathToFileURL(path.join(ROOT, 'src/pictureSettings.js')).href);
+  const rows = settingsRows({ prompt: 'iseri nina', corrections: [{ from: 'iseri nina (blue archive)', to: 'iseri nina' }] });
+  const row = rows.find(r => r.key === 'corrected');
+  eq('and the picture settings say it, beside the prompt', row?.value, 'iseri nina (blue archive) → iseri nina');
+  eq('  saying nothing when nothing was corrected', settingsRows({ prompt: 'x' }).some(r => r.key === 'corrected'), false);
+}
+
+/* --------------------------------------------------- keeping the list current
+
+   The list is the authority the server corrects against, so a list from last
+   month corrects last month's characters away. `arisu (blue archive)` is a real
+   danbooru tag this file did not have. */
+{
+  deep('an API tag becomes a row the way the file writes one',
+    B.rowFromApiTag({ name: 'arisu_(blue_archive)', post_count: 9000, category: 4 }),
+    { name: 'arisu \\(blue archive\\)', category: 4, count: 9000, description: '' });
+  deep('  and a deprecated or empty one is not a row',
+    [B.rowFromApiTag({ name: 'x', post_count: 5, is_deprecated: true }), B.rowFromApiTag({ name: 'y', post_count: 0 })],
+    [null, null]);
+
+  const tricky = ['say "hi", ok', 'line\nbreak'];
+  const csv = tricky.map((d, i) => B.csvRow([`tag${i}`, 0, 10, d])).join('\n') + '\n';
+  deep('a written row reads back exactly, commas, quotes and newlines included',
+    B.parseCsv(csv).map(r => r[3]), tricky);
+
+  /* Every existing row is kept. The file has pairs that fold to one key -- an
+     underscore spelling beside a spaced one -- and keying rows by that key made
+     an update meant only to add tags remove sixty-four of them. */
+  const { rows, added, updated } = B.mergeTagRows(
+    [
+      { name: 'long hair', category: 0, count: 10, description: '긴 머리' },
+      { name: 'long_hair', category: 0, count: 3, description: '' },
+    ],
+    [
+      { name: 'long hair', category: 0, count: 50, description: '' },
+      { name: 'arisu \\(blue archive\\)', category: 4, count: 9000, description: '' },
+    ],
+  );
+  eq('an update keeps every row it started with', rows.filter(r => /long.hair/.test(r.name)).length, 2);
+  eq('  and adds what it did not have', added, 1);
+  eq('  keeping a description danbooru does not provide',
+    rows.find(r => r.name === 'long hair')?.description, '긴 머리');
+  eq('  while taking the newer count', rows.find(r => r.name === 'long hair')?.count, 50);
+  eq('  and counting what changed', updated, 1);
+  eq('  most used first, as every reader of the file assumes', rows[0].name, 'arisu \\(blue archive\\)');
+}
+{
+  const script = read('scripts/update-tags.mjs');
+  // Swapped in only once complete, and only after it reads back: a file this
+  // parser cannot read is not an update, it is a Studio with no autocomplete.
+  check('the update script reads its file back before swapping it in',
+    /readable !== rows\.length/.test(script) && /fs\.renameSync\(next, B\.TAG_FILE\)/.test(script));
+  check('  keeps the old one', /copyFileSync\(B\.TAG_FILE, `\$\{B\.TAG_FILE\}\.bak`\)/.test(script));
+  check('  and can be tried without touching anything', /if \(DRY\)/.test(script));
+  check('  and is one command away', /"tags:update": "node scripts\/update-tags\.mjs"/.test(read('package.json')));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);

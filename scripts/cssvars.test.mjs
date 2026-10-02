@@ -25,7 +25,10 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const FILES = ['../src/index.css', '../src/extras.css'];
+// motion.css is where the curves and durations live, and every stylesheet
+// here uses them -- so a scan that does not read it reports every one of
+// them as undefined.
+const FILES = ['../src/index.css', '../src/extras.css', '../src/motion.css'];
 
 let pass = 0, fail = 0;
 const check = (name, cond, detail = '') => {

@@ -77,8 +77,19 @@ export const settingsRows = (picture = {}, fromFile = null) => {
   add('style', picture.style);
   if (s.reference) add('reference', '✓');
   add('region', s.region);
+  // Which inpainting guide drew the part, where one was used -- see pickInpaintLLLite.
+  if (present(s.guide)) add('guide', fileName(s.guide), { mono: true, title: String(s.guide) });
+  // Whose pose it followed, and how firmly -- see applyPoseGuide.
+  if (present(s.pose)) add('pose', `${fileName(s.pose)}${present(s.poseStrength) ? ` (${tidy(s.poseStrength)})` : ''}`, { mono: true });
   add('negative', s.negative, { long: true });
   add('prompt', s.prompt, { long: true });
+  /* What the danbooru list changed before the picture was drawn. Last, beside
+     the prompt it explains: "why does the prompt say `iseri nina` when the
+     model wrote `iseri nina (blue archive)`" is answered here or nowhere. */
+  const corrections = (picture.corrections || []).filter(c => c?.from && c?.to);
+  if (corrections.length) {
+    add('corrected', corrections.map(c => `${c.from} → ${c.to}`).join('\n'), { long: true });
+  }
   return rows;
 };
 

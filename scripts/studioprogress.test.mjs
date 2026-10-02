@@ -14,16 +14,36 @@ const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 
 let pass = 0, fail = 0;
+const NEWLINE = String.fromCharCode(10);
 const check = (name, cond, detail = '') => {
   if (cond) { pass++; console.log(`PASS  ${name}`); }
   else { fail++; console.log(`FAIL  ${name}${detail ? `  -> ${detail}` : ''}`); }
 };
 const eq = (name, got, want) => check(name, got === want, `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
 
-const { previewUrl, formatDuration, remainingMs, phaseLabel } =
+const { previewUrl, formatDuration, formatSpeed, remainingMs, phaseLabel } =
   await import(pathToFileURL(path.join(ROOT, 'src/jobProgress.js')).href);
 
 const source = fs.readFileSync(path.join(ROOT, 'src/studioProgress.jsx'), 'utf8');
+
+// How fast, as ComfyUI's console says it.
+eq('a slow step in seconds per step', formatSpeed(2400), '2.4s/it');
+eq('a very slow one without the decimal', formatSpeed(61000), '61s/it');
+eq('a fast one in steps per second', formatSpeed(250), '4.0it/s');
+eq('nothing measured, nothing said', formatSpeed(null), '');
+check('the card shows it while the steps count', /const speed = steps && state === 'running' \? formatSpeed\(snapshot\?\.stepMs\) : '';/.test(source)
+  && /className="studio-progress-speed"/.test(source));
+check('the server sends it', /stepMs: job\.stepMs \|\| null,/.test(fs.readFileSync(path.join(ROOT, 'server/studio.js'), 'utf8')));
+check('the bar glides between the two-second updates',
+  /\.studio-progress\.is-running \.studio-progress-bar > span \{ transition: width 2s linear; \}/.test(fs.readFileSync(path.join(ROOT, 'src/extras.css'), 'utf8')));
+check('a card in a conversation can be stopped from itself',
+  /className="studio-progress-cancel" onClick=\{onCancel\}/.test(source)
+  // Its own job with `stopGeneration`; another device's with `stopElsewhere`,
+  // which goes through the server -- see scripts/livedraw.test.mjs.
+  && /onCancel=\{drawing\.watched \? stopElsewhere : stopGeneration\}/.test(fs.readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8')));
+check('an edit keeps its original in the corner, held to compare',
+  /className=\{`studio-progress-origin/.test(source) && /onPointerDown=\{\(event\) => \{ event\.preventDefault\(\); setComparing\(true\); \}\}/.test(source)
+  && /\{comparing && <img className="studio-progress-compare" src=\{source\}/.test(source));
 
 /* ------------------------------------------------------------ the preview URL
 
@@ -109,7 +129,13 @@ check('the last frame is held across a phase that makes none',
   /if \(preview\) held\.current = \{ src: preview/.test(source) && /const shown = held\.current;/.test(source));
 
 const app = fs.readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8');
-check('a chat generation says which job to watch', /setDrawing\(\{ id: queued\.id/.test(app));
+/* The card is told which job it is about. Checked through the record the
+   conversation keeps rather than through one call site's spelling: the three
+   kinds of job -- picture, video, song -- now build it in three places, and a
+   regex pinned to one of them fails when a second is added rather than when
+   the id stops being carried. */
+check('a chat generation says which job to watch',
+  /const progress = \{ id, video, prompt, kind/.test(app) && /setDrawing\(progress\);/.test(app));
 // Including on the way out through a throw: a progress bar left on screen after
 // the thing it was measuring gave up is worse than none.
 check('and always takes it down again', /finally \{\s*(\/\/[^\n]*\n\s*)*setDrawing\(null\);/.test(app));
@@ -125,9 +151,22 @@ check('a job waiting its turn says how many are in front',
    prompt, which belongs to whatever was being made there. */
 check('a chat generation reuses the Studio settings', /studioSettingsFor\('minimax-h3'/.test(app));
 check('validated against what ComfyUI still has', /restoreForm\(descriptor, saved\)/.test(app));
-check('but not the prompt sitting in the Studio',
-  /const studioSettingsFor[\s\S]{0,2600}?\n  \};/.test(app)
-  && !/const studioSettingsFor[\s\S]{0,2600}?\n  \};/.exec(app)[0].includes('prompt: form.prompt'));
+/* The subject stays behind. The three boxes around it do not -- they are the
+   quality tags, the artists and the modifiers this install puts on everything,
+   and leaving them out made the same request look different in the two places.
+
+   Sliced by the function's own boundaries rather than by a character count:
+   the count was 2600 and the function grew past it, which failed a check about
+   something the change had not touched. */
+{
+  const at = app.indexOf('const studioSettingsFor');
+  const close = app.indexOf(NEWLINE + '  };', at);
+  const body = at < 0 || close < 0 ? '' : app.slice(at, close);
+  check('but not the prompt sitting in the Studio',
+    body.length > 0 && !body.includes('prompt: form.prompt'), `${body.length} chars`);
+  check('  while the boxes around it do come',
+    body.includes('lead:') && body.includes('artist:') && body.includes('tail:'));
+}
 
 /* The ceiling used to be two minutes, from when this always ran a distilled
    model at its default size. Measured here: 90 seconds for Anima and 151 for
@@ -212,8 +251,12 @@ check('and the conversation passes what the card needs',
 
    The bubble is made when the question is sent. The time under an answer is
    when it was finished -- after the four minutes of video, not before them. */
+/* On the way out through every path, including a throw: the time under an
+   answer is when it finished, and a turn that fell over still finished. Matched
+   with the statements that may precede it, because two of the three now close
+   other things down first. */
 check('every turn marks its answer finished on the way out',
-  (app.match(/finally \{\s*markAnswered\(startedIn, /g) || []).length >= 3);
+  (app.match(/finally \{[^}]{0,200}?markAnswered\(/g) || []).length >= 3);
 check('but not an older answer left last by a queued question',
   /if \(last\.at && last\.at < since\) return s;/.test(app));
 check('and no time is shown while it is still arriving',
@@ -224,6 +267,66 @@ let answered = { content: 'one', at: 100 };
 answered = V.appendVariant(answered, { content: 'two', at: 200 });
 eq('a regeneration keeps its own finish time', answered.at, 200);
 eq('and paging back shows the first one\'s', V.selectVariant(answered, 0).at, 100);
+
+/* ------------------------------------------ what the card says, improved
+
+   Time left from earlier runs, a failure in words, and memory while it runs.
+   `J` is src/jobProgress.js, imported above. */
+
+const same = (name, got, want) => check(name, JSON.stringify(got) === JSON.stringify(want),
+  `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
+
+eq('the server\'s time left is counted down since it was said',
+  J.learnedRemaining({ learned: true, remainingMs: 60_000 }, 1_000, 11_000), 50_000);
+eq('never below zero', J.learnedRemaining({ learned: true, remainingMs: 5_000 }, 0, 60_000), 0);
+eq('and nothing when the server had nothing to go on', J.learnedRemaining({ learned: false, remainingMs: 1 }, 0, 0), null);
+
+{
+  const pid = J.explainFailure('AnimaPiDDecode: Input type (CUDABFloat16Type) and weight type (CPUBFloat16Type) should be the same');
+  eq('the PiD crash is a model that did not fit', pid.kind, 'offloaded');
+  eq('in the node that says so', pid.node, 'AnimaPiDDecode');
+  check('with ComfyUI\'s own words kept for the details', /CPUBFloat16Type/.test(pid.raw));
+  eq('out of memory is out of memory', J.explainFailure('KSampler: CUDA error: out of memory').kind, 'memory');
+  eq('and so is torch saying it its way', J.explainFailure('VAEDecode: Allocation on device 0 would exceed allowed memory').kind, 'memory');
+  eq('a missing file', J.explainFailure("UNETLoader: Value not in list: unet_name: 'x.safetensors' not in []").kind, 'missing');
+  const stopped = J.explainFailure('stopped');
+  same('a stop is a stop, with nothing behind it', [stopped.kind, stopped.raw], ['stopped', '']);
+  const other = J.explainFailure('SomeNode: something odd');
+  same('anything else names the node', [other.kind, other.node], ['generic', 'SomeNode']);
+  eq('and a message with no node names none', J.explainFailure('the workflow failed in ComfyUI').node, '');
+}
+
+{
+  const G = 1024 ** 3;
+  const note = J.memoryNote({ models: [
+    { name: 'MiniMaxH3VideoVAE', size: 5 * G, size_vram: 5 * G },
+    { name: 'Krea2', size: 12.5 * G, size_vram: 0 },
+  ], reserved: 0.7 * G });
+  same('the largest model, when it is mostly off the card', [note?.offloaded?.name, note?.offloaded?.share], ['Krea2', 0]);
+  eq('a reserve at ComfyUI\'s own figure is not mentioned', note?.reserved, null);
+  eq('a model that fits is nothing to say', J.memoryNote({ models: [{ name: 'a', size: G, size_vram: G }] }), null);
+  eq('a frozen 13GB reserve is', Math.round(J.memoryNote({ models: [], reserved: 13.18 * G })?.reserved / G), 13);
+  eq('and an approximate total is not a model', J.memoryNote({ models: [{ name: 'ComfyUI', size: G, size_vram: 0, approximate: true }] }), null);
+}
+
+check('the stream is stamped when heard', /setSnapshot\(\{ \.\.\.data, receivedAt: Date\.now\(\) \}\)/.test(source));
+check('time left prefers the learned figure', /learnedRemaining\(snapshot, snapshot\?\.receivedAt\) \?\? remainingMs\(fraction, elapsedMs\)/.test(source));
+check('and before it starts says how long it usually takes', /t\('studio\.usually'/.test(source));
+check('a failure is a note, not a raw exception in the heading',
+  /\? t\('studio\.failed'\)/.test(source) && /<FailureNote error=\{snapshot\?\.error\}/.test(source));
+check('the track marks where it failed', /failedPhase=\{snapshot\?\.errorPhase\}/.test(source) && /is-failed/.test(source));
+check('memory is looked at only while it runs', /useComfyMemory\(state === 'running'\)/.test(source));
+const studioPanel = fs.readFileSync(path.join(ROOT, 'src/StudioPanel.jsx'), 'utf8');
+check('the Studio\'s failed cards say it the same way', /<FailureNote error=\{job\.error\} t=\{t\} \/>/.test(studioPanel));
+const i18n = fs.readFileSync(path.join(ROOT, 'src/i18n.jsx'), 'utf8');
+for (const key of ['studio.usually', 'studio.fail.memory', 'studio.fail.offloaded', 'studio.fail.missing', 'studio.fail.stopped',
+  'studio.fail.generic', 'studio.fail.details', 'studio.memory.offloaded', 'studio.memory.reserved']) {
+  eq(`every language has "${key}"`, i18n.split(`'${key}':`).length - 1, 12);
+}
+const css = fs.readFileSync(path.join(ROOT, 'src/extras.css'), 'utf8');
+for (const cls of ['studio-phase.is-failed', 'studio-progress-memory', 'studio-failure', 'studio-failure-raw']) {
+  check(`.${cls} is styled`, css.includes(`.${cls}`));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

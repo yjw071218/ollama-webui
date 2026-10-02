@@ -196,12 +196,8 @@ export const TagPrompt = ({
     const picture = onImage ? imageOnClipboard(event.clipboardData) : null;
     if (picture) {
       event.preventDefault();
-      const el = event.currentTarget;
-      /* The same question a pasted link is asked, and the same answer: the box
-         selected whole is the one gesture that unambiguously means "this,
-         instead of that". An empty box says it quietly. */
-      const all = el.selectionStart === 0 && el.selectionEnd >= String(value || '').length;
-      onImage(picture, { replace: all || !String(value || '').trim() });
+      // Replaces the box: a prompt read from a picture is that picture's prompt.
+      onImage(picture);
       return;
     }
 
@@ -307,7 +303,7 @@ export const TagPrompt = ({
           if (!picture) return;
           e.preventDefault();
           e.stopPropagation();
-          onImage(picture, { replace: !String(value || '').trim() });
+          onImage(picture);
         }}
         onKeyDown={onKeyDown}
         // Not on blur: the mousedown that picks a suggestion blurs the box

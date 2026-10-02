@@ -369,6 +369,21 @@ export const pickSession = (req) => {
   return pickNewest(tokens);
 };
 
+/**
+ * Which account this request is acting as, or '' for the guest.
+ *
+ * The short answer to the long one `authenticate` gives in server/api.js: no
+ * tokens, no cookie rewriting, no account record -- just the id to scope
+ * something by. It is here rather than there because the places that need only
+ * this much are outside that closure: the chat proxy in server/index.js, the
+ * llama.cpp routes, the picture routes. A session whose account has since been
+ * deleted scopes to nothing, which is what a deleted account should see.
+ */
+export const ownerOfRequest = (req) => {
+  try { return String(pickSession(req).session?.userId || ''); }
+  catch { return ''; }
+};
+
 const pickNewest = (tokens) => {
   for (let i = tokens.length - 1; i >= 0; i--) {
     const session = readSession(tokens[i]);
@@ -486,10 +501,18 @@ const ATTEMPT_WINDOW_MS = 15 * 60 * 1000;
 const MAX_ATTEMPTS = 10;
 
 const attemptKey = (ip, email) => `${ip}|${String(email || '').toLowerCase()}`;
+const sweepAttempts = (now = Date.now()) => {
+  for (const [key, record] of attempts) {
+    if (record.until <= now) attempts.delete(key);
+  }
+};
+const attemptSweepTimer = setInterval(sweepAttempts, ATTEMPT_WINDOW_MS);
+attemptSweepTimer.unref?.();
 
 export const throttleState = (ip, email) => {
   const key = attemptKey(ip, email);
   const now = Date.now();
+  sweepAttempts(now);
   const record = attempts.get(key);
   if (!record || record.until <= now) {
     if (record) attempts.delete(key);
@@ -504,6 +527,7 @@ export const throttleState = (ip, email) => {
 export const recordFailedLogin = (ip, email) => {
   const key = attemptKey(ip, email);
   const now = Date.now();
+  sweepAttempts(now);
   const record = attempts.get(key);
   if (!record || record.until <= now) {
     attempts.set(key, { count: 1, until: now + ATTEMPT_WINDOW_MS });

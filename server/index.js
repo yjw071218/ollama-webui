@@ -18,8 +18,10 @@
 // First, before anything reaches node:sqlite: ES modules are evaluated in
 // import order, and the warning this filters is emitted at load time.
 import './quiet.js';
+import { ensureManagedOllama } from './ollamaRuntime.js';
 
 import http from 'node:http';
+import { StringDecoder } from 'node:string_decoder';
 import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
@@ -27,10 +29,20 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createApiRoutes } from './api.js';
 import { backendOf } from './llamacpp.js';
-import { vramGuard, isInference } from './vram.js';
+import { cliInterceptor, describeProviders } from './cliModels.js';
+import { inferenceHook, isInference, vramGuard } from './vram.js';
 import { isPrivateAddress, localAddresses, routedAddress } from './net.js';
 import os from 'node:os';
 import { normaliseOrigin } from './origin.js';
+import { startDatabaseBackupScheduler } from './dbBackup.js';
+import { startHistoryMaintenance } from './recordHistory.js';
+import { startTelegramBot } from './telegram.js';
+import { startScheduleRunner } from './serverSchedules.js';
+import { resumeLongVideos } from './studio.js';
+import { ownerOfRequest } from './session.js';
+import {
+  beginChatJob, attachChatController, appendChatChunk, finishChatJob, readChatJob, replayChatJob, cancelChatJob, followChatJob,
+} from './chatJobs.js';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
@@ -57,6 +69,7 @@ const loadDotEnv = () => {
 };
 
 const env = loadDotEnv();
+await ensureManagedOllama(env);
 
 // 5173, not an arbitrary 8080: localStorage and IndexedDB are scoped per
 // origin, so serving the same app on another port hides every chat and setting
@@ -97,6 +110,14 @@ const REQUIRE_TOKEN = !LOOPBACK_ONLY && TOKEN.length > 0;
 // presents it. Turn this off on a network you do not trust — a café, a shared
 // office — where "same network" means nothing.
 const TRUST_LAN = String(env.TRUST_LAN ?? 'true').toLowerCase() !== 'false';
+const DB_BACKUP_ENABLED = String(env.DB_BACKUP_ENABLED ?? 'true').toLowerCase() !== 'false';
+const DB_BACKUP_DIR = env.DB_BACKUP_DIR || undefined;
+const DB_BACKUP_INTERVAL_MS = Number(env.DB_BACKUP_INTERVAL_MS || 6 * 60 * 60 * 1000);
+const DB_BACKUP_RETENTION = Number(env.DB_BACKUP_RETENTION || 14);
+const DB_BACKUP_DAILY = Number(env.DB_BACKUP_DAILY ?? 7);
+// How much of each record's past record_history keeps. See server/recordHistory.js.
+const HISTORY_KEEP_RECENT = Number(env.HISTORY_KEEP_RECENT || 50);
+const HISTORY_KEEP_DAYS = Number(env.HISTORY_KEEP_DAYS ?? 90);
 
 // The address everybody should be opening. A browser keys storage and cookies
 // to an origin, so `http://localhost:5173` and `http://1.2.3.4.nip.io:5173`
@@ -168,6 +189,9 @@ const proxy = (target, req, res, rewrite = (p) => p) => {
     // Host must be the upstream's, not ours, or Ollama rejects the request.
     headers: { ...req.headers, host: upstream.host },
   };
+  // Read already by server/cliModels.js; see server/requestBody.js.
+  if (req.rawBody) options.headers['content-length'] = req.rawBody.length;
+
   delete options.headers['x-access-token'];
   delete options.headers.cookie;
 
@@ -175,13 +199,93 @@ const proxy = (target, req, res, rewrite = (p) => p) => {
   const forwarded = client.request(options, (upstreamRes) => {
     res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
     upstreamRes.pipe(res);
+    // Reloading the browser closes only this subscriber. Do not tear down the
+    // Ollama response: it is already queued on the inference server and must
+    // be allowed to finish instead of being mistaken for a cancelled request.
+    res.once('close', () => {
+      if (!res.writableEnded) {
+        upstreamRes.unpipe(res);
+        upstreamRes.resume();
+      }
+    });
   });
   forwarded.on('error', (e) => {
     res.statusCode = 502;
     res.setHeader('Content-Type', 'application/json');
     res.end(JSON.stringify({ error: `Upstream ${upstream.host} unreachable: ${e.message}` }));
   });
-  req.pipe(forwarded);
+  if (req.rawBody) forwarded.end(req.rawBody);
+  else req.pipe(forwarded);
+};
+
+const proxyChat = (target, req, res) => {
+  const id = String(req.headers['x-chat-job-id'] || '').trim();
+  if (!id) return proxy(target, req, res);
+  /* Who is asking and which conversation it is for. Read from the session
+     cookie and from a header the app sets, and kept on the job so another
+     device of the same reader's can find the answer being written and follow
+     it as it is typed. See `live` in server/chatJobs.js. */
+  const meta = { owner: ownerOfRequest(req), chat: String(req.headers['x-chat-conversation'] || '').trim() };
+  const chunks = [];
+  const send = () => {
+    beginChatJob(id, meta);
+    const body = req.rawBody || Buffer.concat(chunks);
+    const decoder = new StringDecoder('utf8');
+    const upstream = new URL(target);
+    const url = new URL(req.url, 'http://placeholder');
+    const client = upstream.protocol === 'https:' ? https : http;
+    const forwarded = client.request({
+      hostname: upstream.hostname, port: upstream.port, path: url.pathname + url.search,
+      method: req.method,
+      headers: { ...req.headers, host: upstream.host, 'content-length': body.length },
+    }, upstreamRes => {
+      res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+      upstreamRes.on('data', chunk => {
+        appendChatChunk(id, decoder.write(chunk));
+        if (!res.writableEnded) res.write(chunk);
+      });
+      upstreamRes.on('end', () => {
+        const tail = decoder.end();
+        if (tail) appendChatChunk(id, tail);
+        finishChatJob(id);
+        if (!res.writableEnded) res.end();
+      });
+    });
+    attachChatController(id, forwarded);
+    forwarded.on('error', error => {
+      appendChatChunk(id, JSON.stringify({ error: error.message, done: true }) + '\n');
+      finishChatJob(id);
+      if (!res.writableEnded) res.end();
+    });
+    forwarded.end(body);
+  };
+  // Read already by server/cliModels.js; see server/requestBody.js.
+  if (req.rawBody) return send();
+  req.on('data', chunk => chunks.push(chunk));
+  req.on('end', send);
+};
+
+const replayChat = (req, res, url) => {
+  const job = readChatJob(url.searchParams.get('id'));
+  if (!job) {
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Chat generation not found' }));
+    return;
+  }
+  if (url.searchParams.get('follow') === '1') return followChatJob(req, res, job, url.searchParams.get('offset'));
+  res.writeHead(200, { 'Content-Type': 'application/x-ndjson', 'Cache-Control': 'no-store' });
+  res.end(replayChatJob(job));
+};
+
+const cancelChat = (req, res) => {
+  let body = '';
+  req.on('data', chunk => { body += chunk; });
+  req.on('end', () => {
+    let id = '';
+    try { id = JSON.parse(body).id || ''; } catch (e) { /* invalid body below */ }
+    res.setHeader('Content-Type', 'application/json');
+    res.end(JSON.stringify({ success: cancelChatJob(id) }));
+  });
 };
 
 const serveStatic = (req, res, url) => {
@@ -239,7 +343,8 @@ ${message ? `<div class="err">${message}</div>` : ''}
 // ---------------------------------------------------------------- routing
 
 const apiRoutes = createApiRoutes(env, { allowLocalFs: ALLOW_LOCAL_FS });
-const vram = vramGuard(env);
+const inference = inferenceHook(env);
+const cliModels = cliInterceptor(env);
 
 const handler = (req, res) => {
   const url = new URL(req.url, `http://${req.headers.host || 'localhost'}`);
@@ -273,7 +378,14 @@ const handler = (req, res) => {
   // caller writes, so believing it would let anyone claim to be on the LAN.
   const fromLan = TRUST_LAN && isPrivateAddress(req.socket?.remoteAddress);
 
-  if (REQUIRE_TOKEN && !fromLan) {
+  /* The OpenAI-compatible API authenticates by its own API key, which every
+     request to it must carry (server/openaiCompat.js). An editor plugin cannot
+     do the cookie exchange below, and a 256-bit key is a stronger credential
+     than the shared token, so these paths skip the gate rather than needing
+     both. */
+  const isOpenAiApi = url.pathname === '/v1/models' || url.pathname === '/v1/chat/completions';
+
+  if (REQUIRE_TOKEN && !fromLan && !isOpenAiApi) {
     // Exchanging the token for a cookie keeps it out of every later URL.
     if (url.pathname === '/__auth' && req.method === 'POST') {
       let body = '';
@@ -308,17 +420,25 @@ const handler = (req, res) => {
   }
 
   /* ComfyUI lets go of the card before a language model is loaded onto it.
-     Waited for, because Ollama sizes its GPU share at load time. The body is
-     not read here, so it is still there for whoever handles the request next.
-     See server/vram.js. */
-  if (isInference(url.pathname)) {
-    vram.beforeInference().catch(() => {}).finally(() => dispatch(req, res, url));
-    return;
-  }
-  dispatch(req, res, url);
+     Waited for, because Ollama sizes its GPU share at load time. While one of
+     our videos is still being drawn, the request is answered from the CPU
+     instead, and the hook sends it itself; otherwise the body is not read, and
+     it is still there for whoever handles the request next. See
+     server/vram.js. */
+  /* Claude, GPT and Gemini through the CLIs signed in on this machine, ahead
+     of the VRAM guard: they use none of the card. See server/cliModels.js. */
+  cliModels(req, res, () => {
+    if (isInference(url.pathname)) {
+      inference(req, res, () => dispatch(req, res, url));
+      return;
+    }
+    dispatch(req, res, url);
+  });
 };
 
 const dispatch = (req, res, url) => {
+  if (url.pathname === '/api/chat/replay' && req.method === 'GET') return replayChat(req, res, url);
+  if (url.pathname === '/api/chat/cancel' && req.method === 'POST') return cancelChat(req, res);
   // Longest match first, so /api/tts-status is not swallowed by /api.
   const route = apiRoutes
     .filter(r => url.pathname === r.path || url.pathname.startsWith(`${r.path}/`))
@@ -362,6 +482,7 @@ const dispatch = (req, res, url) => {
       }));
       return;
     }
+    if (url.pathname === '/api/chat' && req.method === 'POST') return proxyChat(OLLAMA, req, res);
     return proxy(OLLAMA, req, res);
   }
 
@@ -377,6 +498,10 @@ const useTls = key && cert && fs.existsSync(key) && fs.existsSync(cert);
 const server = useTls
   ? https.createServer({ key: fs.readFileSync(key), cert: fs.readFileSync(cert) }, handler)
   : http.createServer(handler);
+
+let stopDatabaseBackups = () => {};
+let stopHistoryMaintenance = () => {};
+let stopTelegram = () => {};
 
 // Double-clicking the launcher twice is the ordinary way to hit this, and an
 // unhandled 'error' event would answer it with a stack trace.
@@ -401,7 +526,36 @@ server.on('error', (e) => {
   process.exit(1);
 });
 
+const shutdown = () => {
+  stopDatabaseBackups();
+  stopHistoryMaintenance();
+  stopTelegram();
+  server.close();
+};
+process.once('SIGINT', shutdown);
+process.once('SIGTERM', shutdown);
+
 server.listen(PORT, HOST, async () => {
+  /* Schedules that belong to an account are answered here, whether or not any
+     browser is open. See server/serverSchedules.js; SERVER_SCHEDULES=false in
+     .env turns it off. */
+  startScheduleRunner(env, { beforeInference: () => vramGuard(env).beforeInference() });
+  /* The Telegram bot, when TELEGRAM_BOT_TOKEN is set. See server/telegram.js. */
+  stopTelegram = startTelegramBot(env, { beforeInference: () => vramGuard(env).beforeInference() });
+  // Long clips a restart interrupted, from the segment they were on. See server/longVideo.js.
+  resumeLongVideos(env);
+  if (DB_BACKUP_ENABLED) {
+    stopDatabaseBackups = startDatabaseBackupScheduler({
+      directory: DB_BACKUP_DIR,
+      intervalMs: DB_BACKUP_INTERVAL_MS,
+      retention: DB_BACKUP_RETENTION,
+      dailyRetention: DB_BACKUP_DAILY,
+    });
+  }
+  stopHistoryMaintenance = startHistoryMaintenance({
+    keepRecent: HISTORY_KEEP_RECENT,
+    keepDays: HISTORY_KEEP_DAYS,
+  });
   const scheme = useTls ? 'https' : 'http';
   console.log('');
   console.log(`  Ollama WebUI  ${scheme}://${HOST}:${PORT}`);
@@ -409,6 +563,8 @@ server.listen(PORT, HOST, async () => {
   console.log(BACKEND === 'llamacpp'
     ? `  llama.cpp     ${LLAMACPP}`
     : `  ollama        ${OLLAMA}`);
+  const clis = describeProviders(env);
+  if (clis.length) console.log(`  CLI models    ${clis.join(', ')}`);
   console.log(`  auth          ${REQUIRE_TOKEN
     ? (TRUST_LAN ? 'token required from outside this network' : 'token required')
     : 'off (loopback only)'}`);

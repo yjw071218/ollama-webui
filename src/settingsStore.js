@@ -26,7 +26,11 @@
 
 // Names a file or a device on this computer, so it is the same whoever is
 // signed in and is deliberately not scoped, nor synced.
-const MACHINE_LOCAL = new Set(['ttsRefAudio']);
+/* Not preferences: things true of this machine at this moment.
+   `characterRun` is a training job in progress -- one graphics card, one
+   run -- and syncing it would have another device watch a job it cannot
+   see and then write a character it did not train. */
+const MACHINE_LOCAL = new Set(['ttsRefAudio', 'characterRun']);
 
 // Not settings: other scopes' stores, and the app's own bookkeeping.
 const NOT_A_SETTING = new Set([
@@ -54,11 +58,21 @@ const NOT_A_SETTING_PREFIX = [
      already been raised telling a desktop it had been too, and the desktop
      keeping its cut-off answers. */
   'ctxDefaultsRaised',
-  'settingStamps', 'syncRev', 'syncSent',
+  /* A browser's own schedules, `schedules:<scope>`. Device-local on purpose --
+     synced, every signed-in device would fire the same one at the same minute.
+     An account's schedules live on the server instead; see server/turns.js. */
+  'schedules',
+  'settingStamps', 'syncRev', 'syncSent', 'syncSentAckVersion',
   // Half-typed messages. They belong to this browser and this moment, not to
   // the account: syncing them would upload on every keystroke, and a draft
   // arriving on another device would overwrite whatever was being typed there.
   'chatDrafts',
+  /* What is being generated *right now*, and in which chat -- `chatGeneration:
+     <scope>` and `chatDrawing:<scope>:<chat>`. They exist so a reload does not
+     lose a running job, which makes them facts about this browser in this
+     minute. Synced, they would put a spinner on a phone for a job on the
+     desktop, and outlive the job on whichever device was not watching. */
+  'chatGeneration', 'chatDrawing',
   // Timings from this machine's GPU. Syncing them would average a laptop's
   // numbers together with a desktop's and describe neither.
   'perfRuns',
@@ -66,7 +80,10 @@ const NOT_A_SETTING_PREFIX = [
      suffix and both are synced as whole-list records of their own, so the
      settings sweep must not also pick them up as bare settings — that is how
      `userProfile` came to be uploaded once per account by the guest. */
-  'studioSettings', 'studioHistory',
+  'studioSettings', 'studioHistory', 'studioPrompts',
+  /* And the character library beside them -- same shape, same reason. See
+     src/characters.js. */
+  'characters',
   /* What the image classifier said about pictures seen in this browser. A
      cache, keyed by URL and by hashes of pictures — not a preference, and
      re-derivable anywhere. Studio jobs carry their own verdict, synced with

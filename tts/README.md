@@ -4,16 +4,20 @@ The web UI speaks replies through a local [GPT-SoVITS](https://github.com/RVC-Bo
 inference server. This folder holds the launcher and the settings that connect
 the two.
 
-**The GPT-SoVITS install itself is not in this repository.** A working copy is
+**The GPT-SoVITS install lives in `engines/gpt-sovits`, and is gitignored.** A working copy is
 roughly 25 GB — model weights, a bundled Python runtime, and whatever voices you
 have trained — which is both far past what a git host will take and, in the case
-of the voices, yours rather than the project's. So the repository carries the
-integration and you point it at your own install.
+of the voices, yours rather than the project's. So it sits inside the project
+and out of the repository -- see `engines/README.md`.
 
 ## Setup
 
-1. Install GPT-SoVITS (the Windows integration package is the least work).
-2. Copy `.env.example` to `.env` in the repository root and fill in:
+1. Put a GPT-SoVITS install in `engines/gpt-sovits` (the Windows integration
+   package is the least work). Nothing else is needed: it is started with the
+   `runtime\python.exe` it ships with, by the app, when something is first
+   spoken.
+2. Optionally, in `.env` -- only to point somewhere else, or if ffmpeg is not on
+   `PATH`:
 
    ```ini
    GPT_SOVITS_PATH=C:\path\to\GPT-SoVITS
@@ -34,9 +38,11 @@ integration and you point it at your own install.
 
 | Piece | What it does |
 |---|---|
-| `tts/start-tts-api.ps1` | Reads `.env`, puts ffmpeg on `PATH`, runs `api_v2.py` |
-| `/api/tts-status` | Whether a path is configured and whether it exists |
-| `/api/start-tts` | Launches the server detached, so it outlives the request |
+| `server/engines.js` | Finds it, starts it, waits for it to answer, and logs the attempt to `engines/logs/` |
+| `tts/start-tts-api.ps1` | The same, from a terminal, for when you want the console |
+| `/api/tts-status` | Whether it is installed, and whether it is answering |
+| `/api/start-tts` | Starts it, detached, so it outlives the request |
+| `/api/engines` | The same question for every engine, ACE-Step included |
 | `/tts-api/*` | Proxied to the inference server (default `127.0.0.1:9880`) |
 
 The proxy exists because the browser would otherwise be making cross-origin
@@ -54,7 +60,12 @@ field starts empty precisely so that no one's voice sample ships as a default.
 
 ## Troubleshooting
 
-**"GPT_SOVITS_PATH is not set"** — `.env` is missing or the key is empty.
+**"GPT-SoVITS is not in engines/gpt-sovits"** — put the install there, or point
+`GPT_SOVITS_PATH` at wherever you keep it.
+
+**It says it started and nothing answers** — read `engines/logs/gpt-sovits.log`.
+A start that dies quotes the end of that file back at you; one that is merely
+slow is still loading two checkpoints onto the card.
 
 **Server starts, requests fail** — check `GPT_SoVITS/configs/tts_infer.yaml`
 points at weights that exist. Override its location with `GPT_SOVITS_CONFIG`.

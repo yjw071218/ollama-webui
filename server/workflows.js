@@ -131,7 +131,15 @@ export const WORKFLOWS = {
       /* Redrawing one part. The latent the encode made is masked before the
          sampler sees it, so the sampler only moves what is inside. See
          `applyRegionEdit`. */
-      inpaint: { style: 'noiseMask' },
+      inpaint: {
+        style: 'noiseMask',
+        /* Where DifferentialDiffusion goes in -- see `finishRegionEdit`.
+           Nothing guides the redrawn arms, as the LLLite does for Anima:
+           thedeoxen's pose ControlNet LoRA with ostris's edit patch was tried
+           on an outfit change, and blotched the new dress black where the plain
+           edit came out clean, with or without a person detector for DWPose. */
+        model: { node: '30:3', input: 'model' },
+      },
     },
     missing: {
       negative: 'guidanceDistilled',
@@ -216,7 +224,11 @@ export const WORKFLOWS = {
       // Steps is not one of the four the context overrides, so it stays where
       // the sampler reads it.
       steps: { node: '1298', input: 'steps' },
-      model: { node: '1291', input: 'ckpt_name', kind: 'checkpoints' },
+      /* The Efficient Loader's `ckpt_name` is "🔌 ext model input": it does not
+         load anything, the model arrives from the `UNETLoader`s (확산 모델 로드).
+         1328 is the one the graph draws with; 1319 is set as well so whichever
+         path a re-exported graph keeps live gets the chosen file. */
+      model: { node: '1328', input: 'unet_name', kind: 'diffusion_models', also: [{ node: '1319', input: 'unet_name' }] },
       vae: { node: '1291', input: 'vae_name', kind: 'vae' },
     },
     /* A `LoRA Stacker` with nine slots, which is the whole point of a stacker:
@@ -289,8 +301,18 @@ export const WORKFLOWS = {
         mode: { node: '1291', input: 'paint_mode', value: '🎨 Inpaint(Ksampler)' },
         mask: { node: '1291', input: 'mask' },
         pixels: { node: '1176', output: 0 },
+        /* Where DifferentialDiffusion goes in: the model the loader takes
+           through its context, which is what the sampler draws with. */
+        model: { node: '1300', input: 'model' },
+        /* And the inpainting ControlNet-LLLite, where it is installed -- see
+           `pickInpaintLLLite`. Anima only: it is trained for this model. */
+        lllite: true,
       },
     },
+    /* Drawing in the pose of another picture: kohya-ss's pose ControlNet-LLLite
+       for Anima, on the same model link the inpainting guide uses. See
+       `applyPoseGuide`. */
+    pose: { model: { node: '1300', input: 'model' } },
     missing: { duration: 'stillsOnly', clip: 'builtIn' },
   },
 
@@ -328,7 +350,22 @@ export const WORKFLOWS = {
       referenceImage: { node: '20', input: 'image' },
     },
     defaults: { steps: 20, width: 1088, height: 1088, duration: 5, fps: 24, scheduler: 'simple', sampler: 'res_multistep' },
-    ranges: { steps: [8, 50], duration: [1, 20] },
+    /* Twenty seconds was the ceiling because twenty seconds is about as far as
+       one pass holds together. Past that a clip is rendered as segments joined
+       at their keyframes -- see server/h3Motion.js -- so the ceiling is now
+       what anyone would sit through, and the `duration` written into the graph
+       is still one segment's. */
+    ranges: { steps: [8, 50], duration: [1, 600], segmentSeconds: [5, 15] },
+    // Both need the minimax-h3-hybrid-cond node pack; the route says so when it
+    // is not installed rather than rendering something else quietly.
+    motion: { long: true, loop: true },
+    /* Commit charge its load needs, in GB -- see commitAvailable in
+       server/resourceSafety.js. The files: text encoder 14.6, video VAE 4.9,
+       audio VAE 0.6, diffusion model 19.5, all mapped at once, and a little
+       for the buffers around them. ComfyUI's own process is already charged
+       by the time this is measured. Short of this, ComfyUI does not slow down,
+       it exits with an access violation. */
+    loadGB: 42,
     missing: { negative: 'noNegativeNode', cfg: 'fixedGuidance', lora: 'noLoraNode' },
   },
 };
@@ -336,6 +373,7 @@ export const WORKFLOWS = {
 /* --------------------------------------------------------------- loading */
 
 const cache = new Map();
+const latestCacheKey = new Map();
 
 /** One workflow, as ComfyUI's editor saved it. */
 export const readWorkflow = (definition, dir = WORKFLOW_DIR) => {
@@ -347,7 +385,10 @@ export const readWorkflow = (definition, dir = WORKFLOW_DIR) => {
   // one of these.
   if (cache.has(key)) return cache.get(key);
   const parsed = JSON.parse(fs.readFileSync(file, 'utf8'));
+  const previous = latestCacheKey.get(file);
+  if (previous && previous !== key) cache.delete(previous);
   cache.set(key, parsed);
+  latestCacheKey.set(file, key);
   return parsed;
 };
 
@@ -505,6 +546,38 @@ export const clearAuthorContent = (prompt, definition) => {
     node.inputs[entry.input] = entry.value === undefined ? '' : entry.value;
   }
   return { missing };
+};
+
+/**
+ * A reference picture nobody gave, taken out rather than left as the author's.
+ *
+ * The MiniMax workflow was exported with a picture in its "Reference Image"
+ * loader -- Hakurei Reimu, `08-09_00002_.png` -- and that loader is wired into
+ * the conditioning as reference picture 1. A clip asked for from words alone
+ * therefore came out of that character: the reference is identity, and the
+ * model follows it over the prompt. Reported as "without a reference image it
+ * uses the one that was in the workflow".
+ *
+ * The loader is removed with its links, but only where every link is one of
+ * the optional reference lists (`ref_images.*`, `ref_videos.*`), which the node
+ * accepts empty. A graph that needs a picture somewhere required is left alone
+ * and said so.
+ */
+export const dropReference = (prompt, definition) => {
+  const binding = definition.controls?.referenceImage;
+  if (!binding) return { dropped: false, reason: 'none' };
+  const key = keyOf(prompt, binding.node);
+  if (!key || !prompt[key]) return { dropped: false, reason: 'missing' };
+  const consumers = [];
+  for (const [id, node] of Object.entries(prompt)) {
+    for (const [name, value] of Object.entries(node.inputs || {})) {
+      if (Array.isArray(value) && String(value[0]) === String(key)) consumers.push([id, name]);
+    }
+  }
+  if (consumers.some(([, name]) => !/^ref_(images|videos)\./.test(name))) return { dropped: false, reason: 'required' };
+  for (const [id, name] of consumers) delete prompt[id].inputs[name];
+  delete prompt[key];
+  return { dropped: true, links: consumers.length };
 };
 
 /* ============================================================ stacking LoRAs
@@ -806,6 +879,133 @@ export const REGION_NODES = [
 /** And when it is handed in as a mask -- painted by the reader, or the new margin of an extended picture. */
 export const MASK_NODES = ['LoadImageMask', 'GrowMask', 'SetLatentNoiseMask', 'LoadImage', 'ImageCompositeMasked'];
 
+/**
+ * The inpainting ControlNet-LLLite to guide an Anima edit with, from what is in
+ * ComfyUI's `model_patches` folder; '' when there is none.
+ *
+ * Reported: changing an outfit came back with a second hand under the bear and
+ * blurred patches of skin on the arms. The clothes mask covers the arms and
+ * legs under a sheer dress, and the sampler redrew them from the prompt alone,
+ * not knowing where they had been. kohya-ss's inpainting LLLite is shown the
+ * picture around the mask (the masked part blacked out) and the mask itself,
+ * and draws what is inside so that it continues what is outside. The newest
+ * version wins: v2 is trained for Anima-Base v1.0, v1 for a preview of it.
+ */
+export const pickInpaintLLLite = (names = []) => (names || [])
+  .filter(name => /lllite/i.test(name) && /inpaint/i.test(name))
+  .sort((a, b) => Number((/v(\d+)/i.exec(b) || [])[1] || 0) - Number((/v(\d+)/i.exec(a) || [])[1] || 0))[0] || '';
+
+/** The pose ControlNet-LLLite in `model_patches`, newest first; '' when none. */
+export const pickPoseLLLite = (names = []) => (names || [])
+  .filter(name => /lllite/i.test(name) && /pose/i.test(name))
+  .sort((a, b) => Number((/-(\d+)\./.exec(b) || /v(\d+)/i.exec(b) || [])[1] || 0)
+    - Number((/-(\d+)\./.exec(a) || /v(\d+)/i.exec(a) || [])[1] || 0))[0] || '';
+
+export const POSE_NODES = ['LoadImage', 'ImageScale', 'ModelPatchLoader', 'AnimaLLLiteApply'];
+
+/**
+ * Draw in the pose of another picture.
+ *
+ * Character consistency has LoRA training; "this character, but standing like
+ * *that*" had nothing short of describing the pose in words, which the model
+ * follows loosely at best. The pose LLLite is shown a skeleton -- the OpenPose
+ * drawing DWPose extracts from any photo or illustration -- and keeps the
+ * figure on it while the prompt decides everything else.
+ *
+ * `image` is a file in ComfyUI's input folder. It is brought to the size being
+ * sampled (cropped, not stretched: a stretched skeleton is a different body),
+ * turned into a skeleton by DWPreprocessor unless `detect` is false (the
+ * picture already *is* a skeleton), and applied for the first `end` of the
+ * steps: the pose is settled early, and letting go for the last steps leaves
+ * hands and faces to the model rather than to a stick figure.
+ *
+ * Measured on this install (2026-09-29): the graph runs, DWPose draws the right
+ * skeleton, and the patch is loaded and changes the computation -- but the
+ * picture barely follows the pose, even at 1.5 through every step. The patch
+ * installed is `anima-lllite-pose-3r` (file name pose-1), trained on
+ * `anima-preview` with a small conditioning net (cond_dim 32, self-attention
+ * only), and this workflow samples Anima Base with three LoRAs and PAG. The
+ * wiring is not the limit; a pose guide trained for Base is expected to be.
+ * `pickPoseLLLite` takes the newest one it finds, so dropping one into
+ * models/model_patches is the whole upgrade.
+ */
+export const applyPoseGuide = (prompt, definition, {
+  image, strength = 1, end = 0.85, detect = true, multi = false, size, available, patches = [],
+} = {}) => {
+  const spec = definition.pose;
+  if (!image) return { applied: false };
+  if (!spec) return { applied: false, reason: 'unsupported' };
+  const s = Math.min(2, Math.max(0, Number.isFinite(Number(strength)) ? Number(strength) : 1));
+  if (s === 0) return { applied: false, reason: 'off' };
+  const need = [...POSE_NODES, ...(detect ? ['DWPreprocessor'] : [])];
+  const missing = need.filter(cls => !available?.has(cls));
+  const patch = pickPoseLLLite(patches);
+  if (!patch) missing.push('anima-lllite-pose (models/model_patches)');
+  if (missing.length) return { applied: false, reason: 'missing', missing };
+
+  const target = findNode(prompt, spec.model.node);
+  const link = target?.inputs?.[spec.model.input];
+  if (!Array.isArray(link)) return { applied: false, reason: 'unsupported' };
+
+  const loadKey = nextKey(prompt);
+  prompt[loadKey] = { class_type: 'LoadImage', inputs: { image }, _meta: { title: 'Pose reference', source: 'pose#load' } };
+  let pixels = [loadKey, 0];
+  const width = Number(size?.width) || 0;
+  const height = Number(size?.height) || 0;
+  if (width && height) {
+    const scaleKey = nextKey(prompt);
+    prompt[scaleKey] = {
+      class_type: 'ImageScale',
+      inputs: { image: pixels, upscale_method: 'lanczos', width, height, crop: 'center' },
+      _meta: { title: 'Pose reference size', source: 'pose#scale' },
+    };
+    pixels = [scaleKey, 0];
+  }
+  if (detect) {
+    /* DWPose draws its skeleton with the short side at `resolution`, 512 by
+       default -- a quarter of the area being sampled, and a skeleton the guide
+       would then see stretched. Drawn at the sampled short side instead (the
+       node's grid is 64), and brought to the exact size afterwards. */
+    const shortSide = width && height ? Math.max(64, Math.round(Math.min(width, height) / 64) * 64) : 1024;
+    /* No person detector by default: the whole picture is read as one figure.
+       DWPose's YOLOX finds people in photographs and, measured on this
+       install, nobody at all in an anime illustration -- the skeleton came
+       back black and the guide steered nothing. Whole-picture reading gets
+       one figure right from either; `multi` brings the detector back for a
+       photograph with several people in it. */
+    const poseKey = nextKey(prompt);
+    prompt[poseKey] = {
+      class_type: 'DWPreprocessor',
+      inputs: {
+        image: pixels, detect_hand: 'enable', detect_body: 'enable', detect_face: 'enable', resolution: shortSide,
+        bbox_detector: multi ? 'yolox_l.onnx' : 'None',
+      },
+      _meta: { title: 'Pose skeleton', source: 'pose#detect' },
+    };
+    pixels = [poseKey, 0];
+    if (width && height) {
+      const fitKey = nextKey(prompt);
+      prompt[fitKey] = {
+        class_type: 'ImageScale',
+        inputs: { image: pixels, upscale_method: 'nearest-exact', width, height, crop: 'disabled' },
+        _meta: { title: 'Pose skeleton size', source: 'pose#fit' },
+      };
+      pixels = [fitKey, 0];
+    }
+  }
+  const patchKey = nextKey(prompt);
+  prompt[patchKey] = { class_type: 'ModelPatchLoader', inputs: { name: patch }, _meta: { title: 'Pose guide', source: 'pose#lllite-load' } };
+  const applyKey = nextKey(prompt);
+  const until = Math.min(1, Math.max(0.1, Number(end) || 0.85));
+  prompt[applyKey] = {
+    class_type: 'AnimaLLLiteApply',
+    inputs: { model: link, model_patch: [patchKey, 0], image: pixels, strength: s, start_percent: 0, end_percent: until },
+    _meta: { title: 'Pose guide', source: 'pose#lllite' },
+  };
+  target.inputs[spec.model.input] = [applyKey, 0];
+  return { applied: true, patch, strength: s, end: until, detected: !!detect };
+};
+
 /* Found at the size being sampled, then grown and softened there. 24 pixels at
    ~1300 wide is about a strand of hair at the edge of a head: enough to take the
    old outline with it, not enough to reach the collar.
@@ -820,9 +1020,86 @@ export const MASK_NODES = ['LoadImageMask', 'GrowMask', 'SetLatentNoiseMask', 'L
    long hair come out grey, and grey means "half the old picture": the second
    run had short hair and translucent ghosts of the long hair beside the hands.
    So the mask stays hard until it has been grown past the old outline, and
-   only then is the edge softened, where everything it blends is background. */
+   only then is the edge softened, where everything it blends is background.
+
+   Softened by 12, not 4. With a hard-edged mask the sampler redrew the whole
+   grown ring around the part at full strength -- background included -- and
+   the composite then blended that new background into the original across a
+   thin band: a smudge along the hem, old lace showing through it. With
+   DifferentialDiffusion (see `finishRegionEdit`) a soft edge is a gradient the
+   sampler follows, redrawing less towards the rim, so by the edge of the
+   composite the two pictures already agree. Grown first, so the 12 falls
+   outside the part's own outline and the part itself is still wholly inside. */
 const REGION_GROW = 24;
-const REGION_SOFTEN = 4;
+const REGION_SOFTEN = 12;
+
+/* Clothes and the background are widened further.
+ *
+ * Reported: the ends of what was masked were left behind, a little of the old
+ * picture at the edge. Measured on a white lace dress turned black: the lace's
+ * scalloped hem and sheer sleeves reach past the outline SAM3 draws round them,
+ * and what reached past it fell in the soft edge, where the original is kept
+ * for the first steps and blended back after -- half-transparent lace beside
+ * the new hem, in several places. Widened by 40 they were gone; by 56 the new
+ * sleeve grew out past the arm and faded into the background.
+ *
+ * Not the hair, eyes or face: 24 already takes a strand of hair with it, and 40
+ * below a fringe is the eyes, redrawn by an edit that only asked for the hair.
+ */
+const REGION_GROW_WIDE = 40;
+const WIDE_REGION = /\b(clothes|clothing|outfit|costume|uniform|dress|gown|skirt|shirt|blouse|jacket|coat|hoodie|sweater|cardigan|vest|kimono|yukata|apron|pants|trousers|jeans|shorts|suit|swimsuit|bikini|lingerie|background|scenery|sky|wall|floor|ground)\b/i;
+
+/* ------------------------------------------------- the two the reader turns
+
+   Everything above is a measurement: taken off real edits that came back
+   wrong, and right for the pictures they were taken off. They are not right
+   for every picture, and the two that miss are the two below.
+
+   The guide's strength, because how much of the surrounding picture should
+   reach into the mask depends on what is being redrawn. At 1 the new hand
+   continues the arm it is attached to; a hairstyle changed outright wants the
+   old hair to have less of a say, and a hand that came back fused wants more.
+
+   And how far the mask is widened, because the right width is the width of
+   what the mask *missed* -- the sheer sleeve past the outline, the sliver of
+   old picture at the end of a brush stroke -- and that is a property of the
+   picture, not of the word. Too narrow leaves the old edge standing; too wide
+   redraws the collar an edit of the hair never asked for.
+
+   Turned as a multiplier rather than a number of pixels, so what is already
+   known is kept: clothes are widened further than hair, a painted mask by a
+   share of its own picture, and each of those stays true at any setting. The
+   default of 1 is exactly the behaviour before there was a dial. */
+
+export const GUIDE_STRENGTH = { min: 0, max: 2, step: 0.05, default: 1 };
+export const MASK_GROW_SCALE = { min: 0.25, max: 2.5, step: 0.05, default: 1 };
+
+/** A dial's value as a number inside its range; its default for anything else. */
+export const tuned = (value, range) => {
+  /* `Number(null)` is 0 and `Number('')` is 0, and a setting that was never
+     written reads back as one of them -- so without this an untouched guide
+     would arrive as "off" and an untouched mask at the narrow end of its
+     range. Nothing is not zero. */
+  if (value === null || value === undefined || value === '') return range.default;
+  const n = Number(value);
+  if (!Number.isFinite(n)) return range.default;
+  return Math.min(Math.max(n, range.min), range.max);
+};
+
+/** How far a found part is widened: further for clothes and the background. */
+export const regionGrow = (terms = [], scale = 1) => Math.max(1, Math.round(
+  ((terms || []).some(term => WIDE_REGION.test(String(term))) ? REGION_GROW_WIDE : REGION_GROW)
+  * tuned(scale, MASK_GROW_SCALE),
+));
+
+/* Holes narrower than this, left in the part once it has been grown, are
+   closed. SAM3 names clothes and leaves out what is on them -- a bow at the
+   collar came back as two holes in a dress -- and a hole is where the composite
+   puts the original back: the new black bow ended in a strip of the old pink
+   one. Closed after the grow, so what is closed is only what the grow nearly
+   closed already (the bow's holes were ~70px, ~22px after it), and a hand
+   resting on the dress (~100px, ~52px after) is still left out and kept. */
+const REGION_CLOSE = 32;
 
 /**
  * Lay the finished picture back over the original, through a mask.
@@ -887,7 +1164,12 @@ export const compositeOnto = (prompt, { image, mask }) => {
  * and an extended canvas arrive. `maskGrow` widens a given mask; a painted one
  * wants it, an extension builds its own edge and does not.
  */
-export const applyRegionEdit = (prompt, definition, { image, region, maskImage, maskGrow = 0, available } = {}) => {
+export const applyRegionEdit = (prompt, definition, {
+  image, region, maskImage, maskGrow = 0, available, patches = [],
+  guideStrength, growScale,
+} = {}) => {
+  const strength = tuned(guideStrength, GUIDE_STRENGTH);
+  const scale = tuned(growScale, MASK_GROW_SCALE);
   const terms = maskImage ? [] : regionTerms(region);
   if (!terms.length && !maskImage) return { applied: false, reason: 'none' };
   const spec = definition.img2img?.inpaint;
@@ -917,9 +1199,14 @@ export const applyRegionEdit = (prompt, definition, { image, region, maskImage, 
   if (!pixels) return { applied: false, reason: 'unsupported' };
 
   const mask = maskImage
-    ? givenMask(prompt, { maskImage, grow: maskGrow, available })
-    : foundMask(prompt, { terms, pixels, available });
-  return finishRegionEdit(prompt, definition, { spec, samplerKey, image, mask, terms });
+    /* The scale is applied to what the reader painted, not to what they set:
+       a painted mask is widened by a share of its own picture (see
+       `paintedGrow`), and the dial moves that share. */
+    ? givenMask(prompt, { maskImage, grow: Math.round(maskGrow * scale), available })
+    : foundMask(prompt, { terms, pixels, available, scale });
+  return finishRegionEdit(prompt, definition, {
+    spec, samplerKey, image, mask, terms, available, pixels, patches, strength,
+  });
 };
 
 /** A mask somebody made, loaded, and widened if asked. */
@@ -932,6 +1219,37 @@ const givenMask = (prompt, { maskImage, grow, available }) => {
   };
   let mask = [loadKey, 0];
   const expand = Math.max(0, Math.round(Number(grow) || 0));
+  /* A painted one is also closed, as a found one is -- see REGION_CLOSE. The
+     gaps a brush leaves between strokes are narrower than it, and each was a
+     thread of the old picture through the new one. A hole the size of a face,
+     left on purpose, is not. */
+  if (expand > 0 && available?.has('GrowMaskWithBlur') && available?.has('MaskFix+')) {
+    const growKey = nextKey(prompt);
+    prompt[growKey] = {
+      class_type: 'GrowMaskWithBlur',
+      inputs: {
+        mask, expand, incremental_expandrate: 0, tapered_corners: true, flip_input: false,
+        blur_radius: 0, lerp_alpha: 1, decay_factor: 1, fill_holes: false,
+      },
+      _meta: { title: 'Region, grown', source: 'region#grow-hard' },
+    };
+    const closeKey = nextKey(prompt);
+    prompt[closeKey] = {
+      class_type: 'MaskFix+',
+      inputs: { mask: [growKey, 0], erode_dilate: 0, fill_holes: Math.min(128, expand), remove_isolated_pixels: 0, smooth: 0, blur: 0 },
+      _meta: { title: 'Region, without its small holes', source: 'region#close' },
+    };
+    const softKey = nextKey(prompt);
+    prompt[softKey] = {
+      class_type: 'GrowMaskWithBlur',
+      inputs: {
+        mask: [closeKey, 0], expand: 0, incremental_expandrate: 0, tapered_corners: true, flip_input: false,
+        blur_radius: Math.max(2, Math.round(expand / 2)), lerp_alpha: 1, decay_factor: 1, fill_holes: false,
+      },
+      _meta: { title: 'Region, with its edge', source: 'region#grow' },
+    };
+    return [softKey, 0];
+  }
   if (expand > 0) {
     const key = nextKey(prompt);
     prompt[key] = available?.has('GrowMaskWithBlur')
@@ -954,7 +1272,13 @@ const givenMask = (prompt, { maskImage, grow, available }) => {
 };
 
 /** A mask SAM3 finds from the words, grown past the old outline and softened. */
-const foundMask = (prompt, { terms, pixels, available }) => {
+const foundMask = (prompt, { terms, pixels, available, scale = 1 }) => {
+  const grow = regionGrow(terms, scale);
+  /* The soft edge moves with the grow rather than staying at 12. The two were
+     measured as a pair -- the softening has to fall in the ring the grow made,
+     where everything it blends is background -- and a doubled grow with the
+     same 12 is a hard seam inside a wider ring. */
+  const soften = Math.max(2, Math.round(REGION_SOFTEN * tuned(scale, MASK_GROW_SCALE)));
   const masks = terms.map(term => {
     const key = nextKey(prompt);
     prompt[key] = {
@@ -991,6 +1315,36 @@ const foundMask = (prompt, { terms, pixels, available }) => {
     };
     mask = [key, 0];
   }
+  /* Grown, its small holes closed, then softened -- in that order, so the
+     closing sees the hard grown edge and the softening is the last thing done.
+     See REGION_CLOSE. Needs comfyui_essentials' MaskFix+ as well as KJNodes. */
+  if (available?.has('GrowMaskWithBlur') && available?.has('MaskFix+')) {
+    const growKey = nextKey(prompt);
+    prompt[growKey] = {
+      class_type: 'GrowMaskWithBlur',
+      inputs: {
+        mask, expand: grow, incremental_expandrate: 0, tapered_corners: true, flip_input: false,
+        blur_radius: 0, lerp_alpha: 1, decay_factor: 1, fill_holes: false,
+      },
+      _meta: { title: 'Region, grown', source: 'region#grow-hard' },
+    };
+    const closeKey = nextKey(prompt);
+    prompt[closeKey] = {
+      class_type: 'MaskFix+',
+      inputs: { mask: [growKey, 0], erode_dilate: 0, fill_holes: REGION_CLOSE, remove_isolated_pixels: 0, smooth: 0, blur: 0 },
+      _meta: { title: 'Region, without its small holes', source: 'region#close' },
+    };
+    const softKey = nextKey(prompt);
+    prompt[softKey] = {
+      class_type: 'GrowMaskWithBlur',
+      inputs: {
+        mask: [closeKey, 0], expand: 0, incremental_expandrate: 0, tapered_corners: true, flip_input: false,
+        blur_radius: soften, lerp_alpha: 1, decay_factor: 1, fill_holes: false,
+      },
+      _meta: { title: 'Region, with its edge', source: 'region#grow' },
+    };
+    return [softKey, 0];
+  }
   {
     /* Grown, then softened at the new edge. KJNodes does both in one node; a
        ComfyUI without it gets the grow alone, which is a harder seam but no
@@ -1000,14 +1354,14 @@ const foundMask = (prompt, { terms, pixels, available }) => {
       ? {
         class_type: 'GrowMaskWithBlur',
         inputs: {
-          mask, expand: REGION_GROW, incremental_expandrate: 0, tapered_corners: true, flip_input: false,
-          blur_radius: REGION_SOFTEN, lerp_alpha: 1, decay_factor: 1, fill_holes: false,
+          mask, expand: grow, incremental_expandrate: 0, tapered_corners: true, flip_input: false,
+          blur_radius: soften, lerp_alpha: 1, decay_factor: 1, fill_holes: false,
         },
         _meta: { title: 'Region, with its edge', source: 'region#grow' },
       }
       : {
         class_type: 'GrowMask',
-        inputs: { mask, expand: REGION_GROW, tapered_corners: true },
+        inputs: { mask, expand: grow, tapered_corners: true },
         _meta: { title: 'Region, with its edge', source: 'region#grow' },
       };
     mask = [key, 0];
@@ -1016,7 +1370,7 @@ const foundMask = (prompt, { terms, pixels, available }) => {
 };
 
 /** Sample only inside the mask, and put the original back outside it. */
-const finishRegionEdit = (prompt, definition, { spec, samplerKey, image, mask, terms }) => {
+const finishRegionEdit = (prompt, definition, { spec, samplerKey, image, mask, terms, available, pixels, patches, strength = 1 }) => {
   if (spec.style === 'native') {
     const loader = findNode(prompt, spec.mode.node);
     const target = findNode(prompt, spec.mask.node);
@@ -1036,8 +1390,67 @@ const finishRegionEdit = (prompt, definition, { spec, samplerKey, image, mask, t
     sampler.inputs[latentInput] = [key, 0];
   }
 
+  /* What is inside drawn to continue what is outside, where the guide is
+     installed -- see `pickInpaintLLLite`. On the model before the soft edge,
+     so the chain the sampler draws with is: model, guide, DifferentialDiffusion.
+     Shown the picture at the size being sampled and the region; it blacks out
+     the region itself and reads the mask as on or off. */
+  let guided = '';
+  /* At zero the guide is left out rather than added and told not to act: the
+     node loads a model patch and encodes the picture whatever its strength,
+     and "off" should cost nothing. */
+  const guide = spec.lllite && spec.model && pixels && strength > 0
+    && available?.has('ModelPatchLoader') && available?.has('AnimaLLLiteApply')
+    ? pickInpaintLLLite(patches) : '';
+  if (guide) {
+    const target = findNode(prompt, spec.model.node);
+    const link = target?.inputs?.[spec.model.input];
+    if (Array.isArray(link)) {
+      const loadKey = nextKey(prompt);
+      prompt[loadKey] = {
+        class_type: 'ModelPatchLoader',
+        inputs: { name: guide },
+        _meta: { title: 'Inpainting guide', source: 'region#lllite-load' },
+      };
+      const applyKey = nextKey(prompt);
+      prompt[applyKey] = {
+        class_type: 'AnimaLLLiteApply',
+        inputs: { model: link, model_patch: [loadKey, 0], image: pixels, strength, start_percent: 0, end_percent: 1, mask },
+        _meta: { title: 'Inpainting guide', source: 'region#lllite' },
+      };
+      target.inputs[spec.model.input] = [applyKey, 0];
+      guided = guide;
+    }
+  }
+
+  /* The edge as a gradient, where this ComfyUI can.
+   *
+   * A noise mask on its own is all or nothing: every pixel is either redrawn
+   * at full strength or kept, however soft the mask's edge looks. So the ring
+   * the mask was grown by came back as new background, and the composite had
+   * to blend two different drawings into each other -- the smudge reported at
+   * the hem. DifferentialDiffusion reads the mask's grey as "redraw this much",
+   * so the edge fades from the new part into the picture as it was. It does
+   * nothing without a noise mask, so everything else the model draws is as
+   * before. */
+  let smoothed = false;
+  if (spec.model && available?.has('DifferentialDiffusion')) {
+    const target = findNode(prompt, spec.model.node);
+    const link = target?.inputs?.[spec.model.input];
+    if (Array.isArray(link)) {
+      const key = nextKey(prompt);
+      prompt[key] = {
+        class_type: 'DifferentialDiffusion',
+        inputs: { model: link, strength: 1 },
+        _meta: { title: 'Blend the edge', source: 'region#differential' },
+      };
+      target.inputs[spec.model.input] = [key, 0];
+      smoothed = true;
+    }
+  }
+
   const composited = compositeOnto(prompt, { image, mask });
-  return { applied: true, terms, composited };
+  return { applied: true, terms, composited, smoothed, ...(guided ? { guided, strength } : {}) };
 };
 
 /* Nodes that write a file, whatever pack they came from. Matched by having a

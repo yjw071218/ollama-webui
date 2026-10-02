@@ -715,6 +715,39 @@ export const MCP_TAG = 'TOOL_MCP';
 /** Is this the name of a tool from a server, rather than a built-in? */
 export const isMcpToolName = (name) => typeof name === 'string' && name.startsWith('mcp_');
 
+/* The built-in file tags, carried out by an MCP filesystem server when one is
+ * configured.
+ *
+ * The built-in ones go through `/localfs`, which the server keeps switched
+ * off unless ALLOW_LOCAL_FS=true -- and a model offered both the built-in tags
+ * and a filesystem server in `mcp.json` reached for the built-in ones, was
+ * told "local file access is disabled", and gave up, while the server it was
+ * allowed to use sat unused. So the tag is kept (it is what every model
+ * already knows to write) and the work goes to the server: `mcp.json` is the
+ * permission either way, with its folders and its allow-list.
+ *
+ * Returns `{ server, tool, args }`, or null when no server offers the tool. */
+const escapeRegExp = (text) => String(text).replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const FILE_TAG_TOOLS = {
+  TOOL_READ_FILE: [['read_text_file', ({ path }) => ({ path })], ['read_file', ({ path }) => ({ path })]],
+  TOOL_LIST_DIR: [['list_directory', ({ path }) => ({ path })]],
+  TOOL_WRITE_FILE: [['write_file', ({ path, content }) => ({ path, content })]],
+  TOOL_SEARCH_FILES: [
+    // The workbench searches contents, which is what this tag has always meant.
+    ['grep', ({ path, query }) => ({ path, pattern: escapeRegExp(query), files_only: true, ignore_case: true })],
+    // The filesystem server matches names only: a glob around the words.
+    ['search_files', ({ path, query }) => ({ path, pattern: `**/*${query}*` })],
+  ],
+};
+export const mcpFileRoute = (tag, mcpTools = [], { path = '', content = '', query = '' } = {}) => {
+  for (const [name, argsOf] of FILE_TAG_TOOLS[tag] || []) {
+    const found = (mcpTools || []).find(t => t?.name === name && !t.synthetic);
+    if (!found) continue;
+    return { server: found.server, tool: name, args: argsOf({ path, content, query }) };
+  }
+  return null;
+};
+
 /** Which tag each native name renders into. */
 const TAG_FOR = {
   web_search: 'TOOL_WEB_SEARCH',
@@ -887,8 +920,60 @@ const readOpening = (text, from) => {
   }
 };
 
-export const canonicalToolTags = (source) => {
+/* `{"action": "generate_image", "action_input": {...}}` -- the LangChain agent
+ * shape some models write as text instead of a tag. `action_input` often comes
+ * as a JSON string with its inner quotes left unescaped, which JSON.parse
+ * rejects, so the known arguments are read one key at a time. */
+const ACTION_KEYS = ['prompt', 'style', 'negative', 'from', 'change', 'region', 'count', 'aspect',
+  'duration', 'loop', 'soundtrack', 'cut', 'transition', 'captions', 'upscale', 'factor',
+  'direction', 'amount', 'query', 'url', 'topic', 'path', 'content', 'lyrics', 'language',
+  'instrumental', 'into', 'strength'];
+const actionArgs = (block) => {
+  const flat = block.replace(/\\"/g, '"');
+  const args = {};
+  for (const key of ACTION_KEYS) {
+    const m = new RegExp(`"${key}"\\s*:\\s*(?:"([\\s\\S]*?)"(?=\\s*[,}\\n])|(-?\\d+(?:\\.\\d+)?|true|false))`).exec(flat);
+    if (m) args[key] = m[1] ?? (m[2] === 'true' ? true : m[2] === 'false' ? false : Number(m[2]));
+  }
+  return args;
+};
+export const jsonActionTags = (source) => {
   const text = String(source ?? '');
+  if (!/"action"\s*:/.test(text)) return text;
+  let out = '';
+  let at = 0;
+  const finder = /"action"\s*:\s*"([A-Za-z_]+)"/g;
+  let m;
+  while ((m = finder.exec(text)) !== null) {
+    const raw = m[1];
+    const name = TAG_FOR[raw.toLowerCase()] ? raw.toLowerCase()
+      : Object.keys(TAG_FOR).find(k => TAG_FOR[k] === raw.toUpperCase());
+    if (!name) continue;
+    const start = text.lastIndexOf('{', m.index);
+    if (start < at) continue;
+    let depth = 0;
+    let end = -1;
+    for (let i = start; i < text.length; i += 1) {
+      if (text[i] === '{') depth += 1;
+      else if (text[i] === '}') { depth -= 1; if (depth === 0) { end = i + 1; break; } }
+    }
+    if (end === -1) break;                      // still streaming
+    let from = start;
+    let to = end;
+    const fence = /```(?:json)?\s*$/i.exec(text.slice(at, start));
+    const after = /^\s*```/.exec(text.slice(end));
+    if (fence && after) { from = at + fence.index; to = end + after[0].length; }
+    const tag = nativeCallToTag(name, actionArgs(text.slice(start, end)));
+    if (!tag) continue;
+    out += text.slice(at, from) + tag;
+    at = to;
+    finder.lastIndex = to;
+  }
+  return out + text.slice(at);
+};
+
+export const canonicalToolTags = (source) => {
+  const text = jsonActionTags(source);
   if (!/<TOOL_/i.test(text)) return text;
   let out = '';
   let at = 0;

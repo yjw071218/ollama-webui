@@ -64,3 +64,11 @@ engines/*
 # file that names programs to spawn is a permission grant for this machine, not
 # project data. See server/mcp.js.
 mcp.json
+
+# Pinned RisuAI source and reproducible browser build (npm run risu:setup).
+integrations/risuai/upstream/
+
+# local backups and one-off recovery scripts
+*.bak
+check_deleted_again.cjs
+force_restore.cjs

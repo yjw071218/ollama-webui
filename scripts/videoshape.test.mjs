@@ -29,6 +29,7 @@ const eq = (name, got, want) => check(name, JSON.stringify(got) === JSON.stringi
 /* ============================================================ the timeline */
 
 const V = await load('src/videoPrompt.js');
+const P0 = await load('src/pictureTools.js');
 const three = '[0s-2s] A puppy sleeps on a sunlit floor.\n[2s-5s] It wakes and stretches.\n[5s-8s] It trots to the door.';
 
 eq('segments are read with their text', V.timelineOf(three).map(s => [s.start, s.end]), [[0, 2], [2, 5], [5, 8]]);
@@ -43,19 +44,81 @@ eq('a first segment that starts late starts at zero', V.normalizeTimeline('[1s-3
 eq('dashes and spacing are forgiven', V.timelineOf('[0 - 2s] a [2s–5s] b').length, 2);
 eq('a paragraph becomes one segment over the whole clip',
   V.normalizeTimeline('A cat walks across a sunny room.', 5), '[0s-5s] A cat walks across a sunny room.');
-eq('lengths are held to what H3 makes', [V.clampSeconds(2), V.clampSeconds(15.4), V.clampSeconds(60), V.clampSeconds('x')], [5, 15, 20, null]);
+/* Five seconds at the least, and ten minutes at the most -- past one pass a clip
+   is rendered as segments joined at their keyframes, so the ceiling is what
+   somebody will wait for rather than what the model holds together. */
+eq('lengths are held to what will be rendered',
+  [V.clampSeconds(2), V.clampSeconds(15.4), V.clampSeconds(60), V.clampSeconds(600), V.clampSeconds('x')],
+  [5, 15, 60, 600, null]);
+
+/* And one pass is five to fifteen seconds, whatever was asked for. */
+eq('a short clip is one pass', V.segmentPlan(10).count, 1);
+eq('a minute is six ten-second segments', V.segmentPlan(60), { count: 6, seconds: 10, total: 60 });
+eq('and they are equal, not four full ones and a stub',
+  V.segmentPlan(25), { count: 3, seconds: 8.33, total: 25 });
 
 check('the guide teaches the format', /\[0s-2s\]/.test(V.H3_GUIDE) && /duration/.test(V.H3_GUIDE));
 check('and the sound through what is seen', /Imply the sound/i.test(V.H3_GUIDE));
 check('it is sent for a question about video', V.asksForVideo('이 그림을 영상으로 만들어줘') && V.asksForVideo('animate this'));
 check('and not for anything else', !V.asksForVideo('귀여운 여자아이 그려줘'));
+/* Reported: "이 캐릭터를 사용하여 2분 짜리 MV를 만들어줘" matched none of the
+   words, so the guide was not sent, and the model answered from its own guess
+   that 15 seconds was the most it could make -- and made nothing. */
+check('a music video by its short names is a video', ['2분 짜리 MV를 만들어줘', '뮤비 만들어줘', 'AMV 느낌으로'].every(V.asksForVideo));
+check('  without catching words that merely contain the letters', !V.asksForVideo('mvp 선수 그려줘'));
+check('the guide says a long clip is one call the app joins, not something to refuse',
+  /Any length up to 600s \(10 minutes\) is ONE call/.test(V.H3_GUIDE) && /never tell them you can only make 15 seconds/.test(V.H3_GUIDE));
+check('  and the tag and the native tool both allow ten minutes',
+  /duration="5-600"/.test(read('src/App.jsx')) && /maximum: 600,/.test(read('src/tools.js')));
 
 const app = read('src/App.jsx');
 check('only when the question is about video', /const videoGuide = asksForVideo\(thisTurn\[0\]\?\.content\) \? `\\n\\n\$\{H3_GUIDE\}` : '';/.test(app));
 check('on both protocols', (app.match(/\$\{videoGuide\}/g) || []).length === 2);
-check('the length comes from the model, else its timeline, else the Studio',
-  /clampSeconds\(opts\.duration\)\s*\n\s*\?\? clampSeconds\(durationFromTimeline\(rawPrompt\)\)\s*\n\s*\?\? clampSeconds\(settings\.duration\)/.test(app));
+check('five seconds unless they named a length, then the model\'s, else its timeline',
+  /const duration = songSeconds\s*\n\s*\?\? \(opts\.lengthAsked\s*\n\s*\? \(clampSeconds\(opts\.duration\)\s*\n\s*\?\? clampSeconds\(durationFromTimeline\(rawPrompt\)\)\s*\n\s*\?\? VIDEO_SECONDS\.fallback\)\s*\n\s*: VIDEO_SECONDS\.fallback\);/.test(app));
+// Set to a song, the song decides.
+check('  and a clip set to a song is as long as the song', /const songSeconds = song \? clampSeconds\(song\.seconds\) : null;/.test(app));
+check('whether they did is read from their words', /lengthAsked: namesLength\(thisTurn\[0\]\?\.content\)/.test(app));
 check('and the timeline is made to fit it before it is sent', /const prompt = normalizeTimeline\(rawPrompt, duration\);/.test(app));
+/* The area follows a *segment's* length, not the whole clip's: sizing a
+   minute as one pass would draw six ten-second segments at 512x512 for no
+   reason at all. */
+check('a longer clip is drawn at a smaller area',
+  /: segmentPlan\(duration\);/.test(app)
+  && /videoArea\(workflowArea\('minimax-h3', settings\), plan\.seconds\)/.test(app));
+
+/* And a long one is bounded by system memory as well as by the card. Every
+   segment is held as decoded frames until they are joined, and the join copies
+   all of them: a minute at 1088x1088 is forty gigabytes of RAM, which on a
+   62GB machine is not an error -- it is the computer stopping for ten minutes
+   while it pages. */
+check('  and by what it will hold in memory',
+  /Math\.min\([\s\S]{0,400}?videoArea\(/.test(app) && /frameBudgetArea\(plan\.seconds\)/.test(app));
+eq('a minute is held to about eight gigabytes',
+  Math.round(V.frameMemory(V.frameBudgetArea(60), 60) / 1e9), 8);
+eq('  where a minute at full size would have been forty',
+  Math.round(V.frameMemory(1088 * 1088, 60) / 1e9), 41);
+check('  and a short clip is not cut at all',
+  V.frameBudgetArea(5) > 1088 * 1088);
+check('even when nothing chose its shape', /if \(!size && duration > VIDEO_SECONDS\.fallback\) \{/.test(app));
+
+/* ======================================================= length and size */
+
+for (const said of ['10초짜리 영상 만들어줘', '1분 영상', '15 seconds of rain', 'a 10-second clip', 'make it 8s', '좀 길게 만들어줘', 'a longer video']) {
+  check(`a length is named: ${said}`, V.namesLength(said));
+}
+for (const said of ['이 그림을 영상으로 만들어줘', 'animate this', '고양이 2마리가 뛰는 영상', '16:9 영상으로', '']) {
+  check(`no length is named: ${said || '(nothing)'}`, !V.namesLength(said));
+}
+{
+  const full = 1088 * 1088;
+  eq('five seconds keeps the full size', V.videoArea(full, 5), full);
+  eq('ten seconds, half the pixels', V.videoArea(full, 10), Math.round(full / 2));
+  eq('twenty is held at 512x512 at the least', V.videoArea(full, 20), Math.max(Math.round(full / 4), 512 * 512));
+  eq('a small Studio size is not made larger', V.videoArea(400 * 400, 20), 400 * 400);
+  const ten = P0.sizeForAspect({ w: 1, h: 1 }, V.videoArea(full, 10), 32);
+  eq('1088x1088 at ten seconds is 768x768', ten, { width: 768, height: 768 });
+}
 
 const T = await load('src/tools.js');
 const video = T.TOOL_SCHEMAS.find(s => s.function.name === 'generate_video').function.parameters.properties;
@@ -106,7 +169,14 @@ check('and the model is told when to use it', /const shapeAdvice = /.test(app) &
 
 /* ============================================================ the gallery */
 
-check('a film in the gallery opens in the viewer', /type: item\.video \? 'video' : 'image',/.test(app));
+{
+  // The Studio's viewer now, which plays films and has its own download.
+  const gallery = fs.readFileSync(path.join(ROOT, 'src/PictureGallery.jsx'), 'utf8');
+  const viewer = fs.readFileSync(path.join(ROOT, 'src/StudioLightbox.jsx'), 'utf8');
+  check('a film in the gallery opens in the viewer',
+    /<StudioLightbox/.test(gallery) && /video: item\.video,/.test(gallery) && /item\.video \? \(\s*\n\s*<video/.test(viewer)
+    && /onDownload=\{n => onDownload\(items\[n\]\)\}/.test(gallery));
+}
 check('which plays it', /viewingAttachment\.type === 'video' \? \(\s*\n\s*<video src=\{viewingAttachment\.preview\} controls autoPlay/.test(app));
 check('and still offers the download', /viewingAttachment\.type === 'video' && \(\s*\n\s*<button[\s\S]{0,200}downloadPicture/.test(app));
 check('rather than downloading on a press', !/item\.video\s*\n?\s*\? downloadPicture\(item\)/.test(app));

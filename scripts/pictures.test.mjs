@@ -122,7 +122,11 @@ const info = (extra = {}) => ({
   eq('and come back as text', O.textsOf({ outputs: { 2: { tags: ['1girl, solo'] }, 9: { images: [{}] } } }), ['1girl, solo']);
 }
 
-check('the op route runs all three', /job\.op === 'rmbg'[\s\S]{0,200}job\.op === 'upscale'[\s\S]{0,300}job\.op === 'tag'/.test(studio));
+/* Four now: the shadow lift joined them. Checked as membership rather than
+   as a run of characters, so adding a fifth does not fail the other four. */
+for (const op of ['rmbg', 'deshadow', 'upscale', 'tag']) {
+  check(`the op route runs ${op}`, studio.includes(`job.op === '${op}'`));
+}
 check('with the chat model off the card first', /route\('\/studio\/op'[\s\S]{0,2600}await vram\.releaseLlm\(\)/.test(studio));
 check('and a job that produced only text is finished', /if \(outputs\.length > 0 \|\| texts\.length > 0\)/.test(studio));
 
@@ -236,8 +240,12 @@ check('one after another, not as one batch', /for \(let i = 0; i < total; i \+= 
 // The chat's workflow, from the Studio's setting.
 check('the chat reads which workflow draws', /const chatImageModel = \(style\) => \{[\s\S]{0,300}CHAT_PICTURE_KEY/.test(app));
 check('and asks Anima for tags and a sentence', /model === 'anima-base' \? \{ shapeTags: true \} : \{\}/.test(app));
-check('and tells the model which way to write the prompt', /const promptAdvice = pictureModel === 'anima-base'/.test(app)
+check('and tells the model which way to write the prompt', /const drawAdvice = pictureModel === 'anima-base'/.test(app)
   && /\$\{promptAdvice\}/.test(app));
+/* Which way to write it, then what has to be in it, then who to put in it when
+   they did not say. All three travel together to both prompt shapes. */
+check('  along with what the prompt must contain',
+  /const promptAdvice = `\$\{drawAdvice\}\$\{lookAdvice\}\$\{cueAdvice\}`;/.test(app));
 const S2 = await load('src/studioSettings.js');
 eq('the setting has three values', S2.CHAT_PICTURE_MODELS, ['auto', 'anima-base', 'krea2-turbo']);
 const panel = read('src/StudioPanel.jsx');
@@ -248,7 +256,7 @@ check('a painted area rides on the question', /tempUserMessage\.paint = paint;/.
 check('the model is told on the wire, not in the transcript',
   /tempUserMessage\.paint = paint;\s*\n\s*finalInputText \+= /.test(app));
 check('and the executor uses that picture and that mask', /const paint = thisTurn\[0\]\?\.paint \|\| null;/.test(app)
-  && /paint \? \{ mask: paint\.mask, maskGrow: 12 \} : \{\}/.test(app));
+  && /paint \? \{ mask: paint\.mask, maskGrow: grow \} : \{\}/.test(app));
 check('the editor sends it through the chat', /pendingPaintRef\.current = \{ mask, target: target\.filename \|\| '' \};/.test(app));
 const editor = read('src/MaskEditor.jsx');
 check('the mask is built at the picture\'s own size', /canvas\.width = width;\s*\n\s*canvas\.height = height;/.test(editor));
@@ -275,7 +283,7 @@ const gallery = read('src/PictureGallery.jsx');
 check('gallery cards are behind the same glass', /<Veil verdict=\{judged\} level=\{level\} revealKey=\{revealKey\}/.test(gallery));
 check('judged from the picture, the prompt, or the Studio\'s verdict',
   /useVerdict\(\{[\s\S]{0,200}prompt: item\.prompt,\s*\n\s*known: item\.job\?\.safety\?\.verdict,/.test(gallery));
-check('a film by its prompt, as in the Studio', /item\.video \? \(asked \|\| 'safe'\) : verdict/.test(gallery));
+check('a film by its frames and its prompt, as in the Studio', /item\.video \? \(filmVerdict \|\| asked \|\| 'safe'\) : verdict/.test(gallery));
 check('revealed in the chat is revealed here', /item\.source === 'studio' \? item\.full : cacheKey\(item\.full\)/.test(gallery));
 /* And in the chat the glass is the picture's size: stretched to the column --
    as wide as the row of actions under the picture -- its line sat 19px right
@@ -291,10 +299,54 @@ const G = await load('src/galleryItems.js');
   ] }];
   const items = G.chatPictures(sessions);
   eq('every chat picture, with the way back to it', [items.length, items[0].sessionId, items[0].index, items[0].prompt], [1, 's', 1, 'a cat']);
+  eq('and which of the message\'s pictures it is', items[0].n, 0);
+  const drawn = G.chatPictures([{ id: 's', messages: [{ role: 'assistant', generated: [
+    { dataUrl: 'data:image/png;base64,AA', prompt: 'x' },
+    { dataUrl: 'data:image/png;base64,BB', prompt: 'y', model: 'anima-base', seed: 7 },
+  ] }] }]);
+  eq('with what it was drawn with, for the viewer', [drawn[1].n, drawn[1].model, drawn[1].seed], [1, 'anima-base', 7]);
+
+  /* What an upscale or an edit was made from: the original in the chat when
+     it is still there, ComfyUI's copy when it is not. Kept by name, not as a
+     second copy of the bytes. */
+  const original = { dataUrl: 'data:image/png;base64,OR', filename: 'a_00001_.png', prompt: 'x' };
+  const upscaled = { dataUrl: 'data:image/png;base64,UP', filename: 'b_00001_.png', op: 'upscale', before: { filename: 'a_00001_.png', input: 'upscale-1.png' } };
+  eq('the original, found in the conversation', G.beforeUrlOf(upscaled, [original, upscaled]), original.dataUrl);
+  eq('ComfyUI\'s copy when it has been deleted from it', G.beforeUrlOf(upscaled, [upscaled]), '/studio/view?filename=upscale-1.png&type=input');
+  eq('a picture drawn from nothing has nothing to compare with', G.beforeUrlOf(original, [original]), '');
+  eq('a Studio job keeps a URL already', G.beforeUrlOf({ before: '/studio/view?filename=r.png&type=input' }), '/studio/view?filename=r.png&type=input');
+  const both = G.chatPictures([{ id: 's', messages: [{ role: 'assistant', generated: [original] }, { role: 'assistant', generated: [upscaled] }] }]);
+  eq('a chat item carries it to the viewer', [both[0].before, both[1].before], [undefined, original.dataUrl]);
+  const studioBoth = G.studioPictures([{ id: 'u', state: 'done', prompt: 'x', before: '/studio/view?filename=a.png', outputs: [{ url: '/studio/view?filename=b.png', media: 'image' }] }]);
+  eq('and so does a Studio one', studioBoth[0].before, '/studio/view?filename=a.png');
   const jobs = [{ id: 'j', state: 'done', prompt: 'a dog', finishedAt: 9, outputs: [{ url: '/studio/view?filename=a.png', media: 'image' }] },
     { id: 'k', state: 'running', outputs: [] }];
   const studioItems = G.studioPictures(jobs, (u) => `${u}&preview=webp;85`);
   eq('and every finished Studio picture, as the lighter copy', [studioItems.length, studioItems[0].src.endsWith('webp;85')], [1, true]);
+
+  /* A job kept before the server dropped previews: the saved picture, the
+     same picture again in temp, and the one before it was enlarged -- the two
+     temp files gone once ComfyUI restarted, leaving cards with only a prompt. */
+  const view = (filename, subfolder, type) => ({
+    url: `/studio/view?${new URLSearchParams({ filename, subfolder, type })}`, filename, media: 'image',
+  });
+  const kept = [{ id: 'old', state: 'done', prompt: '1girl', finishedAt: 3, outputs: [
+    view('PB-_temp_abcde_00001_.png', 'PreviewBridge', 'temp'),
+    view('ComfyUI_temp_fghij_00001_.png', '', 'temp'),
+    view('mtwofw5j_00001_.png', 'webui', 'output'),
+  ] }];
+  eq('one picture is one card in the gallery', G.studioPictures(kept).map(i => i.filename), ['mtwofw5j_00001_.png']);
+  eq('told apart by the URL when the stored output has no type',
+    G.keptOutputs(kept[0].outputs).length, 1);
+  eq('with a type, the same', G.keptOutputs([{ type: 'temp', media: 'image' }, { type: 'output', media: 'image' }]).map(o => o.type), ['output']);
+  eq('a job that only previewed keeps its previews', G.keptOutputs([{ type: 'temp', media: 'image' }]).length, 1);
+  eq('nothing is nothing', G.keptOutputs(undefined), []);
+
+  const panel = fs.readFileSync(path.join(ROOT, 'src/StudioPanel.jsx'), 'utf8');
+  check('the Studio cleans the history it loads', /outputs: keptOutputs\(job\.outputs\)/.test(panel));
+  check('and what arrives from the server', /outputs: data\.outputs \? keptOutputs\(data\.outputs\) : job\.outputs/.test(panel));
+  const studioSrc = fs.readFileSync(path.join(ROOT, 'server/studio.js'), 'utf8');
+  check('a temp file is not cached as if it were for ever', /query\.get\('type'\) === 'temp'\s*\n\s*\? 'no-cache'/.test(studioSrc));
 }
 
 /* ------------------------------------------------- what a result was made with */
@@ -328,6 +380,18 @@ eq('but the seed it kept outranks the one in the graph', valueOf('seed', older),
 eq('and its workflow is named', valueOf('workflow', older), 'Krea 2 Turbo');
 eq('a video says how long it is', valueOf('duration', PS.settingsRows({ model: 'minimax-h3', duration: 6 })), '6s');
 eq('an operation carries what it did', PS.settingsRows({ op: 'upscale', factor: 2 }).find(r => r.key === 'op')?.factor, 2);
+/* An edit that came back unnatural: whether the inpainting guide was in the
+   graph is the first thing to know about it, so the result says so. */
+{
+  const guided = PS.settingsRows({
+    model: 'anima-base',
+    settings: { region: 'mask', guide: 'kohya/anima-lllite-inpainting-v2.safetensors' },
+  });
+  eq('an edit says which inpainting guide drew it', valueOf('guide', guided), 'anima-lllite-inpainting-v2.safetensors');
+  eq('  after the part it redrew', guided.map(r => r.key).filter(k => k === 'region' || k === 'guide'), ['region', 'guide']);
+  check('and an edit without one says nothing',
+    !PS.settingsRows({ model: 'anima-base', settings: { region: 'mask' } }).some(r => r.key === 'guide'));
+}
 eq('copied as one line per setting',
   PS.settingsText([{ key: 'seed', value: '7' }, { key: 'steps', value: '28' }], r => r.key), 'seed: 7\nsteps: 28');
 

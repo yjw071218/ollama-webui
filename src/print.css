@@ -1,0 +1,172 @@
+/**
+ * The conversation, on paper.
+ *
+ * There was no print stylesheet at all, so Ctrl+P printed the application: the
+ * sidebar down the left, the composer across the bottom of every page, the
+ * header, the toolbars, a scroll container clipped to one screen's worth of
+ * chat -- and, in a dark theme, a great deal of toner. What people want when
+ * they print a chat is the chat.
+ *
+ * It is also the whole of "export to PDF" on every platform, because every
+ * browser's print dialog can save to one. There is an HTML export already
+ * (src/htmlExport.js) for a file to keep; this is for the copy somebody wants
+ * to hand to a person.
+ *
+ * Three rules make it work, and all three are easy to get wrong:
+ *
+ *   * The app is a column of fixed-height panes with the chat scrolling inside
+ *     one of them. On paper there is no scrolling, so that pane has to stop
+ *     being a pane: height auto, overflow visible, all the way up the chain.
+ *     Without this you get page one and nothing else.
+ *   * Dark mode is a screen idea. The colours are forced to ink on white here
+ *     rather than left to `print-color-adjust`, which a browser may honour or
+ *     ignore depending on the setting somebody chose months ago.
+ *   * A link is only a link while it can be clicked. Printed, its address has
+ *     to be written out or it is a coloured word that leads nowhere.
+ */
+
+@media print {
+  /* ---- ink on paper, whatever the theme on screen ---- */
+  :root,
+  :root[data-theme="dark"],
+  :root[data-theme="light"] {
+    --bg-primary: #fff;
+    --bg-secondary: #fff;
+    --bg-tertiary: #fff;
+    --surface-raised: #fff;
+    --surface-sunken: #fff;
+    --surface-overlay: #fff;
+    --text-primary: #000;
+    --text-secondary: #222;
+    --text-muted: #555;
+    --border-color: #bbb;
+    --hairline: #ddd;
+    --hairline-strong: #bbb;
+    --shadow-raised: none;
+    --shadow-lifted: none;
+    --shadow-overlay: none;
+  }
+
+  html, body {
+    background: #fff !important;
+    color: #000 !important;
+    /* The page is as long as the conversation. */
+    height: auto !important;
+    overflow: visible !important;
+  }
+
+  @page { margin: 14mm 12mm; }
+
+  /* ---- the application around the conversation ---- */
+  .claude-sidebar,
+  .sidebar-overlay,
+  .main-header,
+  .input-container,
+  .composer-stack,
+  .toast-stack,
+  .popover,
+  .dropdown-menu,
+  .scroll-nudge,
+  .search-nav,
+  .studio-place,
+  .artifact-panel,
+  .settings-overlay,
+  .attachment-viewer,
+  .message-actions,
+  .variant-pager,
+  .starter-card,
+  .token-meter,
+  .console-dock,
+  .preview-split-console {
+    display: none !important;
+  }
+
+  /* ---- the panes, unpaned ---- */
+  .claude-app,
+  .claude-main,
+  .messages-scroll-area,
+  .messages-wrapper {
+    display: block !important;
+    position: static !important;
+    height: auto !important;
+    max-height: none !important;
+    min-height: 0 !important;
+    overflow: visible !important;
+    padding-inline: 0 !important;
+    margin: 0 !important;
+    width: auto !important;
+    max-width: none !important;
+    background: #fff !important;
+  }
+
+  /* ---- one exchange, not split across a page break where it can be helped ---- */
+  .message-row {
+    break-inside: avoid;
+    page-break-inside: avoid;
+    max-width: none !important;
+    margin: 0 0 10pt !important;
+    padding: 0 !important;
+    background: none !important;
+  }
+  .message-row.user .user-text {
+    /* The question, marked as one without a coloured bubble that costs a
+       cartridge: a rule down the side says the same thing in one point. */
+    border-left: 3px solid #888;
+    padding: 2pt 0 2pt 8pt !important;
+    background: none !important;
+    font-weight: 600;
+  }
+
+  .markdown-body,
+  .user-text {
+    color: #000 !important;
+    font-size: 10.5pt;
+    line-height: 1.5;
+  }
+
+  /* Code keeps its shape -- it is the one thing whose line breaks are meaning
+     rather than typesetting -- but not its dark block. */
+  .markdown-body pre,
+  .markdown-body code {
+    background: #f4f4f4 !important;
+    color: #000 !important;
+    border: 1px solid #ddd !important;
+  }
+  .markdown-body pre {
+    white-space: pre-wrap !important;
+    word-break: break-word;
+    break-inside: avoid;
+  }
+
+  /* Pictures are the point of half these conversations. Held to the page
+     rather than allowed to run off the bottom of it. */
+  .markdown-body img,
+  .message-row img,
+  .generated-image img {
+    max-width: 100% !important;
+    max-height: 180mm !important;
+    break-inside: avoid;
+  }
+  /* A video cannot be printed; what it is can at least be said. */
+  video { display: none !important; }
+
+  /* Reasoning and tool traces are collapsed on screen. Anything left open is
+     scaffolding rather than the answer, and it is not what somebody is
+     printing. */
+  .think-block,
+  .tool-call-block,
+  .tool-result-block,
+  .chain-trace,
+  .research-trace {
+    display: none !important;
+  }
+
+  /* ---- a link is its address once it is on paper ---- */
+  .markdown-body a { color: #000 !important; text-decoration: underline; }
+  .markdown-body a[href^="http"]::after {
+    content: " (" attr(href) ")";
+    font-size: 8.5pt;
+    color: #555;
+    word-break: break-all;
+  }
+}

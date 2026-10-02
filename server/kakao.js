@@ -49,6 +49,8 @@ const sweepStates = () => {
     if (entry.expires <= now) pendingStates.delete(value);
   }
 };
+const stateSweepTimer = setInterval(sweepStates, STATE_TTL_MS);
+stateSweepTimer.unref?.();
 
 /**
  * A state, and whatever the callback will need to know.

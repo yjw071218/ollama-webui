@@ -2107,13 +2107,21 @@ img.user-avatar { object-fit: cover; padding: 0; }
 .profile-menu[data-state='closed'] { animation: modal-out var(--dur-fast) var(--ease-in-out) forwards; }
 
 /* ==== Message timestamps ==== */
+/* Out of the row's flex flow: as a flex item it took a column of its own
+   (plus the row's gap) beside the bubble, squeezing it on a phone. It sits
+   under the message instead, in the space between messages. */
 .message-time {
+  position: absolute;
+  bottom: -1.15rem;
+  inset-inline-start: calc(28px + 1.25rem);
   font-size: 0.68rem;
+  line-height: 1;
   color: var(--text-muted);
-  margin-top: 0.3rem;
   font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  pointer-events: none;
 }
-.message-row.user .message-time { text-align: end; }
+.message-row.user .message-time { inset-inline-start: auto; inset-inline-end: 0; }
 
 /* =========================================================
    System monitor
@@ -3188,8 +3196,12 @@ img.user-avatar { object-fit: cover; padding: 0; }
   .main-header { padding: 0.5rem 0.6rem; gap: 0.4rem; }
   .main-header .sidebar-search-inner { width: 100% !important; }
 
-  .message-row { padding-inline: 0.75rem; }
-  .message-content { max-width: 100%; }
+  .message-row { padding-inline: 0.5rem; gap: 0.6rem; }
+  .message-content { max-width: 100%; min-width: 0; }
+  .message-row .message-time { inset-inline-start: calc(0.5rem + 28px + 0.6rem); }
+  .message-row.user .message-time { inset-inline-start: auto; inset-inline-end: 0.5rem; }
+  /* The time must not sit under the opened action bar. */
+  .message-row.actions-open .message-time { display: none; }
   /* The gesture bar sits over the bottom of the screen, so the composer needs
      to be held off it -- except when the keyboard is up, which covers that
      area itself and would otherwise leave a strip of dead space above it. */
@@ -9025,3 +9037,619 @@ body, .claude-main { background: var(--surface-sunken); }
 @media (prefers-reduced-motion: reduce) {
   .canvas-panel { animation: none; }
 }
+
+/* =========================================================
+   The subscription-limit badge beside the model picker
+   =========================================================
+   (src/CliLimits.jsx) It sizes to what it says. It used to borrow the model
+   picker's class, and on a phone that class shares the header row out
+   equally -- so the badge took half the picker's width, and the model menu,
+   which is as wide as its button there, came out cramped. */
+.cli-limit-badge {
+  position: relative;
+  flex: 0 0 auto;
+  min-width: 0;
+}
+.cli-limit-badge .dropdown-trigger {
+  gap: 0.35rem;
+  border: 1px solid var(--border-color);
+  white-space: nowrap;
+}
+.cli-limit-text { font-size: 0.8rem; white-space: nowrap; }
+
+@media (max-width: 860px) {
+  /* Just the gauge and the share left; the window's name is in the panel. */
+  .main-header .cli-limit-badge .dropdown-trigger {
+    width: auto;
+    justify-content: center;
+    padding-inline: 0.45rem;
+  }
+  .cli-limit-window { display: none; }
+}
+
+/* Anchor the expanded model menu to the header, not its compressed trigger.
+   The quota badge may share the row without shrinking the list itself. */
+@container mainpane (max-width: 860px) {
+  .main-header { position: relative; }
+  .main-header .model-selector-container { position: static; }
+  .main-header .model-selector-container > .dropdown-menu {
+    left: 8px;
+    right: 8px;
+    width: auto;
+    min-width: 0;
+    max-width: calc(100% - 16px);
+    max-height: min(60dvh, 440px);
+    overscroll-behavior: contain;
+  }
+  .main-header .dropdown-item { gap: 8px; min-height: 44px; }
+  .main-header .dropdown-item > span:first-child { min-width: 0; overflow-wrap: anywhere; }
+  .main-header .dropdown-item > :not(:first-child) { flex-shrink: 0; }
+  .main-header .cli-limit-badge { max-width: 100px; flex: 0 0 auto; }
+  .main-header .cli-limit-text { overflow: hidden; text-overflow: ellipsis; max-width: 70px; }
+}
+
+/* =========================================================
+   What the tools changed on disk (src/FileChanges.jsx)
+   =========================================================
+   Out from under the folded tool steps, above the answer: one row per file,
+   the diff a click away. Colours from the palette the rest uses. */
+.file-changes {
+  margin: 0.5rem 0 0.75rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  overflow: hidden;
+  font-size: 0.8rem;
+}
+.file-changes-head {
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  padding: 0.45rem 0.7rem;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-color);
+}
+.file-changes-count { margin-inline-start: auto; color: var(--text-muted); }
+.file-change + .file-change { border-top: 1px solid var(--border-color); }
+.file-change-row {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+  width: 100%;
+  min-width: 0;
+  padding: 0.4rem 0.7rem;
+  background: transparent;
+  border: none;
+  color: var(--text-primary);
+  font: inherit;
+  text-align: start;
+  cursor: pointer;
+}
+.file-change-row:hover { background: var(--hover-bg); }
+.file-change-chevron { flex-shrink: 0; transition: transform var(--dur-fast) var(--ease-out); transform: rotate(-90deg); }
+.file-change.is-open .file-change-chevron { transform: none; }
+.file-change-name { font-weight: 600; flex-shrink: 0; }
+.file-change-path {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--text-muted);
+  font-size: 0.72rem;
+}
+.file-change-add { color: var(--success); font-variant-numeric: tabular-nums; }
+.file-change-del { color: var(--danger); font-variant-numeric: tabular-nums; }
+.file-change-diff {
+  margin: 0;
+  max-height: 420px;
+  overflow: auto;
+  padding: 0.4rem 0;
+  background: var(--surface-sunken);
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 0.74rem;
+  line-height: 1.45;
+}
+.diff-line { display: block; padding-inline: 0.7rem; white-space: pre; }
+.diff-add { background: color-mix(in srgb, var(--success) 14%, transparent); }
+.diff-del { background: color-mix(in srgb, var(--danger) 14%, transparent); }
+.diff-hunk { color: var(--text-muted); }
+.diff-file { color: var(--text-muted); font-weight: 600; }
+
+/* =========================================================
+   A coding CLI at work (src/AgentActivity.jsx)
+   =========================================================
+   Its steps as a timeline inside the thinking, and the commands it is
+   running as small live terminals under it. */
+.agent-activity { display: grid; gap: 0.4rem; font-size: 0.8rem; }
+.agent-summary {
+  display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem;
+  color: var(--text-secondary); font-size: 0.75rem;
+}
+.agent-chip {
+  display: inline-flex; align-items: center; gap: 0.2rem;
+  padding: 0 0.4rem; border-radius: 999px;
+  border: 1px solid var(--border-color); color: var(--text-muted);
+  font-variant-numeric: tabular-nums;
+}
+.agent-chip.is-failed { color: var(--danger); border-color: color-mix(in srgb, var(--danger) 40%, transparent); }
+.agent-chip.is-running { color: var(--warning, #d97706); border-color: color-mix(in srgb, var(--warning, #d97706) 40%, transparent); }
+.agent-prose { color: var(--text-secondary); }
+.agent-prose > :first-child { margin-top: 0; }
+.agent-prose > :last-child { margin-bottom: 0; }
+.agent-steps { list-style: none; margin: 0; padding: 0; position: relative; }
+/* The line the steps hang from. */
+.agent-steps::before {
+  content: ''; position: absolute; inset-block: 0.7rem; inset-inline-start: 0.62rem;
+  border-inline-start: 1px solid var(--border-color);
+}
+.agent-step { display: flex; gap: 0.5rem; align-items: flex-start; position: relative; padding: 0.1rem 0; }
+.agent-step-dot {
+  flex-shrink: 0; width: 1.25rem; height: 1.25rem; border-radius: 50%;
+  display: inline-flex; align-items: center; justify-content: center;
+  background: var(--surface-sunken); border: 1px solid var(--border-color);
+  color: var(--text-muted); position: relative; z-index: 1;
+}
+.agent-step.kind-edit .agent-step-dot { color: var(--success); }
+.agent-step.kind-command .agent-step-dot { color: var(--text-primary); }
+.agent-step.status-running .agent-step-dot { border-color: var(--warning, #d97706); color: var(--warning, #d97706); animation: agent-pulse 1.4s ease-in-out infinite; }
+.agent-step.status-waiting .agent-step-dot { border-color: var(--warning, #d97706); color: var(--warning, #d97706); }
+.agent-step.status-failed .agent-step-dot,
+.agent-step.status-timedOut .agent-step-dot,
+.agent-step.status-declined .agent-step-dot { border-color: var(--danger); color: var(--danger); }
+@keyframes agent-pulse {
+  0%, 100% { box-shadow: 0 0 0 0 color-mix(in srgb, var(--warning, #d97706) 45%, transparent); }
+  50% { box-shadow: 0 0 0 4px transparent; }
+}
+@media (prefers-reduced-motion: reduce) { .agent-step.status-running .agent-step-dot { animation: none; } }
+.agent-step-main { flex: 1 1 auto; min-width: 0; }
+.agent-step-row {
+  display: flex; align-items: center; gap: 0.4rem; width: 100%; min-width: 0;
+  min-height: 1.25rem; padding: 0.05rem 0.3rem; margin-inline-start: -0.3rem;
+  background: transparent; border: none; border-radius: var(--radius-md);
+  color: var(--text-primary); font: inherit; text-align: start; cursor: pointer;
+}
+.agent-step-row:disabled { cursor: default; color: var(--text-primary); opacity: 1; }
+.agent-step-row:not(:disabled):hover { background: var(--hover-bg); }
+.agent-step-verb { font-weight: 600; flex-shrink: 0; }
+.agent-step-tool { color: var(--text-muted); flex-shrink: 0; font-size: 0.74rem; }
+.agent-step-target {
+  flex: 0 1 auto; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.74rem; color: var(--text-secondary);
+  background: none; padding: 0;
+}
+.agent-badge {
+  display: inline-flex; align-items: center; gap: 0.2rem; flex-shrink: 0; margin-inline-start: auto;
+  font-size: 0.7rem; font-variant-numeric: tabular-nums; color: var(--success);
+}
+.agent-badge.is-failed { color: var(--danger); }
+.agent-badge.is-running, .agent-badge.is-waiting { color: var(--warning, #d97706); }
+.agent-step-chevron { flex-shrink: 0; color: var(--text-muted); transform: rotate(-90deg); transition: transform var(--dur-fast) var(--ease-out); }
+.agent-step-chevron.is-open { transform: none; }
+.agent-step-output {
+  margin: 0.25rem 0 0.2rem; max-height: 260px; overflow: auto;
+  padding: 0.45rem 0.6rem; border-radius: var(--radius-md);
+  background: var(--surface-sunken); border: 1px solid var(--border-color);
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.72rem; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word; color: var(--text-secondary);
+}
+
+.live-commands { display: grid; gap: 0.5rem; margin: 0.5rem 0 0.75rem; }
+.live-command {
+  border: 1px solid var(--border-color); border-radius: var(--radius-md);
+  padding: 0.4rem 0.6rem 0.45rem; font-size: 0.8rem;
+  border-inline-start: 3px solid var(--warning, #d97706);
+}
+.live-command.status-done { border-inline-start-color: var(--success); }
+.live-command.status-failed, .live-command.status-timedOut { border-inline-start-color: var(--danger); }
+.live-command-head { display: flex; align-items: center; gap: 0.5rem; min-width: 0; }
+.live-command-toggle {
+  display: flex; align-items: center; gap: 0.4rem; flex: 1 1 auto; min-width: 0;
+  background: transparent; border: none; padding: 0; color: var(--text-primary); font: inherit; cursor: pointer; text-align: start;
+}
+.live-command-line {
+  min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.76rem; background: none; padding: 0;
+}
+.live-command-meta { flex-shrink: 0; color: var(--text-muted); font-size: 0.72rem; font-variant-numeric: tabular-nums; }
+.live-command-stop { flex-shrink: 0; color: var(--danger); display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.72rem; padding: 0.1rem 0.4rem; }
+.live-command-cwd { color: var(--text-muted); font-size: 0.68rem; font-family: var(--font-mono, ui-monospace, monospace); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.live-command-open {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.25rem;
+  font-size: 0.72rem; padding: 0.1rem 0.4rem; color: var(--accent, #3b82f6); text-decoration: none;
+}
+.live-command-port { font-family: var(--font-mono, ui-monospace, monospace); color: var(--text-muted); }
+.live-command-serving { color: var(--success); animation: agent-pulse 1.8s ease-in-out infinite; border-radius: 50%; }
+.live-command .agent-badge { margin-inline-start: 0; }
+
+/* A terminal: the output of a step or a live command. */
+.term { margin: 0.25rem 0 0.2rem; border-radius: var(--radius-md); overflow: hidden; border: 1px solid var(--border-color); }
+.term-bar {
+  display: flex; align-items: center; gap: 0.35rem; padding: 0.2rem 0.45rem;
+  background: var(--surface-sunken); border-bottom: 1px solid var(--border-color); color: var(--text-muted);
+}
+.term-search {
+  flex: 1 1 auto; min-width: 0; font-size: 0.72rem; padding: 0.1rem 0.3rem;
+  background: transparent; border: none; color: var(--text-primary); outline: none;
+}
+.term-chip {
+  display: inline-flex; align-items: center; gap: 0.2rem; flex-shrink: 0;
+  font-size: 0.68rem; padding: 0 0.4rem; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border-color); background: transparent; color: var(--text-muted); text-decoration: none;
+}
+.term-chip.is-on { color: var(--danger); border-color: var(--danger); }
+.term-body {
+  margin: 0; max-height: 260px; overflow: auto; padding: 0.45rem 0.6rem;
+  background: #0d1117; color: #c9d1d9;
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.72rem; line-height: 1.45;
+  white-space: pre-wrap; word-break: break-word;
+}
+.live-command-output .term-body { max-height: 220px; }
+.term-empty { color: #8b949e; font-style: italic; }
+.term-line { display: block; }
+.term-line.tone-error { background: rgba(248, 81, 73, 0.14); color: #ffa198; }
+.term-line.tone-warn { color: #e3b341; }
+.term-line.tone-ok { color: #7ee787; }
+.ansi-bold { font-weight: 700; }
+.ansi-black { color: #6e7681; } .ansi-red { color: #ff7b72; } .ansi-green { color: #7ee787; }
+.ansi-yellow { color: #e3b341; } .ansi-blue { color: #79c0ff; } .ansi-magenta { color: #d2a8ff; }
+.ansi-cyan { color: #56d4dd; } .ansi-white { color: #f0f6fc; } .ansi-gray { color: #8b949e; }
+
+/* A step, opened: its arguments, result and output. */
+.agent-step-body { display: grid; gap: 0.3rem; margin-top: 0.2rem; }
+.agent-step-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
+.agent-step-json {
+  margin: 0.15rem 0 0; max-height: 220px; overflow: auto; padding: 0.4rem 0.55rem;
+  border-radius: var(--radius-md); background: var(--surface-sunken); border: 1px solid var(--border-color);
+  font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.7rem; white-space: pre-wrap; word-break: break-word;
+}
+.agent-step-error { color: var(--danger); font-size: 0.75rem; word-break: break-word; }
+.agent-step-has { flex-shrink: 0; color: var(--text-muted); }
+.agent-step-time {
+  flex-shrink: 0; display: inline-flex; align-items: center; gap: 0.15rem;
+  font-size: 0.68rem; color: var(--text-muted); font-variant-numeric: tabular-nums; margin-inline-start: auto;
+}
+.agent-step-time.is-slow { color: var(--warning, #d97706); }
+.agent-step-time + .agent-badge { margin-inline-start: 0.2rem; }
+
+/* An approval answered in the timeline. */
+.agent-approval {
+  margin: 0.3rem 0 0.2rem; padding: 0.5rem 0.6rem; display: grid; gap: 0.4rem;
+  border: 1px solid var(--warning, #d97706); border-radius: var(--radius-md);
+  background: color-mix(in srgb, var(--warning, #d97706) 7%, transparent);
+}
+.agent-approval.is-done { border-color: var(--border-color); background: none; color: var(--text-muted); font-size: 0.75rem; padding: 0.3rem 0.6rem; }
+.agent-approval-cwd { font-size: 0.72rem; color: var(--text-muted); }
+.agent-approval-detail {
+  margin: 0; max-height: 240px; overflow: auto; padding: 0.35rem 0; border-radius: var(--radius-md);
+  background: var(--surface-sunken); font-family: var(--font-mono, ui-monospace, monospace); font-size: 0.7rem;
+  white-space: pre-wrap; word-break: break-word; padding-inline: 0.5rem;
+}
+.agent-approval-detail.is-diff { padding-inline: 0; white-space: pre; }
+.agent-approval-actions { display: flex; gap: 0.35rem; flex-wrap: wrap; }
+.agent-approval-actions button { display: inline-flex; align-items: center; gap: 0.25rem; font-size: 0.75rem; }
+.agent-approval-actions .is-danger { color: var(--danger); }
+
+/* Changed files: undo and open-in-editor beside each row. */
+.file-change-line { display: flex; align-items: center; min-width: 0; }
+.file-change-line .file-change-row { flex: 1 1 auto; }
+.file-change-actions { display: inline-flex; align-items: center; gap: 0.1rem; padding-inline-end: 0.4rem; flex-shrink: 0; }
+.file-change-action { display: inline-flex; align-items: center; padding: 0.2rem 0.3rem; color: var(--text-muted); }
+.file-change-action:hover { color: var(--text-primary); }
+.file-change-undone { display: inline-flex; align-items: center; gap: 0.2rem; font-size: 0.72rem; color: var(--success); padding-inline: 0.3rem; }
+.file-change.is-reverted .file-change-name { text-decoration: line-through; color: var(--text-muted); }
+.file-change-error { color: var(--danger); font-size: 0.72rem; padding: 0 0.7rem 0.3rem; }
+.file-change-line .file-change-row { min-width: 0; }
+
+/* A change drawn right under the sentence that announced it: tied to it by
+   a coloured edge and a small gap above, a clear gap below before the next. */
+.file-changes.is-inline {
+  margin: 0.3rem 0 1rem;
+  border-inline-start: 3px solid var(--accent, #3b82f6);
+}
+.markdown-body .file-changes.is-inline pre { margin: 0; border-radius: 0; }
+
+/* On a phone: name and counts on one line, the path under them, the diff
+   scrolls sideways inside itself, and the buttons are big enough to tap. */
+@media (max-width: 860px) {
+  .file-changes { margin: 0.4rem 0 0.6rem; font-size: 0.78rem; }
+  .file-changes-head { padding: 0.4rem 0.55rem; }
+  .file-change-row {
+    display: grid;
+    grid-template-columns: auto minmax(0, 1fr) auto auto;
+    column-gap: 0.4rem; row-gap: 0.1rem;
+    padding: 0.45rem 0.25rem 0.45rem 0.55rem;
+  }
+  .file-change-chevron { grid-column: 1; grid-row: 1; }
+  .file-change-name { grid-column: 2; grid-row: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .file-change-add { grid-column: 3; grid-row: 1; }
+  .file-change-del { grid-column: 4; grid-row: 1; }
+  .file-change-path { grid-column: 2 / -1; grid-row: 2; font-size: 0.68rem; direction: rtl; text-align: left; unicode-bidi: plaintext; }
+  .file-change-actions { padding-inline-end: 0.25rem; }
+  .file-change-action { min-width: 34px; min-height: 34px; justify-content: center; }
+  .file-change-diff { max-height: 300px; font-size: 0.68rem; white-space: pre; overflow-x: auto; -webkit-overflow-scrolling: touch; }
+}
+
+/* Every running command, from anywhere (bottom left; approvals are bottom right). */
+.commands-dock { position: fixed; left: 16px; bottom: 16px; z-index: 2900; display: grid; gap: 8px; justify-items: start; }
+.commands-dock-pill {
+  display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.75rem;
+  border-radius: 999px; border: 1px solid var(--warning, #d97706);
+  background: var(--bg-secondary, #1e1e1e); color: var(--text-primary); font-size: 0.78rem; cursor: pointer;
+  box-shadow: 0 4px 16px rgba(0, 0, 0, 0.3);
+}
+.commands-dock-panel {
+  width: min(560px, calc(100vw - 32px)); max-height: min(70vh, 640px); display: flex; flex-direction: column;
+  background: var(--bg-secondary, #1e1e1e); border: 1px solid var(--border-color); border-radius: 10px;
+  box-shadow: 0 8px 28px rgba(0, 0, 0, 0.4);
+}
+.commands-dock-head {
+  display: flex; align-items: center; gap: 0.4rem; padding: 0.5rem 0.7rem;
+  border-bottom: 1px solid var(--border-color); font-size: 0.82rem;
+}
+.commands-dock-count { color: var(--text-muted); font-size: 0.74rem; margin-inline-start: auto; }
+.commands-dock-list { overflow: auto; padding: 0.6rem; display: grid; gap: 0.5rem; }
+@media (max-width: 640px) { .commands-dock { left: 8px; bottom: 72px; } }
+
+/* ---- what a walk through the home screen turned up ----
+
+   The sidebar grew a fourth place (roleplay) inside a three-column grid, so
+   the fourth tab dropped to a row of its own. Four columns, and a label too
+   long for its quarter shortens rather than wrapping. */
+.sidebar-places { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.sidebar-places button { min-width: 0; padding-inline: 0.3rem; }
+.sidebar-places button > span {
+  min-width: 0;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+}
+
+/* The running-commands pill is fixed to the bottom-left corner, which on a
+   desktop with the sidebar open is the account row: the avatar sat half
+   under the pill. It starts past the sidebar instead. */
+@media (min-width: 861px) {
+  html:has(.claude-sidebar.open) .commands-dock {
+    left: calc(var(--sidebar-width, 340px) + 16px);
+  }
+}
+/* On a phone the open sidebar is a drawer over everything; the pill floated on
+   top of it and clipped its account row. It comes back when the drawer closes. */
+@media (max-width: 860px) {
+  html:has(.claude-sidebar.open) .commands-dock { display: none; }
+}
+
+/* ---- second pass: every place, not just home ----
+
+   Moving the pill past the sidebar put it exactly where Studio keeps its
+   sticky footer (seed, count, generate), so in Studio it sat on the controls
+   instead. While that footer is on screen the pill rides above it. The
+   footer is one row on a desktop and three stacked rows on a phone.
+   Studio stays mounted once opened and is only [hidden] when you leave it,
+   so the rule looks for a footer in a Studio that is actually showing. */
+html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { bottom: 92px; }
+@media (max-width: 640px) {
+  html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { bottom: 184px; }
+}
+
+/* The pill is lifted above everything (z 2900) so it survives the reader and
+   the lightbox, which also lifted it above the command palette and settings:
+   on a phone it sat on the palette's own rows. While one of those dialogs is
+   open, the dialog is the page; the pill is back the moment it closes. */
+html:has(.cmd-overlay[data-state='open']) .commands-dock,
+html:has(.settings-overlay[data-state='open']) .commands-dock { visibility: hidden; }
+/* visibility is inherited only until a child sets its own: the pill's
+   spinning icon did, and stayed on screen over the palette by itself. And
+   data-state turns "open" a frame after mount, so it is not waited for:
+   while either dialog is in the page at all, the pill is out of it. */
+html:has(.cmd-overlay) .commands-dock,
+html:has(.settings-overlay) .commands-dock { display: none; }
+
+/* Touch targets measured at 390px: the composer's model button was 27px tall,
+   Studio's "from image"/"colour" chips 27x15, and every settings slider 16px
+   tall -- a slider you can see but have to aim at to grab. On a touch screen
+   or a phone-width window the hit areas grow; what is drawn does not, so no
+   row gets taller. Sliders are the exception: a taller range input still
+   draws its track in the middle, so the extra height is all grip. */
+@media (pointer: coarse), (max-width: 640px) {
+  .composer-model-trigger,
+  .studio-describe { position: relative; }
+  .composer-model-trigger::after,
+  .studio-describe::after {
+    content: '';
+    position: absolute;
+    inset: -8px -4px;
+  }
+  .settings-modal input[type='range'] { min-height: 32px; }
+}
+
+/* A toast's close button was a bare 13px glyph: a target smaller than the
+   thumb pressing it. The glyph stays small; the hit area does not. */
+.toast .toast-close {
+  min-width: 28px;
+  min-height: 28px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+
+/* ---- the running-commands dock, third pass ----
+
+   1. No sideways scrolling inside it. The list was a grid with an automatic
+      column, so the widest thing in it -- a long command, a row of "open"
+      links, a pre-formatted log line -- set the width of everything and the
+      panel scrolled left and right. One column that may shrink to nothing,
+      rows that wrap, and output that wraps instead of running off. */
+.commands-dock-list {
+  grid-template-columns: minmax(0, 1fr);
+  overflow-x: hidden;
+  overflow-y: auto;
+}
+.commands-dock-list .live-command { min-width: 0; }
+.commands-dock-list .live-command-head { flex-wrap: wrap; row-gap: 0.25rem; }
+.commands-dock-list .live-command-toggle { flex: 1 1 12rem; }
+.commands-dock-list .live-command-open { max-width: 100%; min-width: 0; overflow: hidden; }
+.commands-dock-list .live-command-port { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.commands-dock-list .term,
+.commands-dock-list .term-body { min-width: 0; max-width: 100%; }
+.commands-dock-list .term-body { overflow-x: hidden; white-space: pre-wrap; overflow-wrap: anywhere; word-break: break-word; }
+
+/* 2. It stays inside the chat column: past the open sidebar on the left,
+      short of the code panel on the right, and below the top of the window
+      however far it was lifted over a bottom bar. */
+.commands-dock {
+  --dock-left: 16px;
+  --dock-right: 16px;
+  left: var(--dock-left);
+  max-width: calc(100vw - var(--dock-left) - var(--dock-right));
+}
+@media (min-width: 861px) {
+  html:has(.claude-sidebar.open) .commands-dock { --dock-left: calc(var(--sidebar-width, 340px) + 16px); }
+  html:has(.claude-app.has-artifact) .commands-dock { --dock-right: calc(var(--artifact-width, 620px) + 16px); }
+  /* With the code panel taking the whole window there is no column left to
+     float in; the dock is back when the panel is restored or closed. */
+  html:has(.claude-app.artifact-maximized) .commands-dock { visibility: hidden; }
+}
+
+/* ---- code panel header and change cards: nothing overlaps, numbers never split ----
+
+   The version picker ("v1 · html · 155줄") is a <select>, whose minimum width
+   is its longest option; it would not shrink, so in a narrow panel it ran
+   under the reload/copy/download buttons. The title side now gives way (the
+   picker shortens with an ellipsis) and the buttons keep their room. */
+.artifact-panel-header { display: flex; align-items: center; flex-wrap: nowrap; min-width: 0; }
+.artifact-title-row { flex: 1 1 0; min-width: 0; overflow: hidden; }
+.artifact-title-row > :is(h3, .artifact-version, .artifact-streaming) { flex-shrink: 0; }
+.artifact-version-select {
+  flex: 0 1 auto;
+  min-width: 0;
+  width: auto;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.artifact-header-actions { flex: 0 0 auto; }
+
+/* A file change's "+17 −0": a long path took all the width and squeezed the
+   counts below the width of their own digits, so "+17" broke into "+1 / 7".
+   The counts are fixed-width; only the path shortens. */
+.file-change-add,
+.file-change-del { flex: 0 0 auto; white-space: nowrap; }
+.file-change-name { white-space: nowrap; }
+.file-change-path { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.commands-dock .commands-dock-panel {
+  width: min(560px, calc(100vw - var(--dock-left) - var(--dock-right)));
+  max-height: min(70vh, 640px, calc(100vh - var(--dock-bottom, 16px) - 64px));
+  min-width: 0;
+}
+.commands-dock .commands-dock-pill { max-width: 100%; white-space: nowrap; }
+@media (max-width: 640px) {
+  .commands-dock { --dock-left: 8px; --dock-right: 8px; }
+}
+
+/* 3. With many commands the panel ran off the top of a phone screen. The list
+      is a flex child, whose min-height defaults to its content, so it never
+      shrank to the panel's max-height and the panel (anchored at the bottom)
+      grew upwards past the window. On a phone 100vh is also taller than what
+      is visible under the address bar. The list now shrinks and scrolls, the
+      height is measured in dvh, and it counts how far the dock was lifted. */
+.commands-dock { --dock-bottom: 16px; bottom: var(--dock-bottom); }
+@media (max-width: 640px) { .commands-dock { --dock-bottom: 72px; } }
+html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bottom: 92px; }
+@media (max-width: 640px) {
+  html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bottom: 184px; }
+}
+.commands-dock .commands-dock-head { flex: 0 0 auto; }
+.commands-dock .commands-dock-list { flex: 1 1 auto; min-height: 0; overscroll-behavior: contain; }
+.commands-dock .commands-dock-panel {
+  max-height: min(70vh, 640px, calc(100vh - var(--dock-bottom) - 64px));
+  max-height: min(70dvh, 640px, calc(100dvh - var(--dock-bottom) - 64px - env(safe-area-inset-top, 0px)));
+  overflow: hidden;
+}
+@media (max-width: 860px) {
+  .commands-dock .commands-dock-panel {
+    max-height: min(65vh, calc(100vh - var(--dock-bottom) - 56px));
+    max-height: min(65dvh, calc(100dvh - var(--dock-bottom) - 56px - env(safe-area-inset-top, 0px)));
+  }
+}
+
+/* ---- the composer footer with the code panel open ----
+
+   Opening the code panel narrows the chat column but not the window, so the
+   phone rules (which hide the advice) never fired and the advice wrapped onto
+   two lines under the meter. On a desktop it now stays on one line and
+   shortens with an ellipsis; the meter and switches keep their full width. */
+@media (min-width: 861px) {
+  .input-footer { flex-wrap: nowrap; }
+  .input-footer .composer-disclaimer {
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    text-align: start;
+  }
+  .input-footer .composer-controls { flex: 0 0 auto; flex-wrap: nowrap; white-space: nowrap; }
+}
+
+/* ---- the numbers under a reply ----
+   A figure never breaks in the middle ("113,312 + / 1,220 tok"): each item
+   stays whole, and if the column is too narrow the row moves on between
+   items, not inside one. */
+.metrics-numbers { row-gap: 0.15rem; }
+.metrics-numbers > * { white-space: nowrap; }
+
+/* ---- fourth pass: what a full walk at 1440px and 390px still showed ----
+
+   Toasts: a Korean sentence broke inside a word ("주소 / 는") and the URL ran
+   in a 150px column beside the action button. Words stay whole, a long URL
+   may break anywhere, and the text gets the width the action leaves. */
+.toast-stack { max-width: min(460px, 92vw); }
+.toast > span {
+  flex: 1 1 0;
+  min-width: 0;
+  word-break: keep-all;
+  overflow-wrap: anywhere;
+}
+.toast .toast-action { flex: 0 0 auto; white-space: nowrap; }
+
+/* The "new folder" button in the sidebar was an 18px square. The icon stays
+   the size it is; the hit area becomes 28px. */
+.folder-add {
+  min-width: 28px;
+  min-height: 28px;
+  align-items: center;
+  justify-content: center;
+  border-radius: 6px;
+}
+
+/* The in-chat search in a crowded header is 150px, which cut its own
+   placeholder to "대화 내 검…" and left ~90px for what you type. While it has
+   focus it widens; the icons beside it give way only then. */
+@media (min-width: 861px) {
+  .main-header .header-search { transition: width var(--dur-fast, .15s) ease; }
+  .main-header .header-search:focus-within { width: 260px; }
+  .main-header .header-search input { min-width: 0; text-overflow: ellipsis; }
+}
+
+/* Command palette section headings were English capitals ("ACTIONS") in a
+   Korean list. They are translated now, and written as they are spelled. */
+.cmd-section { text-transform: none; letter-spacing: 0.02em; }
+
+/* Live status under an answer that is still arriving: time and tokens so far.
+   Tabular digits so the line does not jitter as the numbers tick. */
+.live-work-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 0.15rem 0.4rem;
+  margin-top: 0.4rem;
+  font-size: 0.78rem;
+  color: var(--text-secondary);
+  font-variant-numeric: tabular-nums;
+}
+.live-work-status > * { white-space: nowrap; }
+.live-work-spark { color: var(--btn-active); animation: live-work-spin 2.4s linear infinite; display: inline-block; }
+@keyframes live-work-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .live-work-spark { animation: none; } }

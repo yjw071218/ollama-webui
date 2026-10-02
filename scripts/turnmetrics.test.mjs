@@ -129,6 +129,7 @@ eq('though the clock still runs', turnMetrics(noRates).totalTime, '7.00');
 // message forward; the literal it replaced did not, and a literal is all
 // there is to assert on.
 const app = fs.readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8').replace(/\r\n/g, '\n');
+const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\r\n/g, '\n');
 
 const restarts = [...app.matchAll(/const nextMessages = \[\s*\n\s*\.\.\.initialMessages,\s*\n\s*([^\n]*)/g)]
   .map(m => m[1].trim());
@@ -154,6 +155,102 @@ eq('and no bare literal is left to reintroduce it', bare, 0);
 check('the footer no longer reads only the last bubble',
   !app.includes('group[group.length - 1].metrics'));
 check('it folds the group instead', app.includes('turnMetrics(group)'));
+
+
+/* ============================ a picture where it was asked for, and numbers
+                                only when there is nothing left to measure
+
+   Two halves of one report. A turn can draw a picture and carry on writing --
+   and both of the things it then did were wrong:
+
+     * every picture was appended under the whole message, however early it had
+       been asked for, so an answer that drew, explained, and drew again put
+       both pictures below the explanation of the second;
+     * the footer -- `3.1s · 42 tokens/s` -- was written as soon as the first
+       leg finished, so it sat under a reply that was still arriving and then
+       changed. A measurement of something still happening is not one. */
+
+check('the footer waits for the turn to end',
+  /if \(lastGroup && \(isThisChatGenerating \|\| remoteTurnHere\)\) return null;/.test(app));
+
+/* Each picture carries the number of the drawing call that made it, counted
+   over the drawing tags in the message *text* -- because that is what the
+   transcript counts too. A tag that was refused or dropped is still a block on
+   screen, so numbering against the calls that actually ran would land a picture
+   one place too early. */
+check('a picture is stamped with the call that made it',
+  /const call = drawCallsBefore \+ \(at === -1 \? drawnHere\.length : at\);/.test(app));
+check('  counted from the tags in the text, not from what ran',
+  /const drawnHere = \[\.\.\.toolSource\.matchAll/.test(app)
+  && /\.filter\(match => DRAWING_TAGS\.has\(match\[1\]\)\)/.test(app));
+check('  and one call can stamp several, for a batch',
+  /for \(let n = picturesBeforeThisCall; n < turnImages\.length; n \+= 1\)/.test(app));
+
+check('the transcript counts the same way',
+  /else if \(block\.type === 'tool_call' && DRAWING_TAGS\.has\(block\.tool\)\) drawsSoFar \+= 1;/.test(app));
+check('  and drops each picture into the gap its call was written in',
+  /\{picturesAfterText\(idx\)\.length > 0 && \(/.test(app));
+// An older chat has pictures with no number at all, and they have always been
+// at the bottom. They stay there.
+check('  while a picture with no place of its own keeps the old one',
+  /const picturesLeft = placedPictures\.filter\(x => !picturesInline\.has\(placedKey\(x\)\)\);/.test(app)
+  && /\{picturesLeft\.length > 0 && \(/.test(app));
+// One function, two places. The actions on a picture are addressed by the
+// message it lives in and its index in that message's own list, so both travel with it.
+check('  through one renderer, keeping each picture its own message and index',
+  /const renderPicture = \(picture, n, i = messageIndexOfHead\) => \{/.test(app)
+  && /picturesLeft\.map\(\(\{ picture, n, mi \}\) => renderPicture\(picture, n, mi\)\)/.test(app));
+
+/* Reported: "after a picture, the text that follows pushes it down". Asked to
+   draw, a model calls the tool first and talks after, so the picture had no
+   paragraph before it -- and fell to the bottom, under the words written after
+   it. And a turn of several legs (a song, then a video) showed only what the
+   first leg made. */
+check('a picture made before any words sits before them',
+  /const from = textIndex < 0 \? 0 : drawsByText\[textIndex\];/.test(app)
+  && /\{picturesAfterText\(-1\)\.map\(\(\{ picture, n, mi \}\) => renderPicture\(picture, n, mi\)\)\}/.test(app));
+check('every leg of the answer is read, its calls numbered after the legs before it',
+  /const mediaOf = \(key\) => group\.flatMap\(\(gMsg, g\) =>/.test(app)
+  && /call: Number\.isInteger\(item\?\.call\) \? item\.call \+ \(drawsBeforeMessage\[g\] \|\| 0\) : null,/.test(app));
+check('a song is stamped with its call and played where it was asked for',
+  /for \(let n = songsBeforeThisCall; n < turnSongs\.length; n \+= 1\)/.test(app)
+  && /\{songsAfterText\(idx\)\.map\(\(\{ song, n, mi \}\) => renderSong\(song, `\$\{mi\}:\$\{n\}`\)\)\}/.test(app));
+check('  and a turn a song ends keeps the song', /\.\.\.\(turnSongs\.length \? \{ songs: \[\.\.\.turnSongs\] \} : \{\}\),/.test(app));
+check('lyrics fold away under the player', /<details className="msg-song-lyrics">\s*\n\s*<summary>\{t\('song\.lyrics'\)\}<\/summary>/.test(app));
+
+/* And the model is told it may do this. The tag protocol is "emit one tag, then
+   stop", which is right for a tool whose *answer* is needed -- and wrong for a
+   picture, whose result is only that it worked. */
+check('the model is told a picture is not a tool to stop for',
+  /A picture is the one kind of tool you do not have to stop for/.test(app));
+check('  and that each one appears where its tag is',
+  /each\s*\n?\s*appears exactly where its tag is/.test(app));
+check('  while the tools whose answers matter still stop',
+  /For a tool whose \*answer\* you need/.test(app));
+
+/* ------------------------------------------ and the card, between the two
+
+   A picture takes the language model off the card -- it has to; a 22GB model
+   and an image model do not share one. Putting it back waited until something
+   next asked a question, so with a picture in the middle of a reply that wait
+   landed in the middle of the reply too. */
+check('the model is asked back as soon as the picture is done',
+  /fetch\('\/api\/vram\/warm'/.test(app));
+const vram = read('server/vram.js');
+check('  ComfyUI lets go of the card first', /const state = await releaseComfy\(\);\s*\n\s*if \(state === 'drawing'\) return 'drawing';/.test(vram));
+// Loading a cold 22GB model is minutes. A request held open for it is a request
+// that times out.
+check('  and the answer does not wait for the loading',
+  /sendJson\(res, \{ success: true, warming: !!model \}\);[\s\S]{0,400}vramGuard\(env\)\.warmLlm/.test(read('server/api.js')));
+
+/* Reported: the reply to a song printed above the song. A native call leaves no
+   tag in the text -- the message that made the song was "" -- so there was no
+   call to put the song after. The calls a message's pictures and songs were
+   stamped with are put back as blocks at the end of that message. */
+check('a call made natively is put back where its message ends',
+  /const madeHere = \[\.\.\.\(gMsg\.generated \|\| \[\]\), \.\.\.\(gMsg\.songs \|\| \[\]\)\]/.test(app)
+  && /for \(let call = written; call <= highest; call \+= 1\) \{/.test(app)
+  && /draws \+= Math\.max\(written, highest \+ 1\);/.test(app));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

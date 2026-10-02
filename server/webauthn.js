@@ -33,6 +33,8 @@ const sweep = () => {
   const now = Date.now();
   for (const [id, entry] of pending) if (entry.expiresAt <= now) pending.delete(id);
 };
+const challengeSweepTimer = setInterval(sweep, CHALLENGE_TTL_MS);
+challengeSweepTimer.unref?.();
 
 /**
  * Mint a challenge and hand back an id for it.

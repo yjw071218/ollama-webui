@@ -5,6 +5,25 @@ import remarkGfm from 'remark-gfm';
 import { useI18n } from './i18n.jsx';
 import { copyText } from './clipboard.js';
 import { canSynthesise, answersFor, consensusPrompt, pickJudge, wordOverlap } from './consensus.js';
+import { cliOf, formatUsd } from './CliLimits.jsx';
+
+/* A comparison asks for these models and no others: a CLI over its limit must
+   fail in its own column, not be quietly answered by the next one in
+   CLI_FALLBACK (server/cliFallback.js). */
+const COMPARE_HEADERS = { 'Content-Type': 'application/json', 'X-Cli-Fallback': 'off', 'X-Cli-Via': 'compare' };
+
+/** One model per subscription CLI, the first each offers: Claude, GPT and Gemini side by side. */
+export const oneOfEachCli = (models = []) => {
+  const seen = new Set();
+  const out = [];
+  for (const m of models) {
+    const cli = cliOf(m?.name);
+    if (!cli || seen.has(cli)) continue;
+    seen.add(cli);
+    out.push(m.name);
+  }
+  return out;
+};
 
 /** Reasoning is folded away so the answers can be compared side by side. */
 const splitThinking = (content) => {
@@ -33,6 +52,7 @@ const Column = ({ run, onCopy, copied }) => {
             {run.metrics.totalTime}s
             {run.metrics.tokensPerSec ? ` · ${run.metrics.tokensPerSec} tok/s` : ''}
             {run.metrics.evalCount ? ` · ${run.metrics.evalCount} tok` : ''}
+            {Number.isFinite(run.metrics.costUsd) ? ` · ${formatUsd(run.metrics.costUsd)}` : ''}
           </span>
         )}
         <button className="icon-btn" title={t('common.copy')} onClick={() => onCopy(run.model, answer)}>
@@ -117,7 +137,7 @@ export const ModelCompare = ({ models, defaultPrompt, systemPrompt, options, lan
       try {
         const res = await fetch('/api/chat', {
           method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
+          headers: COMPARE_HEADERS,
           signal: controller.signal,
           body: JSON.stringify({ model, messages, options }),
         });
@@ -165,7 +185,14 @@ export const ModelCompare = ({ models, defaultPrompt, systemPrompt, options, lan
                 : null;
               setRuns(prev => prev.map(r => (
                 r.model === model
-                  ? { ...r, status: 'done', metrics: { totalTime, tokensPerSec, evalCount: parsed.eval_count } }
+                  ? {
+                    ...r,
+                    status: 'done',
+                    metrics: {
+                      totalTime, tokensPerSec, evalCount: parsed.eval_count,
+                      ...(Number.isFinite(parsed.cost_usd) ? { costUsd: parsed.cost_usd } : {}),
+                    },
+                  }
                   : r
               )));
             }
@@ -197,7 +224,9 @@ export const ModelCompare = ({ models, defaultPrompt, systemPrompt, options, lan
     const answers = answersFor(runs);
     if (answers.length < 2) return;
 
-    const reader = pickJudge(runs, judge);
+    // Any model may read, not only one that answered: a stronger reader --
+    // a subscription CLI, say -- over three small local answers is the point.
+    const reader = judge && models.some(m => m.name === judge) ? judge : pickJudge(runs, judge);
     const controller = new AbortController();
     controllers.current.push(controller);
     setConsensus({ model: reader, content: '', status: 'running', error: '' });
@@ -206,7 +235,7 @@ export const ModelCompare = ({ models, defaultPrompt, systemPrompt, options, lan
     try {
       const res = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: COMPARE_HEADERS,
         signal: controller.signal,
         body: JSON.stringify({
           model: reader,
@@ -264,6 +293,17 @@ export const ModelCompare = ({ models, defaultPrompt, systemPrompt, options, lan
 
         <div className="settings-group">
           <label>{t('compare.models')} ({selected.length})</label>
+          {oneOfEachCli(models).length > 1 && (
+            <button
+              className="icon-btn bordered"
+              style={{ marginBottom: '0.4rem' }}
+              onClick={() => setSelected(oneOfEachCli(models))}
+              disabled={running}
+              title={t('compare.pickClisHelp')}
+            >
+              {t('compare.pickClis')}
+            </button>
+          )}
           <div className="compare-picker">
             {models.map(m => (
               <button
@@ -336,9 +376,16 @@ export const ModelCompare = ({ models, defaultPrompt, systemPrompt, options, lan
                 disabled={running}
                 title={t('compare.judge')}
               >
-                {answersFor(runs).map(entry => (
-                  <option key={entry.model} value={entry.model}>{entry.model}</option>
-                ))}
+                <optgroup label={t('compare.judgeAnswered')}>
+                  {answersFor(runs).map(entry => (
+                    <option key={entry.model} value={entry.model}>{entry.model}</option>
+                  ))}
+                </optgroup>
+                <optgroup label={t('compare.judgeOther')}>
+                  {models.filter(m => !answersFor(runs).some(entry => entry.model === m.name)).map(m => (
+                    <option key={m.name} value={m.name}>{m.name}</option>
+                  ))}
+                </optgroup>
               </select>
 
               <button

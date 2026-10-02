@@ -323,6 +323,28 @@ Register-ScheduledTask -TaskName 'OllamaWebUI' -Action $action `
 
 Ollama must be running too (`ollama serve`, or its own service).
 
+## Database backups
+
+The production server creates an online SQLite backup every six hours by
+default, without stopping the server or interrupting active chats. It uses
+SQLite's `VACUUM INTO` snapshot, then opens the result and requires both
+`PRAGMA integrity_check` and `PRAGMA foreign_key_check` to pass before keeping
+the file.
+
+Backups are written to `server/data/backups/`, with the newest 14 retained.
+Configure these in `.env`:
+
+```ini
+DB_BACKUP_ENABLED=true
+DB_BACKUP_INTERVAL_MS=21600000
+DB_BACKUP_RETENTION=14
+# DB_BACKUP_DIR=D:\Backups\ollama-webui
+```
+
+The first backup is made after the server successfully starts. A failed backup
+is logged and the temporary file is removed; it never replaces a verified
+backup.
+
 ## Troubleshooting
 
 | Symptom | Cause |

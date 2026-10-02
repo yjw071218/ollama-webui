@@ -226,6 +226,7 @@ export const describeRun = (run) => [
   run?.model,
   run?.promptName ? `prompt: ${run.promptName}` : null,
   run?.settings?.temperature !== undefined ? `temp ${run.settings.temperature}` : null,
+  run?.judge && run.judge !== run.model ? `judge: ${run.judge}` : null,
 ].filter(Boolean).join(' · ');
 
 /** A stable-enough id, matching the one ingest.js uses. */

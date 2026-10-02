@@ -78,6 +78,39 @@ export const isRetryable = (error) => {
   return /failed to fetch|networkerror|network error|load failed|econnrefused|econnreset|etimedout|timeout|unreachable|502|503|504/.test(text);
 };
 
+/**
+ * Why a send was refused, as one of a few things a person can act on.
+ *
+ * The server's own words are English, or Korean, or a status line with JSON
+ * after it -- "Ollama returned HTTP 503: {"error":"..."}" -- and a toast that
+ * said only "held" left nobody any wiser about whether to wait, close
+ * something, or give up.
+ */
+export const heldReason = (error) => {
+  const text = String(error?.message || error || '');
+  if (/여유 RAM|RAM is critically low|system RAM/i.test(text)) return 'ram';
+  if (/ComfyUI is generating|GPU is switching/i.test(text)) return 'drawing';
+  if (/Two inference requests/i.test(text)) return 'busy';
+  if (/failed to fetch|networkerror|network error|load failed|econnrefused|econnreset|unreachable/i.test(text)) return 'network';
+  return 'other';
+};
+
+/**
+ * A failed retry, written back as the entry it was.
+ *
+ * A retry takes the entry out of the queue before sending, and a send that
+ * fails queues itself -- as a brand-new entry, with no attempts. So the count
+ * never grew, MAX_ATTEMPTS was never reached, and a server that kept refusing
+ * was asked again every four seconds for as long as it refused, each time
+ * switching to that chat and raising the same notice again. The entry keeps its
+ * id, its age and its count.
+ */
+export const carryAttempt = (entry, previous, error, at = Date.now()) => ({
+  ...entry,
+  ...(previous ? { id: previous.id, at: previous.at, attempts: previous.attempts, lastTriedAt: at } : {}),
+  lastError: String(error?.message || error || '').slice(0, 200),
+});
+
 /** A queue entry from a turn that failed. */
 export const makeEntry = ({ sessionId, model, text, attachments = [], at = Date.now() }) => ({
   id: `${at}-${Math.random().toString(36).slice(2, 8)}`,

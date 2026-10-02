@@ -1,0 +1,77 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>대화 동기화 확인</title>
+<style>body{font:16px/1.6 system-ui;max-width:800px;margin:36px auto;padding:0 20px;background:#181818;color:#eee}button,a{font:inherit;padding:10px;color:inherit}button{background:#333;border:1px solid #888;border-radius:6px;cursor:pointer}pre{white-space:pre-wrap;background:#222;padding:16px}button:disabled{opacity:.5}</style>
+<h1>대화 동기화 확인</h1><p>이 브라우저의 로그인 계정과 저장된 대화를 확인합니다. 대화 내용은 아래 진단 결과에 표시하지 않습니다.</p>
+<button id="check">다시 확인</button> <button id="repair" disabled>이 PC의 대화를 서버로 재전송</button> <a href="/">대화로 돌아가기</a>
+<pre id="result" role="status"></pre>
+<script type="module">
+const output=document.querySelector('#result'),check=document.querySelector('#check'),repair=document.querySelector('#repair');
+let session, chats;
+const line=text=>{output.textContent+=text+'\n';};
+const time=value=>value?new Date(value).toLocaleString('ko-KR'):'없음';
+async function api(path,body){
+ const headers={'X-Session-Id':session?.sessionId||sessionStorage.getItem('webui-tab-session')||'new'};
+ if(body!==undefined){headers['Content-Type']='application/json';headers['X-CSRF-Token']=session.csrfToken;}
+ const response=await fetch(path,{method:body===undefined?'GET':'POST',headers,credentials:'same-origin',cache:'no-store',signal:AbortSignal.timeout(30000),body:body===undefined?undefined:JSON.stringify(body)});
+ const data=await response.json();
+ if(!response.ok||data.success===false)throw new Error(`HTTP ${response.status}: ${data.error||'요청 실패'}`);
+ return data;
+}
+function readChats(key){return new Promise((resolve,reject)=>{
+ let db,settled=false;
+ const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);db?.close();error?reject(error):resolve(value);};
+ const timer=setTimeout(()=>finish(new Error('대화 저장소 응답이 15초 이상 지연됩니다. 다른 WebUI 탭을 닫고 다시 확인해 주세요.')),15000);
+ const request=indexedDB.open('localforage');
+ request.onupgradeneeded=()=>{request.transaction.abort();finish(new Error('이 주소의 브라우저에서 대화 저장소를 찾지 못했습니다.'));};
+ request.onerror=()=>finish(request.error);
+ request.onblocked=()=>line('저장소가 다른 탭의 작업을 기다리고 있습니다.');
+ request.onsuccess=()=>{
+  db=request.result;if(settled){db.close();return;}
+  if(!db.objectStoreNames.contains('keyvaluepairs'))return finish(new Error('대화 저장 테이블이 없습니다.'));
+  const tx=db.transaction('keyvaluepairs','readonly'),get=tx.objectStore('keyvaluepairs').get(key);
+  get.onerror=()=>finish(get.error);get.onsuccess=()=>finish(null,get.result||[]);
+ };
+});}
+async function diagnose(){
+ check.disabled=true;repair.disabled=true;output.textContent='';chats=null;
+ try{
+  line('로그인 확인 중…');session=await api('/api/auth/session');
+  if(!session.user)throw new Error('이 탭은 로그인 상태가 아닙니다. 대화 화면에서 로그인한 뒤 다시 열어 주세요.');
+  line(`로그인: ${session.user.name||'로그인된 계정'}`);
+  line('PC 대화 저장소 읽는 중…');chats=await readChats('ollama-sessions:srv-'+session.user.id);
+  if(!Array.isArray(chats))throw new Error('대화 저장소의 형식이 올바르지 않습니다.');
+  line(`PC 저장 대화: ${chats.length}개`);line(`PC 최신 수정: ${time(Math.max(0,...chats.map(c=>Number(c.updatedAt)||0)))}`);
+  const stats=await api('/api/auth/stats');
+  if(stats.ownerId!==session.user.id)throw new Error('서버 응답의 계정이 다릅니다.');
+  line(`서버 대화: ${stats.chats}개 / 변경 번호: ${stats.rev}`);
+  line('확인 완료. PC 최신 수정 시각이 현재 대화와 맞으면 재전송 버튼을 누르세요.');repair.disabled=!chats.length;
+ }catch(error){line('오류: '+error.message);}finally{check.disabled=false;}
+}
+function uploadChat(chat){
+ return {...chat,messages:(chat.messages||[]).map(message=>({...message,...(Array.isArray(message.generated)?{generated:message.generated.map(p=>{
+  const filename=p.filename||p.file?.filename;
+  const url=p.url||(filename?'/studio/view?'+new URLSearchParams({filename,subfolder:'webui',type:'output'}):'');
+  return url&&String(p.dataUrl||'').startsWith('data:')?{...p,dataUrl:url}:p;
+ })}: {})}))};
+}
+repair.onclick=async()=>{
+ repair.disabled=true;check.disabled=true;
+ try{
+  const stats=await api('/api/auth/stats');if(stats.ownerId!==session.user.id)throw new Error('로그인 계정이 변경되었습니다.');
+  let since=stats.rev,stored=0,skipped=0;
+  for(const chat of [...chats].sort((a,b)=>(b.updatedAt||0)-(a.updatedAt||0))){
+   if(chat.id==null)continue;
+   const payload=uploadChat(chat);
+   if(new TextEncoder().encode(JSON.stringify(payload)).length>8*1024*1024){skipped++;continue;}
+   const result=await api('/api/auth/sync',{ownerId:session.user.id,since,limit:1,records:[{kind:'chat',id:String(chat.id),updatedAt:Number(chat.updatedAt)||0,payload}]});
+   if(result.ownerId!==session.user.id)throw new Error('서버 응답의 계정이 다릅니다.');
+   if(result.refusedCount)throw new Error(result.refused?.[0]?.reason||'서버가 대화를 거부했습니다.');
+   since=result.rev;stored++;
+   if(stored===1||stored%20===0)line(`재전송 확인: ${stored}/${chats.length}개`);
+  }
+  line(`완료: ${stored}개 재전송 확인${skipped?`, 크기 제한 초과 ${skipped}개 제외`:''}. 모바일 대화탭을 다시 확인해 주세요.`);
+ }catch(error){line('재전송 중단: '+error.message);}finally{check.disabled=false;repair.disabled=false;}
+};
+check.onclick=diagnose;void diagnose();
+</script></html>

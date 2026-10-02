@@ -57,6 +57,7 @@ const SHELL_URL = '/index.html';
 // reading, and `/kakao` is half of an OAuth exchange whose whole point is that
 // it happens once.
 const PASS_THROUGH = [
+  /^\/risuai(?:\/|$)/,
   /^\/api\//, /^\/api$/,
   /^\/mcp\//, /^\/localfs\//, /^\/system\//, /^\/tts-api\//, /^\/kakao\//,
 ];
@@ -113,6 +114,76 @@ self.addEventListener('activate', (event) => {
  * worker waits, the page notices and offers a reload, and this is the reply. */
 self.addEventListener('message', (event) => {
   if (event.data && event.data.type === 'SKIP_WAITING') self.skipWaiting();
+});
+
+/* Tapping "your picture is ready" opens the picture, not a second copy of the app.
+ *
+ * A notification click with no handler at all does nothing on Android and opens
+ * a new tab on the desktop -- so the reader ends up with two of this app, the
+ * second one cold, while the answer they were told about is in the first. So an
+ * open window is looked for first and focused, and a new one is opened only
+ * when there is none. `data.url` is the conversation to land in. */
+/* Woken by the server, with nothing to read.
+ *
+ * A push carries no payload here -- see server/push.js for why -- so this asks
+ * what just finished and what to call it. The sentence comes from the server
+ * because it was the app that handed it over when it subscribed, and a worker
+ * has no translations of its own.
+ *
+ * Nothing is shown if the app is already in front of somebody. That is the same
+ * rule the in-page half applies (`unattended` in src/notify.js) and it is the
+ * difference between a notification and an interruption: a push arrives whether
+ * or not the reader is watching the answer arrive.
+ *
+ * `userVisibleOnly` was promised at subscribe time, so a browser may show a
+ * notification of its own if this handler shows none -- hence the check for a
+ * *visible* client rather than simply skipping when any window exists. */
+self.addEventListener('push', (event) => {
+  event.waitUntil((async () => {
+    const open = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    if (open.some(client => client.visibilityState === 'visible' && client.focused)) return;
+    let said = '';
+    let tag = 'ollama-webui-push';
+    try {
+      const res = await fetch('/api/push/last', { cache: 'no-store', credentials: 'include' });
+      const data = await res.json();
+      said = (data && data.label) || '';
+      /* A subscription CLI back from its usage limit: its own sentence, with
+         the CLI's name put in, and its own tag so it does not replace (or get
+         replaced by) an answer's notification. */
+      const last = data && data.last;
+      if (last && last.kind === 'cli-reset') {
+        const sentence = (data.labels && data.labels.cliReset) || '{name} is available again';
+        said = sentence.replace('{name}', last.name || 'CLI');
+        tag = 'ollama-webui-cli-reset';
+      }
+    } catch (err) { /* the notification is still worth showing */ }
+    await self.registration.showNotification(said || 'Ollama WebUI', {
+      body: '',
+      tag,
+      icon: '/favicon.svg',
+      badge: '/favicon.svg',
+      data: { url: '/' },
+    });
+  })());
+});
+
+self.addEventListener('notificationclick', (event) => {
+  event.notification.close();
+  const wanted = (event.notification.data && event.notification.data.url) || '/';
+  event.waitUntil((async () => {
+    const open = await self.clients.matchAll({ type: 'window', includeUncontrolled: true });
+    for (const client of open) {
+      // Same origin is the only test that matters: the app is a single page, so
+      // any window of it is a window that can show this.
+      if (new URL(client.url).origin === self.location.origin) {
+        await client.focus().catch(() => {});
+        try { client.postMessage({ type: 'OPEN_CHAT', url: wanted }); } catch (e) { /* focused anyway */ }
+        return;
+      }
+    }
+    await self.clients.openWindow(wanted).catch(() => {});
+  })());
 });
 
 const fromNetworkThenCache = async (event) => {

@@ -66,7 +66,57 @@ import {
   filterByTags, parseTagQuery, suggestForChat, MAX_PER_CHAT,
 } from './tags.js';
 import { KnowledgePanel } from './KnowledgePanel.jsx';
-import { McpPanel } from './McpPanel.jsx';
+import { McpPanel, WorkbenchPolicy } from './McpPanel.jsx';
+import { ChangeHistory } from './ChangeHistory.jsx';
+import './settingsTools.css';
+import {
+  Server as TabServer, ShieldCheck as TabShield, History as TabHistory, SquareTerminal as TabTerminal, FlaskConical as TabFlask,
+  SlidersHorizontal as TabGeneral, Sparkles as TabGeneration, Boxes as TabModels, ScrollText as TabPrompts,
+  BookOpen as TabKnowledge, Wrench as TabTools, Brain as TabMemory, Mic as TabVoice, UserRound as TabAccount, Database as TabData,
+} from 'lucide-react';
+import { CliPanel } from './CliPanel.jsx';
+import { CliApprovals } from './CliAgent.jsx';
+import { CliLimitBadge, formatUsd } from './CliLimits.jsx';
+
+// 113312 -> "113K", 1220 -> "1.2K", 1927279 -> "1.9M"; under 1000 as is.
+const compactFormat = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
+const compactCount = n => (Number.isFinite(n) ? compactFormat.format(n) : String(n ?? ''));
+
+/* While an answer is arriving: elapsed time and output tokens so far, like
+   Claude Code's "✻ 12s · ↓ 340 tokens". Ollama only reports eval_count at the
+   end, so the live figure is estimated from the text received (marked "~");
+   the exact one replaces it in the metrics row when the answer finishes.
+   It keeps its own clock, so only this line re-renders every tick. */
+function LiveWorkStatus({ text, startedAt }) {
+  /* The generation's own start, saved in localStorage, so a page reload keeps
+     counting from where it was instead of starting again at 0. */
+  const [start] = useState(() => {
+    const at = Number(startedAt);
+    return Number.isFinite(at) && at > 0 && at <= Date.now() ? at : Date.now();
+  });
+  const [now, setNow] = useState(start);
+  useEffect(() => {
+    const timer = setInterval(() => setNow(Date.now()), 250);
+    return () => clearInterval(timer);
+  }, []);
+  const secs = Math.max(0, (now - start) / 1000);
+  const elapsed = secs < 60 ? `${secs.toFixed(secs < 10 ? 1 : 0)}s` : `${Math.floor(secs / 60)}m ${Math.floor(secs % 60)}s`;
+  const tokens = estimateTokens(text);
+  const rate = secs > 1 && tokens > 0 ? Math.round(tokens / secs) : null;
+  return (
+    <div className="live-work-status" aria-live="off">
+      <span className="live-work-spark" aria-hidden="true">✻</span>
+      <span className="live-work-time">{elapsed}</span>
+      <span className="dot">•</span>
+      <span className="live-work-tokens" title="Estimated while streaming; exact count appears when the answer finishes">↓ ~{compactCount(tokens)} tok</span>
+      {rate != null && (<><span className="dot">•</span><span className="live-work-rate">~{rate} tok/s</span></>)}
+    </div>
+  );
+}
+import { FileChanges } from './FileChanges.jsx';
+import { fileChangesIn, answerPartsOf } from './fileChanges.js';
+import { AgentActivity, LiveCommands, CommandsDock } from './AgentActivity.jsx';
+import { hasActivity } from './agentActivity.js';
 import { CanvasPanel } from './CanvasPanel.jsx';
 import { EvalPanel } from './EvalPanel.jsx';
 import { FitNote } from './FitNote.jsx';
@@ -96,11 +146,18 @@ import { forHistory, isToolResult, turnStart, wireText } from './wireHistory.js'
 import { isDraft, newDraft, promoted, withoutStaleDrafts, persistable, nextSessionId } from './draftChat.js';
 import { Logo } from './Logo.jsx';
 import { Chart } from './Chart.jsx';
+import { RisuPanel } from './RisuPanel.jsx';
 import { parseChart } from './chart.js';
 import {
   buildSnapshot, createShare, listShares, revokeShare,
   loadShareUrls, rememberShareUrl, forgetShareUrl, picturePayload,
 } from './shareLink.js';
+import ChatTimeline from './ChatTimeline.jsx';
+import CameraCapture from './CameraCapture.jsx';
+import SpeculativePanel from './SpeculativePanel.jsx';
+import IntegrationsPanel from './IntegrationsPanel.jsx';
+import { captureScreen, canCaptureScreen, canUseCamera } from './capture.js';
+import { Camera } from 'lucide-react';
 import { turnMetrics } from './turnMetrics.js';
 import { traceOf, slowestLeg } from './turnTrace.js';
 import {
@@ -116,9 +173,10 @@ import { copyText } from './clipboard.js';
 import { buildSelectionPrompt, selectionTarget, SELECTION_ACTIONS } from './selection.js';
 import { promptsFrom, stepHistory, wantsHistory, NOT_BROWSING } from './promptHistory.js';
 import { canShare, shareText, shareBody, sharePicture, whyNoSheet } from './share.js';
-import { DRAWING_TAGS, schemasFor, toolCallsIn, nativeCallToTag, tagAttrs, TAG_ATTRS, canonicalToolTags, MCP_TAG } from './tools.js';
+import { DRAWING_TAGS, schemasFor, toolCallsIn, nativeCallToTag, tagAttrs, TAG_ATTRS, canonicalToolTags, MCP_TAG, mcpFileRoute } from './tools.js';
 import { parseAssistantMessage } from './messageParts.js';
-import { localSttAvailable, recordAndTranscribe, whisperLanguage, transcribeFile } from './stt.js';
+import { localSttAvailable, recordAndTranscribe, whisperLanguage, transcribeFile, transcribe } from './stt.js';
+import { VAD_DEFAULTS, BARGE_IN, withSensitivity, listenForUtterance } from './vad.js';
 import { wantsNavigation, NAV_KEYS, step } from './messageNav.js';
 import {
   loadQueue, enqueue, removeEntry, noteAttempt, nextDue, stalled,
@@ -498,8 +556,10 @@ const greetingKey = () => {
 
 const STARTER_PROMPTS = [
   { labelKey: 'empty.explain', Icon: Code, prompt: 'Explain the following code step by step:\n\n```\n\n```' },
-  { labelKey: 'empty.webApp', Icon: Play, prompt: 'Build a single-file HTML page that ' },
-  { labelKey: 'empty.summarize', Icon: Terminal, prompt: 'Summarize the key points of this page: https://' },
+  /* Icons say what the card does: a page on a screen, a page on the web.
+     They were a play triangle and a terminal prompt. */
+  { labelKey: 'empty.webApp', Icon: Monitor, prompt: 'Build a single-file HTML page that ' },
+  { labelKey: 'empty.summarize', Icon: Globe, prompt: 'Summarize the key points of this page: https://' },
   { labelKey: 'empty.brainstorm', Icon: Sparkles, prompt: 'Give me 10 varied ideas for ' },
 ];
 
@@ -1028,6 +1088,12 @@ const fetchJsonQuietly = (url, init) => fetch(url, init)
 function App() {
   const [models, setModels] = useState([]);
   const [selectedModel, setSelectedModel] = useState('');
+  /* The last model the reader chose themselves, as opposed to one the app put
+     back -- a conversation's last model, routing, the first model on the list.
+     The roleplay tab follows only this: it keeps a model of its own, and an
+     automatic change made for the chat tab was undoing the one picked there. */
+  const [handPickedModel, setHandPickedModel] = useState(null);
+  const noteHandPick = (name) => setHandPickedModel({ name, at: Date.now() });
   const [selectedVisionModel, setSelectedVisionModel] = useState('');
   // The breakpoint the stylesheet uses for the drawer layout, kept in one place
   // so the two cannot disagree about what "narrow" means.
@@ -1080,7 +1146,9 @@ function App() {
      it has been, so a generation keeps being tracked while you are reading a
      chat -- see where it is rendered. */
   const [studioOpened, setStudioOpened] = useState(false);
+  const [risuOpened, setRisuOpened] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
+  const [showCamera, setShowCamera] = useState(false);
   const [showModelMenu, setShowModelMenu] = useState(false);
   /* What has been typed into the picker's search field. Cleared when the menu
      closes: a filter left over from last time is a picker that has lost models
@@ -1525,6 +1593,7 @@ function App() {
   const [runningModels, setRunningModels] = useState([]);
   const [pullProgress, setPullProgress] = useState(null); // { status, percent }
   const [settingsTab, setSettingsTab] = useState('general');
+  const [toolsSub, setToolsSub] = useState('servers');
 
   // --- The settings tab strip ---
   //
@@ -1806,6 +1875,18 @@ function App() {
      fourth time this exact shape has broken this file; an effect belongs
      beside the state it saves. */
   useEffect(() => { setSetting('sttModel', sttModel); }, [sttModel]);
+  /* Hands-free with a local transcriber: talking over the answer stops it,
+     and how loud "talking" has to be. See src/vad.js. Each saved beside its
+     state, for the reason given just above. */
+  const [voiceBargeIn, setVoiceBargeIn] = useState(() => getSetting('voiceBargeIn') !== 'false');
+  useEffect(() => { setSetting('voiceBargeIn', String(voiceBargeIn)); }, [voiceBargeIn]);
+  const [voiceSensitivity, setVoiceSensitivity] = useState(() => {
+    const v = parseFloat(getSetting('voiceSensitivity'));
+    return Number.isFinite(v) ? v : 0.5;
+  });
+  useEffect(() => { setSetting('voiceSensitivity', String(voiceSensitivity)); }, [voiceSensitivity]);
+  const voiceSensitivityRef = useRef(voiceSensitivity);
+  voiceSensitivityRef.current = voiceSensitivity;
   /* The transcript handler, by ref.
      The browser's recogniser is built once in an effect that runs before
      `heard` exists, so it cannot close over it -- the same shape as
@@ -1852,6 +1933,15 @@ function App() {
   }, [ttsEngine, ttsRefAudio, ttsPromptText, ttsTextLang, ttsPromptLang, ttsSpeed, ttsMaxChars, ttsAutoPlay]);
 
   useEffect(() => { setSetting('notifyWhenDone', String(notifyWhenDone)); }, [notifyWhenDone]);
+  /* The worker's sentences travel with the subscription, since it has no
+     translations of its own. Handed over again on load and when the language
+     changes, so a subscription made before a sentence existed -- "Claude Code
+     is available again" -- has it too. Quiet wherever push is not possible. */
+  useEffect(() => {
+    if (notifyWhenDone && notifyState() === 'granted') {
+      subscribeToPush(t('notify.ready'), { cliReset: t('notify.cliReset') });
+    }
+  }, [notifyWhenDone, lang]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
     if ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window) {
@@ -2530,6 +2620,10 @@ function App() {
               tokensPerSec: frame.eval_count && frame.eval_duration
                 ? (frame.eval_count / (frame.eval_duration / 1e9)).toFixed(2) : null,
               estimated: false,
+              ...(Number.isFinite(frame.cost_usd) ? { costUsd: frame.cost_usd } : {}),
+              ...(frame.cached_count > 0 ? { cachedTokens: frame.cached_count } : {}),
+              ...(frame.cli_resumed ? { resumed: true } : {}),
+              ...(frame.cli_tokens ? { cliTokens: frame.cli_tokens } : {}),
             };
           }
           if (done) terminal = true;
@@ -3007,7 +3101,76 @@ function App() {
   // once, at mount, and close over that render's `handleSend` forever.
   const onHeardRef = useRef(null);
 
+  /* With a local transcriber, hands-free listens through the voice activity
+     detector in src/vad.js instead of the browser's recogniser: nothing leaves
+     the machine, the end of a sentence is heard rather than tapped, and the
+     person can talk over the answer. Decided once when the mode starts. */
+  const voiceLocalRef = useRef(false);
+  // The microphone capture currently open, if any: `{ stop, started }`.
+  const vadRef = useRef(null);
+  const stopGenerationRef = useRef(null);
+
+  const stopVad = useCallback(() => {
+    vadRef.current?.stop();
+    vadRef.current = null;
+  }, []);
+
+  /** One finished utterance from the detector: to Whisper, then to `heard`. */
+  const hearUtteranceRef = useRef(null);
+  hearUtteranceRef.current = async (blob) => {
+    setIsListening(false);
+    setIsTranscribing(true);
+    try {
+      heardRef.current(await transcribe(blob, { language: whisperLanguage(lang), model: sttModel }));
+    } catch (e) {
+      addLog(`[stt] local transcription failed: ${e.message}`, 'error');
+      toast(t('voice.sttFailed'), 'error', 6000);
+    } finally {
+      setIsTranscribing(false);
+    }
+  };
+
+  /**
+   * Open the microphone through the detector.
+   *
+   * The handle is put in `vadRef` before the microphone is granted, so that a
+   * stop arriving during the permission prompt is not lost: the capture that
+   * opens afterwards sees it was cancelled and closes at once.
+   */
+  const openVad = useCallback(({ startOptions = null, onSpeechStart } = {}) => {
+    const handle = { cancelled: false, started: false, stop() { this.cancelled = true; } };
+    vadRef.current = handle;
+    const base = withSensitivity(VAD_DEFAULTS, voiceSensitivityRef.current);
+    listenForUtterance({
+      options: base,
+      startOptions: startOptions ? withSensitivity({ ...VAD_DEFAULTS, ...startOptions }, voiceSensitivityRef.current) : null,
+      onSpeechStart: () => { handle.started = true; onSpeechStart?.(handle); },
+      onUtterance: (blob) => {
+        if (vadRef.current === handle) vadRef.current = null;
+        hearUtteranceRef.current?.(blob);
+      },
+    }).then((capture) => {
+      if (handle.cancelled || vadRef.current !== handle) { capture.stop(); return; }
+      handle.stop = function stop() { this.cancelled = true; capture.stop(); };
+    }).catch((e) => {
+      if (vadRef.current === handle) vadRef.current = null;
+      // No permission, or no microphone. Not transient: turning the mode off
+      // is better than asking again every half second.
+      addLog(`[voice] microphone unavailable: ${e.message}`, 'error');
+      voiceModeRef.current = false;
+      setVoiceMode(false);
+      setIsListening(false);
+    });
+    return handle;
+  }, []);
+
   const startListening = useCallback(() => {
+    if (voiceLocalRef.current) {
+      if (vadRef.current) return;
+      setIsListening(true);
+      openVad();
+      return;
+    }
     const recognition = recognitionRef.current;
     if (!recognition) return;
     try {
@@ -3017,22 +3180,28 @@ function App() {
       // `start()` throws if it is already running -- harmless, and the
       // alternative is tracking a second copy of state the browser owns.
     }
-  }, []);
+  }, [openVad]);
 
   const stopVoiceMode = useCallback(() => {
     setVoiceMode(false);
     voiceModeRef.current = false;
     try { recognitionRef.current?.stop(); } catch (e) { /* not running */ }
+    stopVad();
     setIsListening(false);
     stopSpeaking();
-  }, [stopSpeaking]);
+  }, [stopSpeaking, stopVad]);
 
-  const toggleVoiceMode = () => {
+  const toggleVoiceMode = async () => {
     if (voiceMode) { stopVoiceMode(); haptic('light'); return; }
-    if (!recognitionRef.current) {
+    const local = await localSttAvailable().catch(() => false);
+    const canRecord = !!navigator.mediaDevices?.getUserMedia
+      && !!(window.AudioContext || window.webkitAudioContext);
+    voiceLocalRef.current = local && canRecord;
+    if (!voiceLocalRef.current && !recognitionRef.current) {
       toast(t('voice.unsupported'), 'error', 6000);
       return;
     }
+    addLog(`[voice] hands-free with ${voiceLocalRef.current ? 'the local transcriber' : "the browser's recogniser"}`, 'info');
     setVoiceMode(true);
     voiceModeRef.current = true;
     haptic('medium');
@@ -3041,7 +3210,51 @@ function App() {
 
   // Leaving the page, or the app being replaced, must not leave a microphone
   // open and a voice talking into an empty room.
-  useEffect(() => () => { try { recognitionRef.current?.stop(); } catch (e) { /* ignore */ } }, []);
+  useEffect(() => () => {
+    try { recognitionRef.current?.stop(); } catch (e) { /* ignore */ }
+    vadRef.current?.stop();
+  }, []);
+
+  /**
+   * Barge-in: while the answer is being thought up or read out, listen for the
+   * person talking over it -- with a stricter threshold, since the speaker is
+   * still playing -- and when they do, stop the answer and take what they are
+   * saying as the next question.
+   *
+   * Keyed on one derived "busy" flag rather than on each of its parts, so that
+   * the hand-off from generating to speaking does not close and reopen the
+   * microphone. A capture that has already heard speech is never closed by
+   * this effect's cleanup: it is the next question, and it ends by itself.
+   */
+  const voiceBusy = isGenerating || isSynthesizing || speakingIndex !== null;
+  useEffect(() => {
+    if (!voiceMode || !voiceBargeIn || !voiceBusy || isListening || isTranscribing) return undefined;
+    if (vadRef.current) return undefined;
+    const handle = openVad({
+      startOptions: BARGE_IN,
+      onSpeechStart: (h) => {
+        addLog('[voice] interrupted by the speaker', 'info');
+        haptic('light');
+        stopSpeaking();
+        if (isGeneratingRef.current) stopGenerationRef.current?.();
+        setIsListening(true);
+        // The browser's recogniser cannot take over a capture in progress;
+        // hand the microphone to it, losing the first syllable at worst.
+        if (!voiceLocalRef.current) {
+          h.stop();
+          if (vadRef.current === h) vadRef.current = null;
+          setIsListening(false);
+          setTimeout(() => { if (voiceModeRef.current) startListening(); }, 0);
+        }
+      },
+    });
+    return () => {
+      if (!handle.started) {
+        handle.stop();
+        if (vadRef.current === handle) vadRef.current = null;
+      }
+    };
+  }, [voiceMode, voiceBargeIn, voiceBusy, isListening, isTranscribing, openVad, stopSpeaking, startListening]);
 
   // What a heard sentence means. Returning true claims the transcript, so the
   // dictation path does not also paste it into the composer.
@@ -3076,12 +3289,15 @@ function App() {
    */
   useEffect(() => {
     if (!voiceMode) return undefined;
-    if (isGenerating || isListening || isSynthesizing || speakingIndex !== null) return undefined;
+    // Transcribing too: the local path is not "listening" while Whisper reads
+    // the clip, and opening the microphone then would hear the next question
+    // before this one was asked.
+    if (isGenerating || isListening || isTranscribing || isSynthesizing || speakingIndex !== null) return undefined;
     const timer = setTimeout(() => {
       if (voiceModeRef.current && !isGeneratingRef.current) startListening();
     }, 500);
     return () => clearTimeout(timer);
-  }, [voiceMode, isGenerating, isListening, isSynthesizing, speakingIndex, startListening]);
+  }, [voiceMode, isGenerating, isListening, isTranscribing, isSynthesizing, speakingIndex, startListening]);
 
   const handleSendRef = useRef(null);
   // A painted edit waiting for the next send: `{ mask, target }`. See MaskEditor.
@@ -3633,6 +3849,7 @@ function App() {
    */
   const modelPickedByHand = (name) => {
     setSelectedModel(name);
+    noteHandPick(name);
     if (routingEnabled && !currentSession.manualModel) {
       reviseSession(currentSessionId, s => ({ ...s, manualModel: true }));
       addLog(`[routing] off for this chat: ${name} was chosen by hand`, 'info');
@@ -3736,7 +3953,12 @@ function App() {
   // Attachments & MCP
   const [attachments, setAttachments] = useState([]);
   const fileInputRef = useRef(null);
-  const [mcpEnabled, setMcpEnabled] = useState(false);
+  /* The tools toggle: on unless the reader turned it off, and remembered.
+     With it off, a model -- a CLI one especially -- answers "I cannot read
+     files" about a file the reader has configured a server for, which is the
+     wrong default for the reason the servers were configured. */
+  const [mcpEnabled, setMcpEnabled] = useState(() => getSetting('mcpEnabled') !== 'false');
+  useEffect(() => { setSetting('mcpEnabled', String(mcpEnabled)); }, [mcpEnabled]);
 
   /* The message currently open as a document, by index, and nothing else.
    *
@@ -3770,7 +3992,11 @@ function App() {
       const data = await res.json();
       setMcpTools(Array.isArray(data.tools) ? data.tools : []);
       setMcpProblems(Array.isArray(data.problems) ? data.problems : []);
-      setMcpConfig({ file: data.file, configured: data.configured || 0, missing: !!data.missing });
+      setMcpConfig({
+        file: data.file, configured: data.configured || 0, missing: !!data.missing,
+        servers: Array.isArray(data.servers) ? data.servers : [],
+        imports: Array.isArray(data.imports) ? data.imports : [],
+      });
     } catch (e) {
       // The middleware is not running. No tools, and nothing to report: this
       // is the ordinary state of a build served without the server.
@@ -3786,6 +4012,40 @@ function App() {
     if (!mcpEnabled) return;
     refreshMcpTools();
   }, [mcpEnabled, refreshMcpTools]);
+
+  /* Stop one server (or all of them) and ask again, which starts it afresh.
+     Only servers the config already names: this starts nothing new. */
+  const restartMcp = useCallback(async (server) => {
+    setMcpLoading(true);
+    try {
+      await fetch('/mcp/restart', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(server ? { server } : {}),
+      });
+    } catch (e) { /* the refresh below says what is wrong */ }
+    await refreshMcpTools();
+  }, [refreshMcpTools]);
+
+  /* A server's prompt, filled in, dropped into the message box to be read and
+     sent by the reader -- a prompt is theirs to send, not the model's. */
+  const insertMcpPrompt = useCallback(async (server, name, args) => {
+    try {
+      const res = await fetch('/mcp/prompt', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ server, name, args }),
+      });
+      const data = await res.json();
+      if (!data.success) throw new Error(data.error || 'failed');
+      setInput(prev => (prev.trim() ? `${prev}
+
+${data.text}` : data.text));
+      setShowSettings(false);
+    } catch (e) {
+      alert(`${server} / ${name}: ${e.message}`);
+    }
+  }, []);
 
   /* What the card has free, while the settings panel is open.
    *
@@ -4054,6 +4314,10 @@ function App() {
 
     const latest = codeArtifacts.find(a => a.id === fresh[fresh.length - 1]);
     if (!latest) return;
+    /* On a phone the panel covers the whole chat: an answer with code (a CLI's
+       diffs above all) would take the screen away mid-read. It opens there
+       only when asked for, from the code block's own button. */
+    if (window.matchMedia?.('(max-width: 860px)').matches) return;
     setActiveArtifact({
       id: latest.id,
       type: latest.previewable ? 'preview' : latest.runnable ? 'run' : 'code',
@@ -6658,6 +6922,9 @@ function App() {
        Studio ran was a write, every write came back from the account, and each
        return reloaded the page out from under whatever was being typed. */
     if (applied.studio > 0) window.dispatchEvent(new Event('webui:studio-synced'));
+    // A settings change may require a deferred reload, but must not hold back
+    // incoming chats while the reader has an unsent draft in the composer.
+    if (applied.chats > 0) refreshChatsFromStorage();
     if (!beyondChats && !(applied.chats > 0)) return true;
 
     if (!beyondChats && applied.chats > 0) {
@@ -6667,7 +6934,6 @@ function App() {
       // untouched, and `refreshChatsFromStorage` already declines outright
       // while this device is generating, because the reply being streamed here
       // is in state and not yet in storage.
-      refreshChatsFromStorage();
       return true;
     }
 
@@ -6721,6 +6987,9 @@ function App() {
       scope: () => profileScopeRef.current,
       onResult: (result) => {
         syncStampRef.current = result.rev || syncStampRef.current;
+        if (result.refusedCount > 0) {
+          addLog(`[sync] ${result.refusedCount} records were not uploaded: ${result.refused?.[0]?.reason || 'unknown error'}`, 'error');
+        }
         if (result.changedLocally <= 0) return;
 
         // An upload is also a download -- one round trip does both -- so this
@@ -6745,7 +7014,16 @@ function App() {
           onClick: () => window.location.reload(),
         });
       },
-      onError: (e) => addLog(`[sync] upload failed: ${e.message}`, 'error'),
+      onError: (e) => {
+        addLog(`[sync] upload failed: ${e.message}`, 'error');
+        // A failed upload used to be visible only in developer logs while the
+        // other device silently stayed hours behind.
+        const now = Date.now();
+        if (now - (syncRef.current?.lastErrorShown || 0) > 60000) {
+          if (syncRef.current) syncRef.current.lastErrorShown = now;
+          toast(`대화 동기화 실패: ${e.message}`, 'error', 12000);
+        }
+      },
       onOwnerMismatch: () => {
         // The server says this session belongs to someone else. Uploading again
         // would be equally wrong, so the scheduler has already stopped itself;
@@ -6838,6 +7116,16 @@ function App() {
     if (!accountId) return undefined;
 
     let stopped = false;
+    /* A check that had to stand down -- busy, offline for a moment, the server
+       not answering yet as the phone wakes -- used to be simply dropped, and
+       the next chance was the 30-second poll, whose timer a phone freezes. That
+       gap is the "sometimes I have to sync by hand". Now it tries again soon. */
+    let recheck = null;
+    let misses = 0;
+    const later = (ms = 2000) => {
+      if (stopped || recheck) return;
+      recheck = setTimeout(() => { recheck = null; check(); }, ms);
+    };
     /**
      * `known` is the revision the stream just carried.
      *
@@ -6860,21 +7148,27 @@ function App() {
       if (isGeneratingRef.current) return;
 
       // Nor while this device's own upload is queued or in flight: the stamp it
-      // is about to write is not a change from somewhere else.
-      if (syncRef.current?.pending()) return;
+      // is about to write is not a change from somewhere else. But look again
+      // once it has landed, rather than waiting for the poll.
+      if (syncRef.current?.pending()) { later(1500); return; }
 
       if (known > syncStampRef.current) {
         try {
           await pullRemoteChanges();
+          misses = 0;
         } catch (e) {
           if (e instanceof OwnerMismatch) { stopped = true; authSession.refresh(); return; }
           addLog(`[sync] could not fetch remote changes: ${e.message}`, 'info');
+          if (misses++ < 5) later(3000 * misses);
         }
         return;
       }
 
       const stamp = await accountStamp();
-      if (stopped || !stamp) return;
+      if (stopped) return;
+      // Typically a phone that has just woken and has no network yet.
+      if (!stamp) { if (misses++ < 5) later(3000 * misses); return; }
+      misses = 0;
 
       // The account behind the session is not the one on screen. That means
       // another tab signed in as somebody else, and every store this tree is
@@ -6895,6 +7189,7 @@ function App() {
       } catch (e) {
         if (e instanceof OwnerMismatch) { stopped = true; authSession.refresh(); return; }
         addLog(`[sync] could not fetch remote changes: ${e.message}`, 'info');
+        if (misses++ < 5) later(3000 * misses);
       }
     };
 
@@ -6914,6 +7209,8 @@ function App() {
         if (rev <= syncStampRef.current) return;
         check({ known: rev });
       },
+      // Whatever changed while the stream was down was never announced.
+      onOpen: () => check(),
     });
 
     // The poll stays, at a slower rate, and it is not redundant: a stream can
@@ -6926,12 +7223,17 @@ function App() {
     window.addEventListener('focus', check);
     document.addEventListener('visibilitychange', check);
     window.addEventListener('webui:generation-ended', check);
+    window.addEventListener('online', check);
+    window.addEventListener('pageshow', check);
     check();
 
     return () => {
       stopped = true;
       unsubscribe();
       clearInterval(timer);
+      if (recheck) clearTimeout(recheck);
+      window.removeEventListener('online', check);
+      window.removeEventListener('pageshow', check);
       window.removeEventListener('focus', check);
       document.removeEventListener('visibilitychange', check);
       window.removeEventListener('webui:generation-ended', check);
@@ -7975,6 +8277,21 @@ function App() {
     addFiles(Array.from(e.target.files));
     // Reset file input
     if (fileInputRef.current) fileInputRef.current.value = '';
+  };
+
+  /* A frame of whichever screen, window or tab is chosen, as an attachment.
+     The menu closes first: the system picker otherwise opens over it. */
+  const attachScreen = async () => {
+    setShowAddMenu(false);
+    try {
+      const file = await captureScreen();
+      if (!file) return;
+      await addFiles([file]);
+      addLog(`[capture] attached ${file.name} (${Math.round(file.size / 1024)} KB)`, 'success');
+      requestAnimationFrame(() => textareaRef.current?.focus?.());
+    } catch (e) {
+      toast(t('capture.screenFailed', { error: e.message }), 'error', 7000);
+    }
   };
 
   const handlePaste = (e) => {
@@ -9334,7 +9651,9 @@ Charts and graphs
            whole of one pasted here would be most of a small model's context
            spent on a tool it has not chosen yet. */
         const firstLine = (text) => String(text || '').split(/\r?\n/)[0].trim();
-        const mcpToolPrompt = mcpTools.length === 0 ? '' : `
+        /* A CLI model that is handed the servers itself (see
+           server/cliModels.js) is not also told about them as tags. */
+        const mcpToolPrompt = mcpTools.length === 0 || hasCapability(activeModel, 'mcp') ? '' : `
 From other tool servers -- call one with:
   <TOOL_MCP server="name" tool="name">{"argument": "value"}</TOOL_MCP>
 ${mcpTools.map(tool => `  ${tool.server} / ${tool.name}: ${firstLine(tool.description).slice(0, 160)}\n`
@@ -9566,6 +9885,14 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         }], updatedAt: Date.now(), lastModel: targetModel }) : session));
       signal.throwIfAborted();
       // 4. Send to Ollama
+      /* This chat's folder, for a CLI model: it works there as a coding agent
+         (server/cliProject.js), asking here before anything past editing.
+         Encoded: a header is Latin-1, a path need not be. */
+      const startedSession = sessionsRef.current.find(s => s.id === startedIn);
+      const projectHeaders = startedSession?.cliProject ? {
+        'X-Cli-Project': encodeURIComponent(startedSession.cliProject),
+        'X-Cli-Project-Mode': startedSession.cliProjectMode === 'edit' ? 'edit' : 'plan',
+      } : {};
       const askOllama = (think) => fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -9577,6 +9904,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
              a reply is written to the chat that asked for it. See
              `/api/chat/live`. */
           'X-Chat-Conversation': String(startedIn),
+          /* The tools toggle, for a model answered by a CLI: with it on, the
+             CLI is handed the MCP servers (and Claude Code the web) for this
+             turn. Every other backend ignores the header. */
+          ...(mcpEnabled ? { 'X-Cli-Tools': 'on' } : {}), ...projectHeaders,
         },
         signal: abortControllerRef.current.signal,
         body: JSON.stringify({
@@ -9847,6 +10178,21 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               ttft: firstTokenAt === null ? null : Math.round(firstTokenAt - turnStartedAt),
               load: ms(parsed.load_duration),
               promptEval: ms(parsed.prompt_eval_duration),
+              // Speculative decoding, when llama.cpp ran with a draft. See
+              // toDoneFrame in server/llamacpp.js.
+              ...(finite(parsed.draft_n) ? {
+                draftN: finite(parsed.draft_n),
+                draftAccepted: finite(parsed.draft_n_accepted),
+              } : {}),
+              // A subscription CLI's own account of the answer: what it would
+              // have cost on the API, how much came from the provider's cache,
+              // and whether its earlier session was picked up rather than the
+              // conversation sent again. See server/cliSessions.js.
+              ...(finite(parsed.cost_usd) !== null ? { costUsd: finite(parsed.cost_usd) } : {}),
+              ...(finite(parsed.cached_count) ? { cachedTokens: finite(parsed.cached_count) } : {}),
+              ...(parsed.cli_resumed ? { resumed: true } : {}),
+              // A CLI run's split: the context in use vs. the run's sums.
+              ...(parsed.cli_tokens ? { cliTokens: parsed.cli_tokens } : {}),
             };
             legMetrics = metrics;
 
@@ -9882,6 +10228,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 // the composer only ever had a heuristic before this.
                 metrics,
                 model: targetModel,
+                /* Somebody else answered: the model picked was over its limit
+                   and CLI_FALLBACK chose another (server/cliFallback.js).
+                   Said under the message, never passed off as the one picked. */
+                ...(parsed.answered_by ? {
+                  fallback: { from: parsed.fallback_from || targetModel, to: parsed.answered_by, reason: parsed.fallback_reason || 'limit' },
+                } : {}),
                 isMcpFetching: false,
                 // Only when there were any, so an ordinary answer carries no
                 // empty array into storage and over the sync.
@@ -10048,6 +10400,27 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
        * inside `if (mcpEnabled)` along with everything that genuinely needs
        * permission. */
       {
+        /* See mcpFileRoute in src/tools.js: the built-in file tags, done by
+           the filesystem server in mcp.json when there is one. null means
+           "no such server", and the tag falls back to /localfs. */
+        const fileTagViaMcp = async (tag, args, header) => {
+          const route = mcpFileRoute(tag, mcpTools, args);
+          if (!route) return null;
+          try {
+            const res = await fetch('/mcp/call', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify(route),
+              signal,
+            });
+            const data = await res.json();
+            if (!data.success) return `Error: ${data.error}`;
+            return data.isError ? `Error: ${data.text}` : `${header}\n${data.text}`;
+          } catch (e) {
+            if (e.name === 'AbortError') throw e;
+            return `Error: the file server could not be reached: ${e.message}`;
+          }
+        };
         const TOOLS = [
           {
             name: 'TOOL_WEB_SEARCH',
@@ -10137,6 +10510,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             run: async (m) => {
               const targetPath = m[1].trim();
               addLog(`[tool] read file: ${targetPath}`, 'info');
+              const viaMcp = await fileTagViaMcp('TOOL_READ_FILE', { path: targetPath }, `File content of ${targetPath}:`);
+              if (viaMcp !== null) return viaMcp;
               const res = await fetch('/localfs/read', { method: 'POST', body: JSON.stringify({ targetPath }) });
               const data = await res.json();
               return data.success ? `File content of ${targetPath}:\n${data.content}` : `Error: ${data.error}`;
@@ -10148,6 +10523,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             run: async (m) => {
               const targetPath = m[1].trim();
               addLog(`[tool] list dir: ${targetPath}`, 'info');
+              const viaMcp = await fileTagViaMcp('TOOL_LIST_DIR', { path: targetPath }, `Contents of ${targetPath}:`);
+              if (viaMcp !== null) return viaMcp;
               const res = await fetch('/localfs/list', { method: 'POST', body: JSON.stringify({ targetPath }) });
               const data = await res.json();
               return data.success ? `Contents of ${targetPath}:\n${data.files.join('\n')}` : `Error: ${data.error}`;
@@ -10160,6 +10537,9 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               const targetPath = m[1].trim();
               const query = m[2];
               addLog(`[tool] search files: "${query}" in ${targetPath}`, 'info');
+              const viaMcp = await fileTagViaMcp('TOOL_SEARCH_FILES', { path: targetPath, query },
+                `Files whose name contains '${query}' (the file server matches names, not contents):`);
+              if (viaMcp !== null) return viaMcp;
               const res = await fetch('/localfs/search', { method: 'POST', body: JSON.stringify({ targetPath, query }) });
               const data = await res.json();
               return data.success
@@ -10173,6 +10553,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             run: async (m) => {
               const targetPath = m[1].trim();
               addLog(`[tool] write file: ${targetPath}`, 'info');
+              const viaMcp = await fileTagViaMcp('TOOL_WRITE_FILE', { path: targetPath, content: m[2] }, `Wrote ${targetPath}.`);
+              if (viaMcp !== null) return viaMcp;
               const res = await fetch('/localfs/write', { method: 'POST', body: JSON.stringify({ targetPath, content: m[2] }) });
               const data = await res.json();
               return data.success ? `Wrote ${targetPath}.` : `Error: ${data.error}`;
@@ -11078,6 +11460,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     forgetGeneration();
     addLog('User requested to stop generation.', 'info');
   };
+  // For hands-free barge-in, which is declared long before this is.
+  stopGenerationRef.current = stopGeneration;
 
   /**
    * Quote a message into the composer, to ask something about it.
@@ -12127,6 +12511,24 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     e.target.value = '';
   };
 
+  /* A Claude Code or Codex conversation from the terminal, as a new chat
+     here (settings → CLIs). Answered by the same CLI, in the same folder when
+     that folder is one project mode may use. */
+  const importTerminalSession = (imported) => {
+    const at = Date.now();
+    const model = imported.provider === 'codex' ? 'codex:gpt-5.5' : 'claude-code:sonnet';
+    const first = imported.messages.find(m => m.role === 'user')?.content || 'Terminal session';
+    const session = {
+      id: nextSessionId(), title: first.replace(/\s+/g, ' ').slice(0, 60), createdAt: at, updatedAt: at,
+      messages: imported.messages.map(m => ({ role: m.role, content: m.content, at, ...(m.role === 'assistant' ? { model } : {}) })),
+      lastModel: model,
+      ...(imported.cwd ? { cliProject: imported.cwd, cliProjectMode: 'plan' } : {}),
+    };
+    setSessions(prev => [session, ...prev]);
+    setCurrentSessionId(session.id);
+    toast(t('cliAgent.imported', { n: session.messages.length }), 'success');
+  };
+
   const clearAllChats = () => {
     if (window.confirm(t('data.confirmClearAll'))) {
       const freshSession = { id: nextSessionId(), title: 'New Chat', messages: [], createdAt: Date.now(), updatedAt: Date.now(), lastModel: '' };
@@ -12325,9 +12727,16 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
   // number for everything sent. Anything typed since is still an estimate,
   // but the bulk of the figure is now measured rather than guessed.
   const lastMeasured = [...messages].reverse()
-    .find(m => m.role === 'assistant' && m.metrics?.promptTokens);
+    .find(m => m.role === 'assistant' && m.metrics?.promptTokens
+      /* Older CLI answers stored the run's sum over every tool round here --
+         millions, never a context. A figure past the window is not one. */
+      && !(numCtx > 0 && m.metrics.promptTokens > numCtx * 1.5));
+  /* A CLI run makes many calls; its evalCount is all of their output, but
+     only the last call's output is in the context now. */
   const measuredTokens = lastMeasured
-    ? lastMeasured.metrics.promptTokens + (lastMeasured.metrics.evalCount || 0)
+    ? lastMeasured.metrics.promptTokens + (lastMeasured.metrics.cliTokens
+      ? (lastMeasured.metrics.cliTokens.contextOut || 0)
+      : (lastMeasured.metrics.evalCount || 0))
     : null;
 
   const tokensSinceMeasurement = measuredTokens === null
@@ -12358,10 +12767,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       { section: 'Actions', label: t('compact.action'), icon: <Layers size={15} />, action: () => compactConversation() },
       { section: 'Actions', label: t('data.exportJson'), icon: <Download size={15} />, action: exportSessions },
       { section: 'Actions', label: t('sidebar.rename'), icon: <Edit size={15} />, action: () => startRename(currentSession) },
-      { section: 'Actions', label: currentSession?.pinned ? 'Unpin this chat' : 'Pin this chat', icon: <Pin size={15} />, action: () => togglePin(currentSessionId) },
+      { section: 'Actions', label: currentSession?.pinned ? t('sidebar.unpin') : t('sidebar.pin'), icon: <Pin size={15} />, action: () => togglePin(currentSessionId) },
       { section: 'Actions', label: t('sidebar.duplicate'), icon: <Copy size={15} />, action: () => duplicateSession(currentSessionId) },
-      { section: 'Actions', label: `Web Fetch (MCP): turn ${mcpEnabled ? 'off' : 'on'}`, icon: <Terminal size={15} />, action: () => setMcpEnabled(v => !v) },
-      { section: 'Actions', label: `Thinking: ${thinkMode} (cycle auto/on/off)`, icon: <Zap size={15} />, action: () => setThinkMode(m => m === 'auto' ? 'on' : m === 'on' ? 'off' : 'auto') },
+      { section: 'Actions', label: `${t('palette.webFetch')}: ${mcpEnabled ? t('common.on') : t('common.off')}`, icon: <Terminal size={15} />, action: () => setMcpEnabled(v => !v) },
+      { section: 'Actions', label: `${t('palette.thinking')}: ${t(`common.${thinkMode}`)}`, icon: <Zap size={15} />, action: () => setThinkMode(m => m === 'auto' ? 'on' : m === 'on' ? 'off' : 'auto') },
       { section: 'Actions', label: t('profile.title'), icon: <User size={15} />, action: () => (user ? setShowProfileDialog(true) : setShowAuthScreen(true)) },
       { section: 'Appearance', label: `${t('settings.animations')}: ${motionMode}`, icon: <Zap size={15} />, action: () => setMotionMode(m => (m === 'system' ? 'full' : m === 'full' ? 'reduced' : 'system')) },
       { section: 'Actions', label: t('sysmon.title'), icon: <Activity size={15} />, action: () => { setMonitorTab('system'); setShowSystemMonitor(true); } },
@@ -12381,7 +12790,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       { section: 'Appearance', label: `${t('header.theme')}: ${t('settings.light')}`, icon: <Sun size={15} />, action: () => setTheme('light') },
       { section: 'Appearance', label: `${t('header.theme')}: ${t('settings.dark')}`, icon: <Moon size={15} />, action: () => setTheme('dark') },
       { section: 'Appearance', label: `${t('header.theme')}: ${t('settings.system')}`, icon: <Monitor size={15} />, action: () => setTheme('system') },
-      { section: 'Appearance', label: `Density: switch to ${chatDensity === 'compact' ? 'comfortable' : 'compact'}`, icon: <Layers size={15} />, action: () => setChatDensity(d => (d === 'compact' ? 'comfortable' : 'compact')) },
+      { section: 'Appearance', label: `${t('settings.density')}: ${chatDensity === 'compact' ? t('settings.compact') : t('settings.comfortable')}`, icon: <Layers size={15} />, action: () => setChatDensity(d => (d === 'compact' ? 'comfortable' : 'compact')) },
       { section: 'Appearance', label: `${t('settings.textSize')}: ${t('settings.small')}`, icon: <Layers size={15} />, action: () => setChatFontSize('small') },
       { section: 'Appearance', label: `${t('settings.textSize')}: ${t('settings.medium')}`, icon: <Layers size={15} />, action: () => setChatFontSize('medium') },
       { section: 'Appearance', label: `${t('settings.textSize')}: ${t('settings.large')}`, icon: <Layers size={15} />, action: () => setChatFontSize('large') },
@@ -12431,7 +12840,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       label: m.name,
       icon: <Cpu size={15} />,
       hint: m.size ? formatBytes(m.size) : undefined,
-      action: () => setSelectedModel(m.name),
+      action: () => { setSelectedModel(m.name); noteHandPick(m.name); },
     }));
 
     promptLibrary.forEach(p => items.push({
@@ -12451,9 +12860,25 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       });
     });
 
+    /* Section keys stay English internally; what is shown is translated.
+       Items are grouped by section (keeping their order inside it): an
+       "Appearance" toggle listed between two actions used to split "Actions"
+       into several runs, each with its own repeated heading. */
+    const sectionNames = {
+      Actions: t('palette.secActions'), Appearance: t('palette.secAppearance'), Voice: t('palette.secVoice'),
+      'Switch model': t('palette.secModel'), Prompts: t('palette.secPrompts'), 'Jump to chat': t('palette.secJump'),
+    };
+    const order = [];
+    const groups = new Map();
+    for (const item of items) {
+      const section = sectionNames[item.section] || item.section;
+      if (!groups.has(section)) { groups.set(section, []); order.push(section); }
+      groups.get(section).push({ ...item, section });
+    }
+    const grouped = order.flatMap(section => groups.get(section));
     const q = paletteQuery.trim().toLowerCase();
-    if (!q) return items;
-    return items.filter(i => i.label.toLowerCase().includes(q) || i.section.toLowerCase().includes(q));
+    if (!q) return grouped;
+    return grouped.filter(i => i.label.toLowerCase().includes(q) || i.section.toLowerCase().includes(q));
   })();
 
   const runPaletteItem = (item) => {
@@ -12661,9 +13086,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
          * half of what this app is, and the chat list collapses out of the way
          * when you are in it. */}
         <div className="sidebar-places" role="tablist" aria-label={t('studio.places')}>
-          {[['home', t('studio.home')], ['studio', t('studio.tab')], ['gallery', t('gallery.tab')]].map(([place, label]) => (
+          {[['home', t('studio.home')], ['studio', t('studio.tab')], ['gallery', t('gallery.tab')], ['risu', t('risu.place')]].map(([place, label]) => (
             <button
               key={place}
+              data-risu-tab={place === 'risu' ? '' : undefined}
               type="button"
               role="tab"
               aria-selected={sidebarPlace === place}
@@ -12671,11 +13097,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               onClick={() => {
                 setSidebarPlace(place);
                 if (place === 'studio') setStudioOpened(true);
+                if (place === 'risu') setRisuOpened(true);
                 if (place !== 'home' && isNarrow) setIsSidebarOpen(false);
               }}
             >
-              {place === 'home' ? <MessageSquare size={14} /> : place === 'studio' ? <Wand2 size={14} /> : <Images size={14} />}
-              <span>{label}</span>
+              {place === 'home' ? <MessageSquare size={14} /> : place === 'studio' ? <Wand2 size={14} /> : place === 'risu' ? <Users size={14} /> : <Images size={14} />}
+              <span title={label}>{label}</span>
             </button>
           ))}
         </div>
@@ -13126,14 +13553,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               <Info size={16} />
             </button>
 
-            {/* `header-secondary`, because there are two of these now. The one
-                on the composer row is the one that matters -- it sits beside
-                the send button, where the decision is actually made, and it
-                carries the thinking effort with it. This one is still useful on
-                a wide window, where the title bar has room to say what is
-                selected without being asked; on a phone it is the same control
-                twice on a screen with room for neither. */}
-            <div className="model-selector-container header-secondary" ref={dropdownRef}>
+            {/* Shown on a phone too. The composer row has its own picker, but
+                the studio, gallery and roleplay tabs have no composer -- hidden
+                here, a phone had no way to change the model on those tabs. */}
+            <div className="model-selector-container" ref={dropdownRef}>
               <button className="dropdown-trigger" onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}>
                 <span className="model-name">{selectedModel || t('header.selectModel')}</span>
                 <ChevronDown size={14} />
@@ -13155,6 +13578,11 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 </div>
               )}
             </div>
+
+            {/* What is left of the subscription, for a model answered by a
+                signed-in CLI. Asked again when an answer finishes, since
+                that is when the CLI has just said. See src/CliLimits.jsx. */}
+            <CliLimitBadge model={selectedModel} refreshKey={isGenerating} notifyBack={notifyWhenDone} />
 
             {!modelSupportsVision(selectedModel) && (
             <div className="model-selector-container header-secondary" ref={visionDropdownRef}>
@@ -13479,6 +13907,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             />
           </div>
         )}
+        {risuOpened && <div className="studio-place" hidden={sidebarPlace !== 'risu'}><RisuPanel scope={profileScope} model={selectedModel} picked={handPickedModel} onPick={modelPickedByHand} /></div>}
         {studioOpened && (
           <div className="studio-place" hidden={sidebarPlace !== 'studio'}>
             <StudioPanel
@@ -13933,6 +14362,21 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           // explicit click always wins from then on.
                           const thinkIsOpen = thinkOverrides[i] !== undefined ? thinkOverrides[i] : shouldOpenDropdown;
                           const isStreamingRow = streamingNow;
+                          /* What the tools changed on disk, out from under the
+                             folded tool steps. See src/FileChanges.jsx. */
+                          /* A CLI puts its diffs into the answer itself
+                             (server/cliModels.js); they join the same panel
+                             and leave the prose to be prose. */
+                          /* ...drawn where they stand, under the sentence
+                             that announced each one, not gathered at the end. */
+                          const answerParts = textBlocks.map(tb => answerPartsOf(tb.content));
+                          const fileChanges = internalBlocks
+                            .filter(b => b.type === 'tool_result')
+                            .flatMap(b => fileChangesIn(b.content));
+                          /* A coding CLI's steps -- tools, commands, edits --
+                             said in its thinking (src/agentActivity.js). */
+                          const agentWorking = internalBlocks.some(b => b.type === 'think' && hasActivity(b.content));
+                          const lastThinkIdx = internalBlocks.map(b => b.type).lastIndexOf('think');
 
                           return (
                             <>
@@ -13965,6 +14409,16 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                   <Collapsible open={thinkIsOpen}>
                                   <div className="think-body">
                                     {internalBlocks.map((part, idx) => {
+                                      if (part.type === 'think' && hasActivity(part.content)) {
+                                        return (
+                                          <AgentActivity
+                                            key={`think-${idx}`}
+                                            text={part.content}
+                                            live={isStreamingRow && idx === lastThinkIdx}
+                                            markdownProps={{ rehypePlugins: markdownRehypePlugins }}
+                                          />
+                                        );
+                                      }
                                       if (part.type === 'think') {
                                         return (
                                           <ReactMarkdown 
@@ -14113,7 +14567,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                   </Collapsible>
                                 </div>
                               )}
-                              
+
+                              {/* Outside the fold: a build running for minutes
+                                  is watched whether the thinking is open or not. */}
+                              {agentWorking && <LiveCommands live={isStreamingRow} />}
+
+                              <FileChanges changes={fileChanges} />
+
                               {/* What was made before a word was written -- the
                                   call first, the talk after. See `inGap`. */}
                               {(picturesAfterText(-1).length > 0 || songsAfterText(-1).length > 0) && (
@@ -14151,7 +14611,11 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                     isStreamingRow && idx === textBlocks.length - 1 ? 'is-streaming' : ''
                                   }`}
                                 >
+                                  {answerParts[idx].map((part, pn) => (part.type === 'change'
+                                    ? <FileChanges key={`chg-${pn}`} changes={[part.change]} inline />
+                                    : (
                                   <ReactMarkdown
+                                    key={`md-${pn}`}
                                     remarkPlugins={[remarkGfm, remarkMath]}
                                     rehypePlugins={
                                       /* Citations are per message, so the
@@ -14186,8 +14650,9 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                       ),
                                     }}
                                   >
-                                    {tb.content}
+                                    {part.text}
                                   </ReactMarkdown>
+                                    )))}
                                 </div>
                                 {/* And whatever was drawn between this
                                     paragraph and the next one. A picture is a
@@ -14427,6 +14892,14 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                   </span>
                                 </>
                               )}
+                              {spent.draftN > 0 && Number.isFinite(spent.draftAccepted) && (
+                                <>
+                                  <span className="dot">•</span>
+                                  <span title={t('spec.acceptedHelp', { accepted: spent.draftAccepted, drafted: spent.draftN })}>
+                                    {t('spec.accepted', { rate: Math.round((spent.draftAccepted / spent.draftN) * 100) })}
+                                  </span>
+                                </>
+                              )}
                               {/* Shown whenever either half is known. Gating on
                                   the prompt size alone hid the answer's own
                                   token count with it, and a server that reports
@@ -14434,11 +14907,39 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                               {(spent.promptTokens != null || spent.evalCount > 0) && (
                                 <>
                                   <span className="dot">•</span>
-                                  <span title={t('msg.promptTokens')}>
+                                  <span title={spent.cliTokens ? t('msg.cliTokensHelp', {
+                                    context: spent.cliTokens.context == null ? '?' : spent.cliTokens.context.toLocaleString(),
+                                    input: (spent.cliTokens.input || 0).toLocaleString(),
+                                    fresh: spent.cliTokens.fresh == null ? '?' : spent.cliTokens.fresh.toLocaleString(),
+                                    cacheRead: (spent.cliTokens.cacheRead || 0).toLocaleString(),
+                                    cacheWrite: (spent.cliTokens.cacheWrite || 0).toLocaleString(),
+                                    output: (spent.cliTokens.output || 0).toLocaleString(),
+                                  }) : t('msg.promptTokens')}>
+                                    {/* Compact figures ("113K + 1.2K tok"); the exact
+                                        ones, and a CLI run's running totals, are in
+                                        the tooltip. Spelled out in full they made the
+                                        row wrap halfway through a sentence. */}
                                     {spent.promptTokens != null
-                                      ? `${spent.promptTokens.toLocaleString()} + `
+                                      ? `${compactCount(spent.promptTokens)} + `
                                       : ''}
-                                    {spent.estimated ? '~' : ''}{(spent.evalCount || 0).toLocaleString()} tok
+                                    {spent.estimated ? '~' : ''}{compactCount(spent.cliTokens ? spent.cliTokens.contextOut : (spent.evalCount || 0))} tok
+                                  </span>
+                                </>
+                              )}
+                              {/* A subscription CLI's own figures: the API
+                                  price it reports, and how much of the prompt
+                                  its provider read back from cache. */}
+                              {Number.isFinite(spent.costUsd) && (
+                                <>
+                                  <span className="dot">•</span>
+                                  <span title={t('cli.costHelp')}>{formatUsd(spent.costUsd)}</span>
+                                </>
+                              )}
+                              {spent.cachedTokens > 0 && (
+                                <>
+                                  <span className="dot">•</span>
+                                  <span title={`${spent.cachedTokens.toLocaleString()} tok · ${spent.resumed ? t('cli.resumedHelp') : t('cli.cachedHelp')}`}>
+                                    {t(spent.resumed ? 'cli.resumedCached' : 'cli.cached', { tokens: compactCount(spent.cachedTokens) })}
                                   </span>
                                 </>
                               )}
@@ -14449,8 +14950,15 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                   first: these are sentences, and a sentence
                                   wedged between two figures is what turned
                                   this row into seven lines on a phone. */}
-                              {(answer.routedBy || answer.memoryNote) && (
+                              {(answer.routedBy || answer.memoryNote || answer.fallback) && (
                                 <div className="metrics-why">
+                                  {answer.fallback && (
+                                    <span title={t('cli.fallbackHelp')}>
+                                      {t(answer.fallback.reason === 'unavailable' ? 'cli.fallbackUnavailable' : answer.fallback.reason === 'budget' ? 'cli.fallbackBudget' : 'cli.fallbackLimit', {
+                                        from: answer.fallback.from, to: answer.fallback.to,
+                                      })}
+                                    </span>
+                                  )}
                                   {answer.routedBy && (
                                     <span title={t('routing.routedHelp')}>
                                       {answer.routedBy.forced
@@ -14629,6 +15137,21 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           })}
                         </div>
                       )
+                    )}
+                    {/* Inside the content column, after everything else: the
+                        row itself lays avatar and content side by side, so as
+                        a child of the row this line sat to the right. */}
+                    {msg.role === 'assistant' && isThisChatGenerating && i + group.length - 1 >= messages.length - 1 && (
+                      <LiveWorkStatus
+                        key={`live-${currentSessionId}-${messages.length}`}
+                        startedAt={(() => {
+                          try {
+                            const saved = JSON.parse(localStorage.getItem(generationStorageKey) || 'null');
+                            return saved?.sessionId === currentSessionId ? saved.startedAt : undefined;
+                          } catch (e) { return undefined; }
+                        })()}
+                        text={group.map(m => `${m.thinking || ''}${typeof m.content === 'string' ? m.content : ''}`).join('')}
+                      />
                     )}
                   </div>
                   
@@ -14940,9 +15463,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             <textarea
               ref={textareaRef}
               className="chat-input"
-              placeholder={isNarrow
-                ? t('composer.placeholderShort')
-                : t('composer.placeholder', { model: selectedModel || 'Ollama' })}
+              /* The model picker sits right under this box and already names
+                 the model; a raw tag such as "gemma4:26b-a4b-it-q8_0" in the
+                 placeholder repeated it as noise on every screen width. */
+              placeholder={t('composer.placeholderShort')}
               value={input}
               onChange={handleInputResize}
               onKeyDown={handleKeyDown}
@@ -15007,6 +15531,29 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       <em>{t('composer.attachHelp')}</em>
                     </span>
                   </button>
+
+                  {/* One frame of a screen or a camera, attached like any
+                      picture. See src/capture.js. Phones have no screen
+                      capture, so that row is simply absent there. */}
+                  {canCaptureScreen() && (
+                    <button type="button" className="composer-menu-item" onClick={attachScreen}>
+                      <Monitor size={15} />
+                      <span className="composer-menu-label">
+                        {t('capture.screen')}
+                        <em>{t('capture.screenHelp')}</em>
+                      </span>
+                    </button>
+                  )}
+                  {canUseCamera() && (
+                    <button type="button" className="composer-menu-item"
+                      onClick={() => { setShowAddMenu(false); setShowCamera(true); }}>
+                      <Camera size={15} />
+                      <span className="composer-menu-label">
+                        {t('capture.camera')}
+                        <em>{t('capture.cameraHelp')}</em>
+                      </span>
+                    </button>
+                  )}
 
                   {/* Research is a mode rather than a command, because it
                       changes what sending means: minutes instead of seconds,
@@ -15230,6 +15777,33 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     spellCheck={false}
                   />
                   <div className="composer-menu-note">{t('character.help')}</div>
+                  {/* The folder a CLI model works in for this chat, as a
+                      coding agent. Only folders under CLI_PROJECT_ROOTS are
+                      accepted; the server says so otherwise. */}
+                  <div className="composer-menu-heading">{t('cliAgent.folder')}</div>
+                  <input
+                    className="chat-character"
+                    value={currentSession?.cliProject || ''}
+                    onChange={(e) => updateCurrentSession({ cliProject: e.target.value.trim() ? e.target.value : undefined })}
+                    placeholder={'C:\\path\\to\\repo'}
+                    aria-label={t('cliAgent.folder')}
+                    spellCheck={false}
+                  />
+                  {currentSession?.cliProject && (
+                    <div className="chat-scope-row" style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+                      {['plan', 'edit'].map(mode => (
+                        <button
+                          key={mode}
+                          type="button"
+                          className={`chat-scope ${(currentSession.cliProjectMode || 'plan') === mode ? 'is-on' : ''}`}
+                          onClick={() => updateCurrentSession({ cliProjectMode: mode })}
+                        >
+                          {t(`cliAgent.mode.${mode}`)}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                  <div className="composer-menu-note">{t('cliAgent.folderHelp')}</div>
                 </Popover>
               </div>
 
@@ -15255,6 +15829,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   type="submit"
                   className={`send-btn ${(input.trim() || attachments.length > 0) && !isGenerating ? 'active' : ''}`}
                   title={isGenerating ? t('chat.busyElsewhere') : undefined}
+                  aria-label={t('composer.send')}
                   disabled={isGenerating || (!input.trim() && attachments.length === 0) || !selectedModel}
                 >
                   <ArrowUp size={18} strokeWidth={2.5} />
@@ -15446,17 +16021,17 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 data-overflow={tabOverflow || undefined}
               >
                 {[
-                  { id: 'general', label: t('settings.general') },
-                  { id: 'generation', label: t('settings.generation') },
-                  { id: 'models', label: t('settings.models') },
-                  { id: 'prompts', label: t('settings.prompts') },
-                  { id: 'knowledge', label: t('settings.knowledge') },
-                  { id: 'tools', label: t('settings.tools') },
-                  { id: 'memory', label: t('settings.memory') },
-                  { id: 'voice', label: t('settings.voice') },
-                  { id: 'account', label: t('settings.account') },
-                  { id: 'data', label: t('settings.data') },
-                ].map(tab => (
+                  { id: 'general', icon: TabGeneral, label: t('settings.general') },
+                  { id: 'generation', icon: TabGeneration, label: t('settings.generation') },
+                  { id: 'models', icon: TabModels, label: t('settings.models') },
+                  { id: 'prompts', icon: TabPrompts, label: t('settings.prompts') },
+                  { id: 'knowledge', icon: TabKnowledge, label: t('settings.knowledge') },
+                  { id: 'tools', icon: TabTools, label: t('settings.tools') },
+                  { id: 'memory', icon: TabMemory, label: t('settings.memory') },
+                  { id: 'voice', icon: TabVoice, label: t('settings.voice') },
+                  { id: 'account', icon: TabAccount, label: t('settings.account') },
+                  { id: 'data', icon: TabData, label: t('settings.data') },
+                ].map(({ icon: TabIcon, ...tab }) => (
                   <button
                     key={tab.id}
                     className={`settings-tab ${settingsTab === tab.id ? 'active' : ''}`}
@@ -15470,6 +16045,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       e.currentTarget.closest('.settings-modal')?.scrollTo({ top: 0 });
                     }}
                   >
+                    <TabIcon size={14} aria-hidden="true" className="settings-tab-icon" />
                     {tab.label}
                   </button>
                 ))}
@@ -15613,8 +16189,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>{t('settings.location')}</label>
-                    <input
+                    <label id="set-label-10">{t('settings.location')}</label>
+                    <input aria-labelledby="set-label-10"
                       className="settings-input"
                       value={userLocation}
                       placeholder={t('settings.locationPlaceholder')}
@@ -15749,8 +16325,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>{t('behaviour.defaultModel')}</label>
-                    <select className="settings-input" value={defaultModel} onChange={e => setDefaultModel(e.target.value)}>
+                    <label id="set-label-11">{t('behaviour.defaultModel')}</label>
+                    <select aria-labelledby="set-label-11" className="settings-input" value={defaultModel} onChange={e => setDefaultModel(e.target.value)}>
                       <option value="">{t('behaviour.defaultModelLast')}</option>
                       {models.map(m => <option key={m.name} value={m.name}>{m.name}</option>)}
                     </select>
@@ -15816,7 +16392,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                            browser cannot -- plain http has no PushManager --
                            because the in-page notifications still work there
                            and saying so twice helps nobody. */
-                        subscribeToPush(t('notify.ready'));
+                        subscribeToPush(t('notify.ready'), { cliReset: t('notify.cliReset') });
                       }}
                       label={t('notify.label')}
                       description={t('notify.help')}
@@ -16027,8 +16603,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>{t('settings.codeTheme')}</label>
-                    <select className="settings-input" value={codeTheme} onChange={e => setCodeTheme(e.target.value)}>
+                    <label id="set-label-12">{t('settings.codeTheme')}</label>
+                    <select aria-labelledby="set-label-12" className="settings-input" value={codeTheme} onChange={e => setCodeTheme(e.target.value)}>
                       <option value="atom-one-dark">Atom One Dark</option>
                       <option value="github-dark">GitHub Dark</option>
                       <option value="dracula">Dracula</option>
@@ -16125,8 +16701,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>{t('gen.temperature')}: {chatTemperature}</label>
-                    <input
+                    <label id="set-label-13">{t('gen.temperature')}: {chatTemperature}</label>
+                    <input aria-labelledby="set-label-13"
                       type="range"
                       min="0" max="2" step="0.1"
                       value={chatTemperature}
@@ -16158,8 +16734,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>Top P: {topP}</label>
-                    <input
+                    <label id="set-label-1">Top P: {topP}</label>
+                    <input aria-labelledby="set-label-1"
                       type="range"
                       min="0" max="1" step="0.05"
                       value={topP}
@@ -16169,8 +16745,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>Repeat Penalty: {repeatPenalty}</label>
-                    <input
+                    <label id="set-label-2">Repeat Penalty: {repeatPenalty}</label>
+                    <input aria-labelledby="set-label-2"
                       type="range"
                       min="0.8" max="2" step="0.05"
                       value={repeatPenalty}
@@ -16182,8 +16758,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   <div className="settings-group">
                     <div className="settings-row">
                       <div>
-                        <label>{t('gen.maxTokens')}</label>
-                        <input
+                        <label id="set-label-14">{t('gen.maxTokens')}</label>
+                        <input aria-labelledby="set-label-14"
                           type="number"
                           className="settings-input"
                           value={maxTokens}
@@ -16191,8 +16767,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         />
                       </div>
                       <div>
-                        <label>{t('gen.contextSize')}</label>
-                        <input
+                        <label id="set-label-15">{t('gen.contextSize')}</label>
+                        <input aria-labelledby="set-label-15"
                           type="number"
                           className="settings-input"
                           value={numCtx}
@@ -16215,8 +16791,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   <div className="settings-group">
                     <div className="settings-row">
                       <div>
-                        <label>Top K</label>
-                        <input
+                        <label id="set-label-16">Top K</label>
+                        <input aria-labelledby="set-label-16"
                           type="number"
                           className="settings-input"
                           value={topK}
@@ -16224,8 +16800,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         />
                       </div>
                       <div>
-                        <label>{t('gen.seed')}</label>
-                        <input
+                        <label id="set-label-17">{t('gen.seed')}</label>
+                        <input aria-labelledby="set-label-17"
                           type="number"
                           className="settings-input"
                           value={seed}
@@ -16237,8 +16813,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>{t('gen.minP')}: {minP}</label>
-                    <input
+                    <label id="set-label-3">{t('gen.minP')}: {minP}</label>
+                    <input aria-labelledby="set-label-3"
                       type="range"
                       min="0" max="0.5" step="0.01"
                       value={minP}
@@ -16251,8 +16827,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   <div className="settings-group">
                     <div className="settings-row">
                       <div>
-                        <label>{t('gen.presencePenalty')}: {presencePenalty}</label>
-                        <input
+                        <label id="set-label-18">{t('gen.presencePenalty')}: {presencePenalty}</label>
+                        <input aria-labelledby="set-label-18"
                           type="range"
                           min="-2" max="2" step="0.1"
                           value={presencePenalty}
@@ -16261,8 +16837,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         />
                       </div>
                       <div>
-                        <label>{t('gen.frequencyPenalty')}: {frequencyPenalty}</label>
-                        <input
+                        <label id="set-label-19">{t('gen.frequencyPenalty')}: {frequencyPenalty}</label>
+                        <input aria-labelledby="set-label-19"
                           type="range"
                           min="-2" max="2" step="0.1"
                           value={frequencyPenalty}
@@ -16304,8 +16880,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>{t('tools.budget')}: {toolBudget}</label>
-                    <input
+                    <label id="set-label-20">{t('tools.budget')}: {toolBudget}</label>
+                    <input aria-labelledby="set-label-20"
                       type="range"
                       min="1" max="10" step="1"
                       value={toolBudget}
@@ -16331,8 +16907,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>{t('gen.keepAlive')}</label>
-                    <select className="settings-input" value={keepAlive} onChange={e => setKeepAlive(e.target.value)}>
+                    <label id="set-label-4">{t('gen.keepAlive')}</label>
+                    <select aria-labelledby="set-label-4" className="settings-input" value={keepAlive} onChange={e => setKeepAlive(e.target.value)}>
                       <option value="0">{t('gen.keepAliveNone')}</option>
                       <option value="5m">5m</option>
                       <option value="30m">30m</option>
@@ -16376,6 +16952,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
               {settingsTab === 'models' && (
                 <>
+                  {/* Draft models, on the llama.cpp backend only; it renders
+                      nothing anywhere else. See src/SpeculativePanel.jsx. */}
+                  <SpeculativePanel t={t} toast={toast} copyText={copyText} />
+
                   {/* ---- which model answers what ----
                       Under the model list rather than in a tab of its own,
                       because a rule is about the models above it and reads as
@@ -16501,7 +17081,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         placeholder="e.g. llama3, mistral, gemma3:4b"
                         onKeyDown={e => e.key === 'Enter' && handleDownload()}
                       />
-                      <button className="pull-btn" onClick={handleDownload} disabled={isDownloading || !downloadModelName.trim()}>
+                      <button className="pull-btn" onClick={handleDownload} disabled={isDownloading || !downloadModelName.trim()}
+                        aria-label={t('models.pull')} title={t('models.pull')}>
                         {isDownloading ? <RefreshCcw className="spin" size={16} /> : <Download size={16} />}
                       </button>
                     </div>
@@ -16605,7 +17186,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         <span className="manager-bar" aria-hidden="true">
                           <span style={{ width: `${modelDiskTotal ? (m.size / modelDiskTotal) * 100 : 0}%` }} />
                         </span>
-                        <button className="icon-btn bordered" title={t('models.use')} onClick={() => setSelectedModel(m.name)}>
+                        <button className="icon-btn bordered" title={t('models.use')} onClick={() => { setSelectedModel(m.name); noteHandPick(m.name); }}>
                           <Check size={14} />
                         </button>
                         <button className="icon-btn bordered" title={t('models.deleteOne')} onClick={() => deleteModel(m.name)} style={{ color: 'var(--danger)' }}>
@@ -16693,8 +17274,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>{t('prompts.add')}</label>
-                    <input
+                    <label id="set-label-21">{t('prompts.add')}</label>
+                    <input aria-labelledby="set-label-21"
                       type="text"
                       className="settings-input"
                       value={newPromptName}
@@ -16733,8 +17314,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>{t('rag.topK')}: {ragTopK}</label>
-                    <input
+                    <label id="set-label-5">{t('rag.topK')}: {ragTopK}</label>
+                    <input aria-labelledby="set-label-5"
                       type="range"
                       min="1" max="12" step="1"
                       value={ragTopK}
@@ -16790,17 +17371,40 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
               {settingsTab === 'tools' && (
                 <>
-                  <McpPanel
+                  {/* One page was MCP, permissions, CLIs and evals stacked for
+                      several screens; each is its own view now. */}
+                  <div className="subtabs" role="tablist">
+                    {[
+                      { id: 'servers', icon: TabServer, label: t('tools.sub.servers') },
+                      { id: 'permissions', icon: TabShield, label: t('tools.sub.permissions') },
+                      { id: 'history', icon: TabHistory, label: t('tools.sub.history') },
+                      { id: 'cli', icon: TabTerminal, label: t('tools.sub.cli') },
+                      { id: 'eval', icon: TabFlask, label: t('tools.sub.eval') },
+                    ].map(({ id, icon: Icon, label }) => (
+                      <button key={id} type="button" role="tab" aria-selected={toolsSub === id}
+                        className={`subtab ${toolsSub === id ? 'active' : ''}`} onClick={() => setToolsSub(id)}>
+                        <Icon size={14} aria-hidden="true" /> <span>{label}</span>
+                      </button>
+                    ))}
+                  </div>
+                  {toolsSub === 'permissions' && <WorkbenchPolicy />}
+                  {toolsSub === 'history' && <ChangeHistory />}
+                  {toolsSub === 'servers' && <McpPanel
                     tools={mcpTools}
                     problems={mcpProblems}
                     config={mcpConfig}
                     loading={mcpLoading}
                     onRefresh={refreshMcpTools}
-                  />
+                    onRestart={restartMcp}
+                    onInsertPrompt={insertMcpPrompt}
+                  />}
 
-                  <EvalPanel
+                  {toolsSub === 'cli' && <CliPanel sessions={sessions} onImportChat={importTerminalSession} />}
+
+                  {toolsSub === 'eval' && <EvalPanel
                     userId={profileScope}
                     model={selectedModel}
+                    models={models}
                     systemPrompt={systemPrompt}
                     /* Named where the text matches one in the library, by
                        comparing the text rather than by remembering which was
@@ -16810,7 +17414,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     promptName={promptLibrary.find(p => p.body === systemPrompt)?.name || null}
                     options={buildOptions()}
                     onToast={(message, kind) => toast(message, kind, 7000)}
-                  />
+                  />}
                 </>
               )}
 
@@ -16915,8 +17519,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   {/* Speech *in*. The engine below it is speech out; these were
                       never the same setting and the tab only ever had one. */}
                   <div className="settings-group">
-                    <label>{t('voice.localStt')}</label>
-                    <input
+                    <label id="set-label-22">{t('voice.localStt')}</label>
+                    <input aria-labelledby="set-label-22"
                       className="settings-input"
                       value={sttModel}
                       onChange={e => setSttModel(e.target.value)}
@@ -16926,6 +17530,28 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.4rem' }}>
                       {t('voice.localSttHelp')}
                     </div>
+                  </div>
+
+                  {/* How hands-free hears you. Only the local path has a
+                      detector of its own; see src/vad.js. */}
+                  <div className="settings-group">
+                    <div className="setting-toggle-row">
+                      <div>
+                        <label style={{ marginBottom: 0 }}>{t('voice.bargeIn')}</label>
+                        <div className="setting-desc">{t('voice.bargeInHelp')}</div>
+                      </div>
+                      <Switch checked={voiceBargeIn} onChange={setVoiceBargeIn} label={t('voice.bargeIn')} />
+                    </div>
+                    <label id="set-label-voice-sensitivity" style={{ marginTop: '0.8rem' }}>
+                      {t('voice.sensitivity')} · {Math.round(voiceSensitivity * 100)}%
+                    </label>
+                    <input aria-labelledby="set-label-voice-sensitivity"
+                      type="range" min="0" max="1" step="0.05"
+                      value={voiceSensitivity}
+                      onChange={e => setVoiceSensitivity(parseFloat(e.target.value))}
+                      style={{ width: '100%' }}
+                    />
+                    <div className="setting-desc">{t('voice.sensitivityHelp')}</div>
                   </div>
 
                   <div className="settings-group">
@@ -16946,8 +17572,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   {ttsEngine === 'gpt-sovits' && (
                     <>
                       <div className="settings-group">
-                        <label>{t('voice.refAudio')}</label>
-                        <input
+                        <label id="set-label-23">{t('voice.refAudio')}</label>
+                        <input aria-labelledby="set-label-23"
                           type="text"
                           className="settings-input"
                           value={ttsRefAudio}
@@ -16958,8 +17584,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       </div>
 
                       <div className="settings-group">
-                        <label>{t('voice.refText')}</label>
-                        <input
+                        <label id="set-label-6">{t('voice.refText')}</label>
+                        <input aria-labelledby="set-label-6"
                           type="text"
                           className="settings-input"
                           value={ttsPromptText}
@@ -16971,8 +17597,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       <div className="settings-group">
                         <div className="settings-row">
                           <div>
-                            <label>{t('voice.outLang')}</label>
-                            <select className="settings-input" value={ttsTextLang} onChange={e => setTtsTextLang(e.target.value)}>
+                            <label id="set-label-24">{t('voice.outLang')}</label>
+                            <select aria-labelledby="set-label-24" className="settings-input" value={ttsTextLang} onChange={e => setTtsTextLang(e.target.value)}>
                               <option value="ko">{t('lang.ko')}</option>
                               <option value="ja">{t('lang.ja')}</option>
                               <option value="en">{t('lang.en')}</option>
@@ -16981,8 +17607,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                             </select>
                           </div>
                           <div>
-                            <label>{t('voice.refLang')}</label>
-                            <select className="settings-input" value={ttsPromptLang} onChange={e => setTtsPromptLang(e.target.value)}>
+                            <label id="set-label-25">{t('voice.refLang')}</label>
+                            <select aria-labelledby="set-label-25" className="settings-input" value={ttsPromptLang} onChange={e => setTtsPromptLang(e.target.value)}>
                               <option value="ko">{t('lang.ko')}</option>
                               <option value="ja">{t('lang.ja')}</option>
                               <option value="en">{t('lang.en')}</option>
@@ -16995,8 +17621,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   )}
 
                   <div className="settings-group">
-                    <label>{t('voice.speed')}: {ttsSpeed.toFixed(2)}x</label>
-                    <input
+                    <label id="set-label-7">{t('voice.speed')}: {ttsSpeed.toFixed(2)}x</label>
+                    <input aria-labelledby="set-label-7"
                       type="range"
                       min="0.5" max="2" step="0.05"
                       value={ttsSpeed}
@@ -17006,8 +17632,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   </div>
 
                   <div className="settings-group">
-                    <label>{t('voice.maxChars')} ({ttsMaxChars})</label>
-                    <input
+                    <label id="set-label-8">{t('voice.maxChars')} ({ttsMaxChars})</label>
+                    <input aria-labelledby="set-label-8"
                       type="range"
                       min="100" max="3000" step="50"
                       value={ttsMaxChars}
@@ -17138,6 +17764,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         <button
                           className="icon-btn bordered"
                           onClick={() => { copyToClipboard(registerableOrigin); toast(t('common.copied'), 'success', 1500); }}
+                          aria-label={t('common.copy')} title={t('common.copy')}
                         >
                           <Copy size={13} />
                         </button>
@@ -17178,6 +17805,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       <button
                         className="icon-btn bordered"
                         onClick={() => { copyToClipboard(kakaoRedirectUri()); toast(t('common.copied'), 'success', 1500); }}
+                        aria-label={t('common.copy')} title={t('common.copy')}
                       >
                         <Copy size={13} />
                       </button>
@@ -17249,6 +17877,9 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     )}
                   </div>
 
+                  {/* The account from outside the app: API keys and Telegram.
+                      See src/IntegrationsPanel.jsx. */}
+                  <IntegrationsPanel user={user} t={t} toast={toast} copyText={copyText} />
                 </>
               )}
 
@@ -17614,6 +18245,14 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           />
         )}
 
+        {/* A photo from the camera, framed first. See src/CameraCapture.jsx. */}
+        <CameraCapture
+          open={showCamera}
+          onClose={() => setShowCamera(false)}
+          onCapture={(file) => { addFiles([file]); addLog(`[capture] attached ${file.name}`, 'success'); }}
+          t={t}
+        />
+
         {/* Who to start a chat with.
 
             A dialog rather than a submenu because the choice is made of
@@ -17678,8 +18317,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               </div>
 
               <div className="settings-group">
-                <label>{t('chat.titleField')}</label>
-                <input
+                <label id="set-label-26">{t('chat.titleField')}</label>
+                <input aria-labelledby="set-label-26"
                   type="text"
                   className="settings-input"
                   value={currentSession.title}
@@ -17743,6 +18382,14 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   />
                 )}
               </div>
+
+              <ChatTimeline
+                chat={currentSession}
+                signedIn={!!user}
+                t={t}
+                toast={toast}
+                onRestore={(restored) => reviseSession(currentSession.id, () => restored)}
+              />
 
               {/* Publishing a copy. Kept in the chat panel rather than in
                   Settings because it is an act on *this* conversation, and the
@@ -18085,8 +18732,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
               return (
                 <div className="settings-group chain-editor">
-                  <label>{t('chains.name')}</label>
-                  <input
+                  <label id="set-label-27">{t('chains.name')}</label>
+                  <input aria-labelledby="set-label-27"
                     type="text"
                     className="settings-input"
                     value={chainEditor.name}
@@ -18272,8 +18919,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             </div>
 
             <div className="settings-group">
-              <label>{t('folders.name')}</label>
-              <input
+              <label id="set-label-9">{t('folders.name')}</label>
+              <input aria-labelledby="set-label-9"
                 type="text"
                 className="settings-input"
                 value={folderDialog?.name || ''}
@@ -18303,8 +18950,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 in the folder gets both without attaching anything again. */}
             {folderDialog?.id && (
               <div className="settings-group">
-                <label>{t('folders.documents')}</label>
-                <input
+                <label id="set-label-28">{t('folders.documents')}</label>
+                <input aria-labelledby="set-label-28"
                   type="file"
                   multiple
                   ref={folderDocRef}
@@ -18365,22 +19012,30 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           </div>
         </Transition>
 
+        {/* A CLI working in a folder, waiting on the reader (server/cliProject.js). */}
+        <CliApprovals />
+        {/* Every command a CLI is running, wherever the reader is (src/AgentActivity.jsx). */}
+        <CommandsDock />
+
         {/* Toasts */}
         {toasts.length > 0 && (
-          <div className="toast-stack">
-            {toasts.map(t => (
-              <div key={t.id} className={`toast toast-${t.type}`}>
-                {t.type === 'error' ? <X size={15} /> : t.type === 'success' ? <Check size={15} /> : <Sparkles size={15} />}
-                <span>{t.message}</span>
-                {t.action && (
+          <div className="toast-stack" role="status" aria-live="polite">
+            {toasts.map(toast => (
+              <div key={toast.id} className={`toast toast-${toast.type}`}>
+                {toast.type === 'error' ? <X size={15} /> : toast.type === 'success' ? <Check size={15} /> : <Sparkles size={15} />}
+                <span>{toast.message}</span>
+                {toast.action && (
                   <button
                     className="toast-action"
-                    onClick={() => { t.action.onClick(); dismissToast(t.id); }}
+                    onClick={() => { toast.action.onClick(); dismissToast(toast.id); }}
                   >
-                    {t.action.label}
+                    {toast.action.label}
                   </button>
                 )}
-                <button onClick={() => dismissToast(t.id)}><X size={13} /></button>
+                {/* It was a 13px glyph with no name: a screen reader said
+                    "button", and a thumb had to hit a target smaller than itself. */}
+                <button className="toast-close" onClick={() => dismissToast(toast.id)}
+                  aria-label={t('common.close')} title={t('common.close')}><X size={13} /></button>
               </div>
             ))}
           </div>

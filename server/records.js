@@ -24,6 +24,7 @@
 // for a week downloads exactly what changed and nothing else.
 
 import { database, transaction } from './db.js';
+import { packPayload } from './recordHistory.js';
 
 /** The kinds a client may sync. Anything else is refused rather than stored. */
 export const KINDS = new Set([
@@ -31,6 +32,27 @@ export const KINDS = new Set([
   // Who is asking: the other half of the persona pair, and the same shape as
   // the lists beside it — one small record, read and written whole.
   'profile',
+  /* What the Studio was last set to, and what it has made. These are in the
+     browser's own list of whole-list records (`WHOLE_LISTS` in
+     src/syncEngine.js) and were never added here — and the cost of that was
+     not "the Studio does not sync". `validate` threw on the first one and took
+     the entire upload with it, so a device that had ever opened the Studio
+     stopped syncing anything at all: chats, settings, documents, everything.
+     Which is why one bad record no longer fails a batch; see `applyChanges`. */
+  'studio',
+  /* One record per finished job rather than one for the gallery.
+     *
+     * It was the gallery, once, and a whole-list record cannot hold what two
+     * devices both made: the row is overwritten by whoever uploads last, so a
+     * phone that had been used for five minutes took a desktop's afternoon of
+     * pictures off the account. Merging on the way *down* does not help, since
+     * by then the upload has already replaced the row. One record per job is
+     * the shape the data always had. `studioJobs` stays here only so that rows
+     * written by the old clients are still readable. */
+  'studioJob', 'studioJobs',
+  // Prompt blocks kept by name; see src/studioPresets.js.
+  'studioPrompts',
+  'characters',
 ]);
 
 // One payload should not be able to fill the disk. Generous enough for a chat
@@ -102,8 +124,14 @@ const validate = (record) => {
   if (!KINDS.has(record.kind)) throw new Error(`Unknown record kind: ${record.kind}`);
   if (record.id == null || String(record.id) === '') throw new Error('A record needs an id.');
   if (!Number.isFinite(record.updatedAt)) throw new Error('A record needs a timestamp.');
+  if (!record.deleted && (record.payload === null || record.payload === undefined)) {
+    throw new Error('A live record needs a payload.');
+  }
 
-  const payload = record.deleted ? null : JSON.stringify(record.payload ?? null);
+  const payload = record.deleted ? null : JSON.stringify(record.payload);
+  if (!record.deleted && (payload === undefined || payload === 'null')) {
+    throw new Error('A live record needs a serializable payload.');
+  }
   if (payload && Buffer.byteLength(payload) > MAX_RECORD_BYTES) {
     throw new Error(`One record is larger than the ${Math.round(MAX_RECORD_BYTES / 1024 / 1024)} MB limit.`);
   }
@@ -129,16 +157,46 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
     throw new Error(`Send at most ${MAX_BATCH_RECORDS} records at a time.`);
   }
 
-  const clean = records.map(validate);
+  /* Validated one at a time, and a record that cannot be stored is refused
+     rather than throwing.
+     *
+     * This used to be `records.map(validate)`, outside the transaction, so a
+     * single unacceptable record failed the whole request -- and the device
+     * sending it then had no way to make progress on anything else. One kind
+     * the server did not know about was enough to stop an account syncing for
+     * a day, and so is one chat that has grown past the size limit by
+     * carrying a picture. Neither is a reason to reject the other 499 records
+     * in the batch. What was refused travels back, so it can be said out loud
+     * rather than looking like silence. */
+  const clean = [];
+  const refused = [];
+  for (const record of records) {
+    try {
+      clean.push(validate(record));
+    } catch (e) {
+      refused.push({
+        kind: String(record?.kind ?? ''),
+        id: String(record?.id ?? ''),
+        reason: e.message,
+      });
+    }
+  }
 
   return transaction((handle) => {
     let applied = 0;
     let rejected = 0;
+    // Records this device sent that lost to a newer copy.
+    const lost = [];
 
     if (clean.length) {
       const existing = handle.prepare(
-        'SELECT updated_at, deleted FROM records WHERE user_id = ? AND kind = ? AND id = ?'
+        'SELECT rev, updated_at, deleted, payload FROM records WHERE user_id = ? AND kind = ? AND id = ?'
       );
+      const history = handle.prepare(`
+        INSERT OR IGNORE INTO record_history
+          (user_id, kind, id, rev, updated_at, deleted, payload)
+        VALUES (?,?,?,?,?,?,?)
+      `);
       const upsert = handle.prepare(`
         INSERT INTO records (user_id, kind, id, rev, updated_at, deleted, payload)
         VALUES (?,?,?,?,?,?,?)
@@ -165,13 +223,14 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
         // late — a phone that was offline, a tab that was asleep — must not
         // overwrite a newer one; it is simply not applied, and the newer record
         // travels back to that device in the same response.
-        if (current && current.updated_at > record.updatedAt) { rejected++; continue; }
+        if (current && current.updated_at > record.updatedAt) { rejected++; lost.push(record); continue; }
 
         // A tie is resolved in favour of the deletion. The alternative is a
         // record that one device keeps resurrecting and another keeps deleting,
         // forever.
         if (current && current.updated_at === record.updatedAt && current.deleted && !record.deleted) {
           rejected++;
+          lost.push(record);
           continue;
         }
 
@@ -188,6 +247,14 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
         }
 
         rev++;
+        if (current) {
+          // Pictures inside the payload go to history_blobs once rather than
+          // once per edit; see server/recordHistory.js.
+          history.run(
+            userId, record.kind, record.id, current.rev,
+            current.updated_at, current.deleted, packPayload(handle, current.payload),
+          );
+        }
         upsert.run(
           userId, record.kind, record.id, rev,
           record.updatedAt, record.deleted ? 1 : 0, record.payload,
@@ -216,12 +283,40 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
     const complete = rows.length <= limit;
     const page = complete ? rows : rows.slice(0, limit);
     const rev = handle.prepare('SELECT rev FROM users WHERE id = ?').get(userId)?.rev ?? 0;
+    // Fixed before anything is appended below: the cursor is the page's.
+    const cursor = complete ? rev : page[page.length - 1].rev;
+
+    /* The winning copy of every rejected record, even when its revision is at
+       or below `since`. The comment above used to promise this, but the
+       `rev > since` query only delivered it when the winner was news to this
+       device -- and it usually is not: the device had already seen it, then
+       edited with a clock a few seconds behind. Its edit was dropped, it was
+       never told, it marked the edit as sent, and the two devices stayed apart
+       until someone pressed sync by hand. Sending the winner back lets the
+       device take it (it is newer by the device's own rule), so both converge. */
+    if (lost.length) {
+      const inPage = new Set(page.map(r => `${r.kind}:${r.id}`));
+      const winner = handle.prepare(
+        'SELECT kind, id, rev, updated_at, deleted, payload FROM records WHERE user_id = ? AND kind = ? AND id = ?'
+      );
+      for (const record of lost) {
+        const key = `${record.kind}:${record.id}`;
+        if (inPage.has(key)) continue;
+        inPage.add(key);
+        const row = winner.get(userId, record.kind, record.id);
+        if (row) page.push(row);
+      }
+    }
 
     return {
       applied,
       rejected,
+      /* What could not be stored, and why. A handful at most: the point is to
+         name the problem, and a device sending five hundred unacceptable
+         records has one problem rather than five hundred. */
+      ...(refused.length ? { refused: refused.slice(0, 20), refusedCount: refused.length } : {}),
       records: page.map(toRecord),
-      rev: complete ? rev : page[page.length - 1].rev,
+      rev: cursor,
       complete,
     };
   });

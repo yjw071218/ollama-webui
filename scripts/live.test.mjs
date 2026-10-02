@@ -215,16 +215,16 @@ await new Promise(r => server.listen(HTTP_PORT, '127.0.0.1', r));
 
 /* ------------------------------------------------------------ the browser */
 
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'webui-live-'));
-const child = spawn(browser, [
+// Its own profile, closed with its whole process tree and removed -- see chromeProfile.mjs.
+const { launchChrome } = await import('./chromeProfile.mjs');
+const chrome = launchChrome(browser, 'webui-chrome-live-', [
   '--headless=new', '--disable-gpu', '--no-sandbox', '--force-device-scale-factor=1',
-  `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${profile}`, 'about:blank',
-], { stdio: 'ignore' });
+  `--remote-debugging-port=${CDP_PORT}`,
+]);
 
 const cleanup = () => {
-  try { child.kill(); } catch (e) { /* gone */ }
   try { server.close(); } catch (e) { /* closed */ }
-  try { fs.rmSync(profile, { recursive: true, force: true }); } catch (e) { /* windows lock */ }
+  chrome.close();
 };
 
 let ws;

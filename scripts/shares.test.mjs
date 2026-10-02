@@ -73,7 +73,18 @@ check('and when it was published', typeof read.sharedAt === 'number' && read.sha
 // The reply is built field by field rather than spread from the row, so this
 // is a check that nobody has since changed that.
 const fields = Object.keys(read).sort().join(',');
-eq('the reader is told four things and no more', fields, 'expiresAt,messages,sharedAt,title');
+eq('the reader is told these things and no more', fields,
+  'expiresAt,file,kind,messages,picture,sharedAt,title');
+
+/* `file` is the exception, and it never reaches a browser: it names a file in
+   ComfyUI's output folder so that `/api/share/image` can fetch it, and the
+   route that answers the public page strips it out. Handing it over would be
+   handing out a second address for the same bytes -- one that revoking the
+   link does not reach. */
+const api = fs.readFileSync(new URL('../server/api.js', import.meta.url), 'utf8');
+check('and the file it names is not among them',
+  /const \{ file, \.\.\.page \} = shared;/.test(api)
+  && /sendJson\(res, \{ success: true, share: page \}\)/.test(api));
 const asText = JSON.stringify(read);
 for (const secret of [alice.id, 'alice@example.com', 'Alice']) {
   check(`nothing in the reply names the owner: ${secret}`, !asText.includes(secret));
@@ -170,7 +181,7 @@ check('and none of them carries a token',
   !JSON.stringify(mine).includes(made.token));
 const summaryFields = Object.keys(mine[0]).sort().join(',');
 eq('a summary says what it should',
-  summaryFields, 'chatId,createdAt,expiresAt,id,lastViewedAt,messageCount,revoked,title,views');
+  summaryFields, 'chatId,createdAt,expiresAt,id,kind,lastViewedAt,messageCount,revoked,title,views');
 check("one account's list does not contain another's",
   !S.listShares(alice.id).some(s => s.id === bobsShare.id));
 eq('and Bob sees only his', S.listShares(bob.id).length, 1);
@@ -205,6 +216,50 @@ eq('and leaves no row behind',
 // loop is how a feature like this becomes a problem.
 check('there is a cap on how many links one account may hold', S.MAX_SHARES_PER_USER > 0);
 check('and it is not absurdly high', S.MAX_SHARES_PER_USER <= 1000);
+
+/* ================================================= a link to one picture
+
+   The same link, of a picture instead of a conversation -- and it names the
+   file rather than carrying it. An 11 MB PNG would not fit in a row that may
+   hold four, and copying the bytes would mean that revoking the link left a
+   copy of the picture behind. So the row is a name, `/api/share/image` is the
+   only way to turn it into bytes, and revoking stops both. */
+
+{
+  const shot = S.createShare(alice.id, {
+    chatId: '',
+    title: 'a girl in a kitchen',
+    picture: { filename: 'mtx1_00001_.png', subfolder: 'webui', type: 'output', prompt: '1girl, kitchen' },
+  });
+  const seen = S.readShare(shot.token);
+  eq('a picture share says what it is', seen.kind, 'picture');
+  eq('  and carries the prompt as its caption', seen.picture.prompt, '1girl, kitchen');
+  eq('  and names the file, for the route that serves it', seen.file.filename, 'mtx1_00001_.png');
+  eq('  under the folder it was written to', seen.file.subfolder, 'webui');
+  check('  and no bytes of it are in the row',
+    !/data:image|base64/i.test(JSON.stringify(seen)));
+  eq('  while a conversation is still a conversation',
+    S.readShare(made.token).kind, 'chat');
+
+  // The owner's list says which is which, so a picture is not offered as a chat.
+  const mine = S.listShares(alice.id);
+  eq('the list says what each link is of', mine.find(x => x.id === shot.id).kind, 'picture');
+  eq('  and an older link, published before there was a choice, is a chat',
+    mine.find(x => x.id === made.id).kind, 'chat');
+
+  /* A filename is a name, not a path. Without this a share could be published
+     for any file the server can read out of ComfyUI's folders. */
+  check('a filename with a path in it is refused',
+    bad(() => S.createShare(alice.id, { picture: { filename: '../../etc/passwd' } })).length > 0);
+  check('and so is one with no name at all',
+    bad(() => S.createShare(alice.id, { picture: { filename: '  ' } })).length > 0);
+  check('a share of neither a chat nor a picture is refused',
+    bad(() => S.createShare(alice.id, { chatId: 'x' })).length > 0);
+
+  // Revoking reaches the picture, because there is no second way to it.
+  S.revokeShare(alice.id, shot.id);
+  eq('a revoked picture link is gone', S.readShare(shot.token), null);
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

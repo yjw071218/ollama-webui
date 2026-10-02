@@ -103,22 +103,64 @@ const EXPLICIT_TAGS = new Set([
   'handjob', 'footjob', 'masturbation', 'cum', 'cum in pussy', 'ejaculation',
   'pubic hair', 'uncensored', 'hentai', 'porn', 'pornography', 'topless', 'bottomless',
   'bdsm', 'rape', 'nude filter', 'group sex', 'threesome',
+  /* Written for a prompt, and now read off the tagger as well -- so the words
+     the tagger actually uses have to be here, not only the ones people type.
+     These four are common WD14 output and were falling through every list and
+     every word: `breasts` on its own is in none of them on purpose, because
+     the tagger puts it on any clothed character, and `breasts out` is a
+     different statement entirely. */
+  'breasts out', 'areola slip', 'panties aside', 'bikini aside', 'clothing aside',
+  'nakadashi', 'pussy juice', 'spread pussy', 'penetration', 'implied sex',
 ]);
 
 const SUGGESTIVE_TAGS = new Set([
   'questionable', 'rating:questionable', 'rating questionable', 'rating_questionable',
   'sensitive', 'rating:sensitive', 'rating sensitive', 'rating_sensitive',
-  'underwear', 'underwear only', 'panties', 'lingerie', 'bra', 'cleavage', 'bikini',
+  /* A garment is not exposure; "only that garment" is.
+   *
+   * `panties`, `bra` and `underwear` are filed by assets/danbooru-tags.csv
+   * under 패션 > 언더웨어 -- fashion -- and they were here anyway. Read off a
+   * prompt that is arguable. Read off the tagger it is wrong, and provably:
+   * on a drawing of a girl in an oversized shirt with nothing showing at all,
+   * WD14 reports `panties` because it infers underwear is being worn, and the
+   * picture was veiled for it.
+   *
+   * What stays are the tags that name the exposure rather than the clothing:
+   * `underwear only` is wearing nothing else, `panty shot` is seeing them. */
+  'underwear only', 'lingerie', 'cleavage', 'bikini',
   'micro bikini', 'see-through', 'sideboob', 'underboob', 'thong', 'pantyshot',
   'panty shot', 'cameltoe', 'ass', 'ass focus', 'breast focus', 'groin', 'spread legs',
   'covered nipples', 'nipple slip', 'partially nude', 'undressing', 'naked towel',
   'naked shirt', 'naked apron', 'seductive smile', 'sexually suggestive', 'erotic', 'sexy',
   'bondage', 'strap slip', 'wardrobe malfunction',
+  /* The tagger's own words again. `swimsuit` matters most: WD14 says it far
+     more often than `bikini`, and a swimsuit was the one thing the suggestive
+     level existed for that the lists could not see. */
+  'swimsuit', 'one-piece swimsuit', 'school swimsuit', 'competition swimsuit',
+  'no bra', 'no panties', 'revealing clothes',
+  /* Decided by the list rather than by the word in it, which is the whole
+     point of checking the lists first: `covered pussy` is a picture of
+     something covered, and letting the word `pussy` in it reach the explicit
+     regex would veil a swimsuit as pornography. The same reasoning that keeps
+     `covered nipples` suggestive.
+
+     Note which way that cuts. A `covered …` tag belongs here only when the
+     word inside it would otherwise be read as explicit -- it can then only
+     ever make a verdict milder. `covered navel` was here for a while and had
+     the opposite effect: nothing in it is explicit, so listing it could only
+     promote an innocent picture, and the tagger puts it on every gym uniform
+     and leotard it sees. `highleg` and `bare back` were the same mistake in
+     plainer clothes -- a leotard and an evening dress. */
+  'covered pussy',
 ]);
 
 // Whole words, for prompts written as sentences.
 const EXPLICIT_WORDS = /\b(nsfw|nude|naked|nudity|nipples?|pussy|vagina|penis|genitals|porn\w*|hentai|topless|bottomless|sex|masturbat\w*|erection|uncensored)\b/i;
-const SUGGESTIVE_WORDS = /\b(lingerie|underwear|panties|bikini|cleavage|seductive|erotic|sexy|see-through|thong)\b/i;
+/* `panties` and `underwear` are not here either, for the reason given above
+   the list: they name a garment, not what is showing. The phrases that name
+   the exposure -- `underwear only`, `panty shot` -- are in the list, and the
+   list is read before this regex is reached. */
+const SUGGESTIVE_WORDS = /\b(lingerie|bikini|cleavage|seductive|erotic|sexy|see-through|thong)\b/i;
 
 /** A tag as a person would name it: no weight, no escapes, no underscores. */
 export const normaliseTag = (raw) => String(raw || '')

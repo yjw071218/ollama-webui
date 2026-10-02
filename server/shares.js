@@ -55,8 +55,20 @@ export class ShareError extends Error {
 }
 
 /** What the owner is allowed to see about their own links. Never the token. */
+/* What a share is of. Kept inside the payload rather than as a column, so
+   that a link published by an older build -- which had no such idea -- still
+   reads as what it was: a conversation. */
+const kindOf = (payload) => {
+  try {
+    return JSON.parse(payload)?.kind === 'picture' ? 'picture' : 'chat';
+  } catch (e) {
+    return 'chat';
+  }
+};
+
 const toSummary = (row) => ({
   id: row.id,
+  kind: kindOf(row.payload),
   chatId: row.chat_id,
   title: row.title || '',
   createdAt: row.created_at,
@@ -83,13 +95,45 @@ const countMessages = (payload) => {
  * because it is the side that knows what a message means. What this checks is
  * that the thing is a transcript at all and that it fits.
  */
-export const createShare = (userId, { chatId, title, snapshot, expiresInDays }) => {
+/**
+ * A picture, as something a link can be made of.
+ *
+ * The bytes are not copied. The row names the file ComfyUI wrote, and
+ * `/api/share/image` hands it back for as long as the link lives -- which is
+ * what makes revoking one mean something. A snapshot of an 11 MB PNG in a
+ * column that may hold 4 MB would not have been a feature.
+ *
+ * Only the three fields that name a file, and the prompt, which is the caption
+ * anybody would want under it. Deliberately not the seed, the model, the LoRA
+ * stack: a picture handed to somebody is a picture, and the rest is a
+ * workbench.
+ */
+const publishablePicture = (picture) => {
+  const filename = String(picture?.filename || '').trim();
+  if (!filename || /[\\/]/.test(filename)) {
+    throw new ShareError('There is no picture to share.');
+  }
+  return {
+    filename,
+    subfolder: String(picture?.subfolder || '').slice(0, 120),
+    type: picture?.type === 'temp' || picture?.type === 'input' ? picture.type : 'output',
+    prompt: String(picture?.prompt || '').slice(0, 2000),
+  };
+};
+
+export const createShare = (userId, { chatId, title, snapshot, picture, expiresInDays }) => {
   if (!userId) throw new ShareError('Not signed in.', 401, 'unauthenticated');
-  if (!snapshot || !Array.isArray(snapshot.messages) || snapshot.messages.length === 0) {
+  if (!picture && (!snapshot || !Array.isArray(snapshot.messages) || snapshot.messages.length === 0)) {
     throw new ShareError('There is nothing in that chat to share.');
   }
 
-  const payload = JSON.stringify({
+  const payload = JSON.stringify(picture ? {
+    kind: 'picture',
+    title: String(title || '').slice(0, 200),
+    picture: publishablePicture(picture),
+    sharedAt: Date.now(),
+  } : {
+    kind: 'chat',
     title: String(title || snapshot.title || '').slice(0, 200),
     messages: snapshot.messages,
     // Kept so the reader knows how old this is. Not the owner's clock for the
@@ -163,8 +207,21 @@ export const readShare = (token) => {
   // nothing that could grow one by accident later: this object is built by
   // hand rather than spread from the row.
   return {
+    kind: payload.kind === 'picture' ? 'picture' : 'chat',
     title: payload.title || '',
     messages: Array.isArray(payload.messages) ? payload.messages : [],
+    /* The file a picture share names, for `/api/share/image` to fetch. Not
+       handed to the browser as a path it could edit into another one: the
+       page asks for the picture by token, and the token is what the row was
+       found by. */
+    picture: payload.kind === 'picture' && payload.picture ? {
+      prompt: String(payload.picture.prompt || ''),
+    } : null,
+    file: payload.kind === 'picture' && payload.picture ? {
+      filename: payload.picture.filename,
+      subfolder: payload.picture.subfolder || '',
+      type: payload.picture.type || 'output',
+    } : null,
     sharedAt: payload.sharedAt || row.created_at,
     expiresAt: row.expires_at,
   };

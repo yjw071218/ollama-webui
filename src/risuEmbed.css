@@ -1,0 +1,37 @@
+/* Injected into the RisuAI frame by RisuPanel when it loads (same origin).
+   It lives on the WebUI side so the embedded screen can be tuned without
+   rebuilding RisuAI; the palette itself already arrives as --webui-* through
+   webui-theme.js. Only RisuAI's chrome is touched, never a chat's content. */
+
+html, body { background: var(--webui-bg-main, #1a1916) !important; }
+
+/* With no character open, RisuAI's side panel held nothing but an English
+   "Welcome to RisuAI! / Select a bot to start chatting" -- a 384px column
+   beside the library that already says the same thing in Korean. It is
+   hidden only in that state; with a character open it is the chat list and
+   stays. */
+.setting-area:has(> div > h1.text-xl + span.text-xs.text-textcolor2) { display: none !important; }
+
+/* The left rail floated on a drop shadow and its menu button was a grey
+   slab; the WebUI's own sidebar is a flat panel behind a hairline. */
+main > div.w-20.min-w-20 {
+  box-shadow: none !important;
+  background: var(--webui-bg-primary) !important;
+  border-right: 1px solid var(--webui-border-color);
+}
+main > div.w-20.min-w-20 > button:first-child {
+  background: transparent !important;
+  color: var(--webui-text-secondary) !important;
+  border-radius: 10px;
+  transition: background .15s, color .15s;
+}
+main > div.w-20.min-w-20 > button:first-child:hover {
+  background: var(--webui-hover-bg) !important;
+  color: var(--webui-text-primary) !important;
+}
+.setting-area { border-right: 1px solid var(--webui-border-color); }
+
+/* Scrollbars as thin as the WebUI's instead of the platform's grey bars. */
+* { scrollbar-width: thin; scrollbar-color: var(--webui-border-color) transparent; }
+
+::selection { background: color-mix(in srgb, var(--webui-btn-active) 30%, transparent); }

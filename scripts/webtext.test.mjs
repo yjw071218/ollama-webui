@@ -178,6 +178,41 @@ eq('a filter that would empty the list returns the list', nothingMatches.length,
 eq('and a query of nothing but stopwords filters nothing',
   W.rankByRelevance('the and of', [r('a'), r('b')]).length, 2);
 
+// But a provider whose every result is about something else has failed, and
+// the search asks the next one (searchWeb in server/api.js). This is what
+// Bing's page answered a script with for a Korean festival.
+const offTopic = [
+  r('Sssssss (1973) - Official Trailer (HD) - YouTube', 'Realizing that his new lab assistant...', 'https://www.youtube.com/watch?v=uOkQ_-XtwlA'),
+  r('스네이크 (1973년 영화) - 위키백과', '버나드 L. 코왈스키 감독의 1973년 공포 영화', 'https://ko.wikipedia.org/wiki/x'),
+];
+eq('results none of which mention the query are not relevant', W.relevantResults('일러스타 페스 일정', offTopic).length, 0);
+eq('while one about it is',
+  W.relevantResults('일러스타 페스 일정', [...offTopic, r('Illustar Fes - 일러스타 페스', '', 'https://illustar.net/')]).length, 1);
+eq('and a query with nothing to match keeps everything', W.relevantResults('the and of', offTopic).length, 2);
+
+/* ------------------------------------------------------ Naver's page
+
+   Trimmed from a real results page: the generated class names are left in,
+   because they change and the parser must not depend on them. */
+const naverDoc = (href, title, snippet) => `<div class="sds-comps-vertical-layout TPxl8j8vh fds-web-doc-root fds-web-normal-doc-root">`
+  + `<a class="fds-anchor-layout aGvgn0" nocr="1" href="${href}" target="_blank"><span class="sds-comps-profile-info-title-text">site</span></a>`
+  + `<a nocr="1" href="https://keep.naver.com/" class="item item_quick">Keep에 바로가기</a>`
+  + `<a href="${href}"><span class="sds-comps-text sds-comps-text-ellipsis sds-comps-text-ellipsis-1 sds-comps-text-type-headline1 sds-comps-text-weight-sm">${title}</span></a>`
+  + (snippet ? `<a href="${href}"><span class="sds-comps-text sds-comps-text-ellipsis sds-comps-text-ellipsis-3 sds-comps-text-type-body1 ZRNToE">${snippet}</span></a>` : '')
+  + '</div>';
+const naverPage = '<html><body><div class="tab">웹문서</div>'
+  + naverDoc('https://namu.wiki/w/x?a=1&amp;b=2', '<mark>일러스타 페스</mark> /행사 연혁', '2026년 5월 23일 ~5월 24일 12회 BEXCO')
+  + naverDoc('https://gall.dcinside.com/mgallery/board/view/?id=illustarfes&amp;no=4116', '2027 상반기 <mark>일러스타 페스 일정</mark> 공개', '')
+  + '</body></html>';
+const naver = W.parseNaverResults(naverPage, 10);
+eq('each Naver result is read', naver.length, 2);
+eq('its title without the highlighting', naver[0].title, '일러스타 페스 /행사 연혁');
+eq('its address, unescaped, not the Keep link', naver[0].url, 'https://namu.wiki/w/x?a=1&b=2');
+eq('and its summary', naver[0].snippet, '2026년 5월 23일 ~5월 24일 12회 BEXCO');
+eq('a result without a summary is still a result', naver[1].snippet, '');
+eq('and no more than asked for', W.parseNaverResults(naverPage, 1).length, 1);
+eq('a page with no results gives none', W.parseNaverResults('<html>captcha</html>').length, 0);
+
 // CJK has no spaces, so matching on whole words matches nothing at all.
 const korean = W.rankByRelevance('올라마 모델 메모리 설정', [
   r('올라마 모델 메모리 설정 방법', '메모리를 조절하는 법'),
@@ -203,6 +238,29 @@ check('a refusal is retried, a missing page is not',
 check('page requests carry a browser\'s headers', Object.keys(W.PAGE_HEADERS).length >= 6);
 check('including the ones a fetch does not send by itself',
   'Sec-Fetch-Mode' in W.PAGE_HEADERS && 'Upgrade-Insecure-Requests' in W.PAGE_HEADERS);
+
+/* ------------------------------------------------ CP949, which EUC-KR means
+
+   Reported: article text breaking into diamonds with a question mark in them.
+   A page labelled EUC-KR is almost always CP949, and Node's EUC-KR decoder is
+   plain KS X 1001 -- 2,350 syllables of 11,172. The rest read as a control
+   character and a stray letter, or swallow the next character: ppomppu.co.kr's
+   "뽐뿌렌탈!왕!" came out as "┎徽체낡邕�". Bytes below are CP949 as Python
+   writes them. */
+{
+  const C = await import(pathToFileURL(path.resolve(ROOT, 'server/cp949.js')).href);
+  const hex = (h) => new Uint8Array(h.match(/../g).map(b => parseInt(b, 16)));
+  // 똠방각하 뷁 쀍 햏 펐다 켰다 가나ABC
+  const bytes = hex('8c63b9e6b0a2c7cf2094ee2097cd20c16420c6e2b4d920c4d7b4d920b0a1b3aa414243');
+  const words = '똠방각하 뷁 쀍 햏 펐다 켰다 가나ABC';
+  eq('the syllables KS X 1001 lacks are read, not broken', C.decodeCp949(bytes), words);
+  eq('  the extension is all of them, computed by its rule', C.cp949Table().size >= 17048, true);
+  eq('  and a page labelled EUC-KR goes through it',
+    (await W.readAsText(response(bytes, 'text/html; charset=euc-kr'))).text, words);
+  eq('  as does one that says so in its meta tag, past the first 4KB',
+    (await W.readAsText(response(new Uint8Array([...utf8(`<html><head>${' '.repeat(6000)}<meta charset="euc-kr"></head>`), ...bytes]), 'text/html'))).text.endsWith(words), true);
+  eq('an invalid pair is one replacement, and the letter after it survives', C.decodeCp949(hex('ff41')), '�A');
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

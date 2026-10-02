@@ -68,6 +68,20 @@ export const samplingSize = ({ width, height }, area = 1024 * 1024) => {
   return { width: round(h * aspect), height: round(h) };
 };
 
+/**
+ * How far to widen a painted area, in the picture's own pixels.
+ *
+ * The mask is painted at the picture's resolution and a brush stroke stops
+ * just short of an edge -- so the edge of what was painted over came back as a
+ * sliver of the old picture. It was widened by a fixed 12 pixels, which on a
+ * 2638-pixel picture is less than half a percent: after the picture is scaled
+ * down to be sampled, six pixels, and a sliver of the old lace survived it.
+ * So it is a share of the picture instead -- about what the parts found by name
+ * are widened by at the size they are sampled at -- and never less than 12.
+ */
+export const paintedGrow = ({ width = 0, height = 0 } = {}) =>
+  Math.max(12, Math.round(Math.max(Number(width) || 0, Number(height) || 0) * 0.015));
+
 /* ------------------------------------------------------------- the shape
 
    "16:9로", "세로로", "정사각형" -- a request for a shape, as a ratio. The
@@ -147,6 +161,68 @@ export const blobToDataUrl = (blob) => new Promise((resolve, reject) => {
   reader.onerror = () => reject(reader.error);
   reader.readAsDataURL(blob);
 });
+
+/**
+ * The bytes of a picture, whichever way it is being held.
+ *
+ * A generated picture is kept in the chat by address rather than by value --
+ * storage cannot afford eleven megabytes of base64 per picture, and neither
+ * can a device syncing it. So anything that genuinely needs the bytes (a
+ * vision model wants base64, a PNG's own metadata is in the file) has to be
+ * able to fetch them, and anything that only needs to *show* the picture must
+ * not: an `<img src>` takes either one.
+ *
+ * A picture that already carries its bytes is handed straight back, so this
+ * costs nothing on the path where it is not needed.
+ */
+export const asDataUrl = async (source) => {
+  const url = String(source || '');
+  if (!url) throw new Error('there is no picture here');
+  if (url.startsWith('data:')) return url;
+  const res = await fetch(url);
+  if (!res.ok) throw new Error(`the picture could not be read (HTTP ${res.status})`);
+  return blobToDataUrl(await res.blob());
+};
+
+/** The same, as bare base64 -- what a vision model is given. */
+export const asBase64 = async (source) => String(await asDataUrl(source)).split(',')[1] || '';
+
+/* ------------------------------------------------------- a frame of a film
+
+   A finished video could be watched and nothing else. Every other thing this
+   app makes can be enlarged, cut out, extended, edited, checked, shared -- and
+   a film, which takes the longest to make, was a dead end: the one shot in it
+   worth keeping could not be got out.
+
+   One frame is the way out, and it opens the loop both ways: a frame becomes a
+   picture, a picture can be edited, and an edited picture is what the video
+   workflow starts from. So "the third second of this, but her hair is short"
+   stops being a new generation from nothing.
+
+   Read off the element that is already playing rather than by decoding the
+   file again: the reader has scrubbed to the frame they want, and that
+   position is the request. Same-origin because `/studio/view` proxies
+   ComfyUI -- a cross-origin video would taint the canvas and `toBlob` would
+   throw rather than return anything. */
+
+/** The frame a playing video is showing, as a PNG blob. */
+export const frameFromVideo = async (video) => {
+  const width = video?.videoWidth || 0;
+  const height = video?.videoHeight || 0;
+  if (!width || !height) throw new Error('that film has not loaded a frame yet');
+  const canvas = document.createElement('canvas');
+  canvas.width = width;
+  canvas.height = height;
+  canvas.getContext('2d').drawImage(video, 0, 0, width, height);
+  return canvasBlob(canvas);
+};
+
+/** What to call it: the film's name, the moment it was taken from, and `.png`. */
+export const frameName = (filename = 'film', at = 0) => {
+  const stem = String(filename).replace(/\.[a-z0-9]+$/i, '') || 'film';
+  const seconds = Math.max(0, Number(at) || 0);
+  return `${stem}-${seconds.toFixed(2).replace('.', 's')}.png`;
+};
 
 /**
  * The padded picture and its mask, as PNG blobs, for `extend_image`.

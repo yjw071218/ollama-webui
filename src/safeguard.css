@@ -16,7 +16,7 @@
 .msg-generated .safe-frame > button { display: block; max-width: 100%; }
 
 .safe-frame img,
-.safe-frame video { transition: filter 180ms ease, transform 180ms ease; }
+.safe-frame video { transition: filter var(--dur) var(--ease-out), transform var(--dur) var(--ease-out); }
 .safe-frame.is-veiled img,
 .safe-frame.is-veiled video {
   filter: blur(28px) saturate(0.6) brightness(0.85);
@@ -43,6 +43,25 @@
   text-shadow: 0 1px 2px rgba(0, 0, 0, 0.5);
 }
 .safe-veil-note { max-width: 24ch; word-break: keep-all; }
+
+/* A tint, not a wall.
+ *
+ * The veil is `inset: 0` over whatever it covers, and it used to take every
+ * press that landed on it -- including the ones meant for the button that
+ * opens the viewer, and for the viewer's own next-and-previous arrows, which
+ * sit underneath it in the same stacking context. Measured: the centre of the
+ * next arrow returned `div.safe-veil`, and pressing it did nothing while the
+ * arrow key worked.
+ *
+ * So presses go through it to whatever is beneath, and only the one control it
+ * carries takes them. Nothing is uncovered by that: the blur is a filter on
+ * the picture itself, and the thing beneath is a button that opens the viewer,
+ * where the picture is covered again.
+ *
+ * Not the compact form. At 56 pixels there is no room for a pill, so the whole
+ * overlay is the button -- see `VeilOverlay`. */
+.safe-veil:not(.is-compact) { pointer-events: none; }
+.safe-veil:not(.is-compact) .safe-veil-show { pointer-events: auto; }
 /* The whole overlay, as one press. */
 .safe-veil.is-compact {
   gap: 0;
@@ -101,7 +120,7 @@
   color: #fff;
   cursor: pointer;
   opacity: 0;
-  transition: opacity 120ms ease;
+  transition: opacity var(--dur-fast) var(--ease-out);
 }
 .safe-frame:hover .safe-rehide,
 .safe-frame .safe-rehide:focus-visible { opacity: 1; }
@@ -120,11 +139,101 @@
 
 /* The viewer: the glass lies over the stage rather than around the picture,
    because a fitted picture's box is the stage's to lay out. */
-.studio-lightbox-stage.is-veiled img { filter: blur(44px) saturate(0.6) brightness(0.8); cursor: default; }
+.studio-lightbox-stage.is-veiled img,
+.studio-lightbox-stage.is-veiled video { filter: blur(44px) saturate(0.6) brightness(0.8); cursor: default; }
+/* A covered film is not played through the glass either. */
+.studio-lightbox-stage.is-veiled video { pointer-events: none; }
 .studio-lightbox-stage .safe-veil { background: transparent; font-size: 14px; }
 
 @media (prefers-reduced-motion: reduce) {
   .safe-frame img,
   .safe-frame video,
   .safe-frame .safe-rehide { transition: none; }
+}
+
+/* ------------------------------------------------------- a hand on the glass
+
+   Frosted glass is a surface, and a surface answers being touched. This one
+   did not: the pointer crossed it and nothing happened, which is the difference
+   between a cover and a picture that failed to load.
+
+   So it ripples, the way water does under a finger — rings spreading from
+   wherever the pointer is, and a soft gathering of light that follows it. The
+   position is two custom properties written by a pointer handler (see
+   `Veil` in SafeImage.jsx); everything else is a keyframe, because a ripple
+   driven by React would re-render a picture sixty times a second to move a
+   highlight four pixels.
+
+   It deliberately reveals nothing. The rings are light on glass, not a lens:
+   whatever is underneath stays as blurred as it was, because the whole purpose
+   of the glass is that the picture is not shown until somebody asks. A hover
+   is not asking. */
+
+.safe-frame.is-veiled { --rx: 50%; --ry: 50%; }
+
+.safe-ripples {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  overflow: hidden;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--dur) var(--ease-out);
+}
+.safe-frame.is-veiled:hover .safe-ripples,
+.safe-frame.is-veiled:focus-within .safe-ripples { opacity: 1; }
+
+/* The light the pointer gathers. Follows on `--ease-glass`, which is nearly
+   linear: anything slower lags behind the finger and reads as broken. */
+.safe-ripples::before {
+  content: '';
+  position: absolute;
+  inset: 0;
+  background: radial-gradient(
+    circle 140px at var(--rx) var(--ry),
+    rgba(255, 255, 255, 0.20),
+    rgba(255, 255, 255, 0.07) 42%,
+    transparent 68%
+  );
+  transition: background var(--dur-fast) var(--ease-glass);
+}
+
+/* The rings. Three of them, one keyframe, staggered a third of a cycle apart,
+   so the surface is never still while a pointer is on it and never busy. Rings
+   rather than a filled circle: a ripple is the edge travelling outwards, and a
+   disc that grows is a stain. */
+.safe-ring {
+  position: absolute;
+  left: var(--rx);
+  top: var(--ry);
+  width: 18px;
+  height: 18px;
+  margin: -9px 0 0 -9px;
+  border-radius: 50%;
+  border: 1.5px solid rgba(255, 255, 255, 0.5);
+  transform: scale(0);
+  opacity: 0;
+  animation: safe-ripple 2.4s var(--ease-out, ease-out) infinite;
+}
+.safe-ring:nth-child(2) { animation-delay: 0.8s; }
+.safe-ring:nth-child(3) { animation-delay: 1.6s; }
+
+@keyframes safe-ripple {
+  0%   { transform: scale(0.2); opacity: 0; border-width: 2px; }
+  12%  { opacity: 0.55; }
+  /* Thinning as it goes: a wave loses height with distance, and a ring that
+     keeps its weight to the edge of the frame reads as a drawn circle. */
+  100% { transform: scale(14); opacity: 0; border-width: 0.5px; }
+}
+
+/* A phone has no pointer to follow, so the rings would either never run or run
+   for ever in the middle of the picture. They are a hover affordance; without
+   hover there is nothing to afford. */
+@media (hover: none) { .safe-ripples { display: none; } }
+
+@media (prefers-reduced-motion: reduce) {
+  /* The light may stay -- it moves only where the finger already is -- but
+     nothing may pulse on its own. */
+  .safe-ring { display: none; }
+  .safe-ripples::before { transition: none; }
 }

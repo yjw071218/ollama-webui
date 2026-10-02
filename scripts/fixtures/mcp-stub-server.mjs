@@ -17,7 +17,26 @@ const TOOLS = [
   // No inputSchema at all: the client has to supply one, or Ollama rejects a
   // function with no parameters block.
   { name: 'no_schema', description: 'A tool whose author forgot the schema.' },
+  { name: 'ask_back', description: 'Ask the client something before answering.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'grow', description: 'Offer one more tool, and say so.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'env', description: 'Say what STUB_VAR is.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'structured', description: 'Return structured content only.', inputSchema: { type: 'object', properties: {} } },
+  { name: 'client_caps', description: 'Say what the client offered on initialize, and where this runs.', inputSchema: { type: 'object', properties: {} } },
 ];
+
+const RESOURCES = [
+  { uri: 'stub://readme', name: 'Read me', mimeType: 'text/plain' },
+  { uri: 'stub://notes', name: 'Notes', mimeType: 'text/plain' },
+];
+const PROMPTS = [
+  { name: 'greet', description: 'Say hello to someone.', arguments: [{ name: 'who', required: true }] },
+];
+
+// What the client offered on `initialize`.
+let clientCapabilities = null;
+
+// Requests this server has made of the client, waiting for their answers.
+const asked = new Map();
 
 const write = (message) => process.stdout.write(`${JSON.stringify(message)}\n`);
 const reply = (id, result) => write({ jsonrpc: '2.0', id, result });
@@ -25,17 +44,40 @@ const text = (id, body) => reply(id, { content: [{ type: 'text', text: body }] }
 
 const handle = (message) => {
   const { id, method, params } = message;
+  // The client answering a request of ours.
+  if (!method && asked.has(id)) { asked.get(id)(message); asked.delete(id); return undefined; }
   if (id === undefined) return;                      // a notification
 
   if (method === 'initialize') {
+    clientCapabilities = params?.capabilities || {};
     return reply(id, {
       protocolVersion: '2025-06-18',
-      capabilities: { tools: {} },
+      capabilities: { tools: { listChanged: true }, resources: {}, prompts: {} },
       serverInfo: { name: 'stub', version: '0.0.0' },
     });
   }
 
-  if (method === 'tools/list') return reply(id, { tools: TOOLS });
+  // In two pages, so the client has to follow the cursor to see every tool.
+  if (method === 'tools/list') {
+    const half = Math.ceil(TOOLS.length / 2);
+    return params?.cursor === 'page2'
+      ? reply(id, { tools: TOOLS.slice(half) })
+      : reply(id, { tools: TOOLS.slice(0, half), nextCursor: 'page2' });
+  }
+  if (method === 'resources/list') return reply(id, { resources: RESOURCES });
+  if (method === 'resources/templates/list') return reply(id, { resourceTemplates: [{ uriTemplate: 'stub://note/{id}', name: 'A note' }] });
+  if (method === 'resources/read') {
+    const found = RESOURCES.find(r => r.uri === params?.uri);
+    if (!found) return write({ jsonrpc: '2.0', id, error: { code: -32002, message: `no resource ${params?.uri}` } });
+    return reply(id, { contents: [{ uri: found.uri, mimeType: 'text/plain', text: `contents of ${found.name}` }] });
+  }
+  if (method === 'prompts/list') return reply(id, { prompts: PROMPTS });
+  if (method === 'prompts/get') {
+    return reply(id, {
+      description: 'A greeting',
+      messages: [{ role: 'user', content: { type: 'text', text: `Please greet ${params?.arguments?.who}.` } }],
+    });
+  }
 
   if (method !== 'tools/call') return write({ jsonrpc: '2.0', id, error: { code: -32601, message: `no method ${method}` } });
 
@@ -78,6 +120,31 @@ const handle = (message) => {
 
     case 'exit_now':
       return process.exit(1);
+
+    case 'ask_back':
+      // A request of our own, carrying the same id as the call it is inside:
+      // a client that sorts by id alone takes this for its answer.
+      asked.set(id, (answer) => text(id, answer.result && !answer.error ? 'the client answered' : 'no answer'));
+      return write({ jsonrpc: '2.0', id, method: 'ping' });
+
+    case 'grow':
+      if (!TOOLS.some(t => t.name === 'grown')) {
+        TOOLS.push({ name: 'grown', description: 'Added later.', inputSchema: { type: 'object', properties: {} } });
+      }
+      write({ jsonrpc: '2.0', method: 'notifications/tools/list_changed' });
+      return text(id, 'grew');
+
+    case 'grown':
+      return text(id, 'hello from the new tool');
+
+    case 'env':
+      return text(id, `STUB_VAR=${process.env.STUB_VAR ?? ''}`);
+
+    case 'client_caps':
+      return text(id, JSON.stringify({ capabilities: clientCapabilities, cwd: process.cwd() }));
+
+    case 'structured':
+      return reply(id, { content: [], structuredContent: { answer: 42 } });
 
     default:
       return write({ jsonrpc: '2.0', id, error: { code: -32602, message: `no tool ${name}` } });

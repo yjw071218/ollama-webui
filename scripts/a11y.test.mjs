@@ -96,7 +96,10 @@ for (const [, refName, openExpr] of wired) {
 // Not an audit, just the controls that carry no text of their own and would
 // otherwise be announced as "button".
 check('the thinking switch is a labelled group', /role="group" aria-label=\{t\('gen\.thinking'\)\}/.test(app));
-check('its buttons say which is on', /aria-pressed=\{thinkMode === mode\}/.test(app));
+/* Whichever level this chat is actually using -- its own where it has one, the
+   shared one otherwise. Announcing the global setting as pressed inside a chat
+   that has overridden it would be announcing the wrong answer. */
+check('its buttons say which is on', /aria-pressed=\{chatThinkMode === mode\}/.test(app));
 check('the switch component is a real switch', /role="switch"/.test(ui) && /aria-checked=\{checked\}/.test(ui));
 
 /* ------------------------------------------------- controls are controls

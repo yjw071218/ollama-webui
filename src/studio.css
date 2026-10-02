@@ -2113,3 +2113,33 @@
 @media (max-width: 480px) {
   .studio-describe span { display: none; }
 }
+
+/* The black-and-white switch, beside the picture button. That one takes the
+   `auto` margin that pushes the pair to the end; this one just follows it. */
+.studio-mono { margin-inline-start: 4px; }
+.studio-mono.is-on {
+  color: var(--text-primary);
+  border-color: var(--text-primary);
+  background: color-mix(in srgb, var(--text-primary) 8%, transparent);
+}
+
+/* What black and white will send, under the four boxes. Quiet, because it is
+   a readout of the switch and not a fifth box to edit. */
+.studio-mono-preview {
+  margin-top: 6px;
+  padding: 6px 8px;
+  border: 1px dashed var(--border-color);
+  border-radius: 8px;
+  font-size: var(--label);
+  color: var(--text-secondary);
+  display: grid;
+  gap: 3px;
+}
+.studio-mono-preview-title { display: flex; align-items: center; gap: 4px; font-weight: 600; }
+.studio-mono-preview-row { display: grid; grid-template-columns: max-content 1fr; gap: 8px; min-width: 0; }
+.studio-mono-preview-row code {
+  font-family: inherit;
+  color: var(--text-primary);
+  overflow-wrap: anywhere;
+  min-width: 0;
+}

@@ -146,6 +146,68 @@ export const Popover = ({ open, onClose, children, className = '' }) => {
   const ref = useRef(null);
   const { mounted, state } = useTransitionState(open, 150);
 
+  /* How much room there actually is, in the direction this one opens.
+   *
+   * Measured on a 390x844 phone: the model menu opens *upward* from the
+   * composer, the composer sat 394px down the screen, the menu stood 395px
+   * tall, and its heading came out at -9px -- above the top of the window,
+   * where nothing can scroll it back. The cap was `55dvh`, a fraction of the
+   * viewport, and the viewport is not the gap: a menu that fits the cap can
+   * still not fit the space above the button that opened it.
+   *
+   * So the gap is measured and handed to the stylesheet, which clamps against
+   * it -- see `--room-above` and `--room-below` in extras.css. The element is
+   * absolutely positioned inside the wrapper that holds it and its trigger, so
+   * that wrapper's box is the anchor, whichever edge the menu is pinned to.
+   *
+   * Against the *visual* viewport, not the layout one. They are the same thing
+   * on a desktop and they are not on a phone with the keyboard up: the layout
+   * viewport does not shrink for it, so a menu sized against it is sized
+   * against space that is underneath the keyboard.
+   */
+  useEffect(() => {
+    if (!mounted) return undefined;
+    const fit = () => {
+      const node = ref.current;
+      const anchor = node?.parentElement;
+      if (!node || !anchor) return;
+      const box = anchor.getBoundingClientRect();
+      const view = window.visualViewport;
+      const top = view?.offsetTop || 0;
+      const height = view?.height || window.innerHeight;
+      // A floor, because a menu clamped to nothing is a menu that cannot be
+      // used at all; below it the menu scrolls and overlaps its trigger, which
+      // is the better of two bad afternoons.
+      const room = (space) => `${Math.round(Math.max(140, space))}px`;
+      /* And the header, which sits over the top of the page. The room above a
+         menu that opens upward ends at the header's bottom edge, not at the
+         window's: measured once the model menu grew a character field, its
+         heading was under the header, hit-tested as `header-tools`, with
+         nothing to scroll it back. The header measures itself into
+         `--header-h`; a page without one has nothing to subtract. */
+      /* Measured where it is, not read from `--header-h`: that is written by a
+         layout effect after a resize, and a menu fitted in the same frame read
+         the old height -- intermittently, under the header's icons. */
+      const bar = document.querySelector('.main-header');
+      const measured = bar ? bar.getBoundingClientRect().bottom : NaN;
+      const header = Number.isFinite(measured) && measured > 0
+        ? measured
+        : parseFloat(getComputedStyle(document.documentElement).getPropertyValue('--header-h')) || 0;
+      const headerBottom = box.top > header ? header : 0;
+      node.style.setProperty('--room-above', room(box.top - top - headerBottom - 12));
+      node.style.setProperty('--room-below', room((top + height) - box.bottom - 12));
+    };
+    fit();
+    window.addEventListener('resize', fit);
+    window.visualViewport?.addEventListener('resize', fit);
+    window.visualViewport?.addEventListener('scroll', fit);
+    return () => {
+      window.removeEventListener('resize', fit);
+      window.visualViewport?.removeEventListener('resize', fit);
+      window.visualViewport?.removeEventListener('scroll', fit);
+    };
+  }, [mounted]);
+
   useEffect(() => {
     if (!open) return undefined;
     const onDocClick = (e) => {

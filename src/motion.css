@@ -1,0 +1,130 @@
+/* ============================================== the rest of how it moves
+
+   The motion system lives in extras.css, under `Motion`, and it is older and
+   better thought through than this file was when it arrived. It has what a
+   motion system needs and what a naive one leaves out:
+
+     --ease-out, --ease-in-out        two curves
+     --dur-fast, --dur, --dur-slow    three durations
+     --motion-shift/-scale/-blur      how far a thing travels
+     --press-scale                    how far a pressed thing gives
+
+   The travel tokens are the good idea. Under `prefers-reduced-motion` they go
+   to zero while the durations merely shorten, so an interface still fades
+   between its states instead of hard-cutting — which is the difference between
+   "considerate" and "broken", and the reason a reader can also ask for motion
+   back with `data-motion="full"`.
+
+   This file adds three things that system did not have, and nothing else. It
+   deliberately does not define `--ease-out` or any `--dur-*`: it did once, with
+   different values, and since it loads last it silently replaced the curve
+   under sixty-seven existing rules. One system, one set of names.
+
+   Everything below is used by the parts of the app that were built after the
+   original system and needed something it had no word for. */
+
+:root {
+  /* Overshoot, for something that appears by its own doing -- a chip you just
+     made, a tick that has just been ticked. Two per cent past and back; more
+     than that and it is a toy. Never on a hover: read as wobble. */
+  --ease-spring: cubic-bezier(0.34, 1.42, 0.64, 1);
+
+  /* Nearly linear, for something that follows a pointer. A follower on
+     `--ease-out` lags behind the finger and reads as broken. */
+  --ease-glass: cubic-bezier(0.16, 0.84, 0.44, 1);
+
+  /* One rung slower than `--dur-slow`, for the single thing in the app the
+     reader is actually waiting to look at: a finished picture arriving. */
+  --dur-slower: 520ms;
+}
+
+/* Reduced motion shortens durations rather than zeroing them -- see the block
+   in extras.css, which explains why. The one this file adds follows the same
+   rule, and the spring loses its overshoot: an overshoot is travel, and travel
+   is what somebody asking for less motion is asking to lose. */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) {
+    --dur-slower: 200ms;
+    --ease-spring: var(--ease-out);
+  }
+}
+:root[data-motion="reduced"] {
+  --dur-slower: 200ms;
+  --ease-spring: var(--ease-out);
+}
+
+/* --------------------------------------------------------- coming into view
+
+   One keyframe for everything that appears, reading its travel from the
+   shared tokens so that "reduced" flattens it into a plain fade rather than
+   removing it. Rising four pixels, not eight: twenty things each leaping into
+   place is a list nobody can read while it settles. */
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(calc(var(--motion-shift, 10px) * 0.4)) scale(var(--motion-scale, 0.97));
+  }
+  to { opacity: 1; transform: none; }
+}
+
+/* A thing that has just been made, as opposed to one that was already there. */
+@keyframes pop-in {
+  from { opacity: 0; transform: scale(calc(1 - (1 - var(--motion-scale, 0.97)) * 2.5)); }
+  to { opacity: 1; transform: none; }
+}
+
+.motion-rise { animation: rise-in var(--dur) var(--ease-out) both; }
+.motion-pop { animation: pop-in var(--dur) var(--ease-spring) both; }
+.motion-fade { animation: fade-in var(--dur-fast) var(--ease-out) both; }
+
+/* ------------------------------------------------------------ being pressed
+
+   A button that changes colour on press says "something was received"; one
+   that also gives a little says "by this". The distance is `--press-scale`,
+   which the app already had -- and which goes to 1 for a reader who has asked
+   for less movement, so the colour change carries it alone. */
+
+.press,
+.icon-btn,
+.studio-tool,
+.picture-actions button,
+.picture-gallery-actions button {
+  transition:
+    background var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out),
+    border-color var(--dur-fast) var(--ease-out),
+    box-shadow var(--dur) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+.press:active:not(:disabled),
+.icon-btn:active:not(:disabled),
+.studio-tool:active:not(:disabled),
+.picture-actions button:active:not(:disabled),
+.picture-gallery-actions button:active:not(:disabled) {
+  transform: scale(calc(1 - (1 - var(--press-scale, 0.94)) * 0.5));
+}
+
+/* -------------------------------------------------------------- a picture
+
+   A generated picture arrives all at once, decoded, and swapping it in is a
+   hard cut in the middle of a page that is otherwise still. Fading it in over
+   the space it already occupies costs nothing. `--dur-slower` on purpose: this
+   is the one thing in the app the reader is waiting to look at. */
+
+.picture-gallery-item img,
+.picture-gallery-item video,
+.msg-generated .safe-frame img,
+.studio-job-media img { animation: fade-in var(--dur-slower) var(--ease-out) both; }
+
+/* A card lifting under the pointer. Two pixels and a shadow, not four and a
+   scale: a grid where every cell grows shifts its neighbours in the reader's
+   peripheral vision. The lift is travel, so it flattens with the rest. */
+.picture-gallery-item,
+.studio-job {
+  transition: transform var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out);
+}
+@media (hover: hover) {
+  .picture-gallery-item:hover,
+  .studio-job:hover { transform: translateY(calc(var(--motion-shift, 10px) * -0.2)); }
+}

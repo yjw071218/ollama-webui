@@ -60,8 +60,10 @@ const server = http.createServer((req, res) => {
 });
 await new Promise(r => server.listen(HTTP_PORT, '127.0.0.1', r));
 
-const profile = fs.mkdtempSync(path.join(os.tmpdir(), 'webui-start-'));
-const child = spawn(browser, ['--headless=new', '--disable-gpu', '--no-sandbox', `--remote-debugging-port=${CDP_PORT}`, `--user-data-dir=${profile}`, 'about:blank'], { stdio: 'ignore' });
+// Its own profile, closed with its whole process tree and removed -- on exit
+// too, which is how this test leaves. See chromeProfile.mjs.
+const { launchChrome } = await import('./chromeProfile.mjs');
+const chrome = launchChrome(browser, 'webui-chrome-start-', ['--headless=new', '--disable-gpu', '--no-sandbox', `--remote-debugging-port=${CDP_PORT}`]);
 const sleep = ms => new Promise(r => setTimeout(r, ms));
 let wsUrl;
 for (let i = 0; i < 80 && !wsUrl; i++) {
@@ -166,6 +168,6 @@ const stored = await ev(`new Promise(resolve => {
 })`);
 check('and none of those visits wrote a chat', JSON.parse(stored).length === 2, stored);
 
-try { child.kill(); } catch {}
+chrome.close();
 try { server.close(); } catch {}
 finish();

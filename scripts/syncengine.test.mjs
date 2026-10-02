@@ -450,5 +450,289 @@ eq('arriving again is no change', result.applied.studio, 0);
 eq('and leaves storage exactly as it was', localStorage.getItem(STUDIO), studioBefore);
 on(laptop);
 
+/* ============================================ two galleries, both of them true
+
+   Reported as the Studio not syncing, and the half nobody saw was worse than
+   the half they did: the gallery is a whole-list record, so whichever device
+   wrote last replaced the other's outright. A phone with an empty Studio was
+   enough to take an afternoon's pictures off a desktop.
+
+   The panel has always merged what arrived with what it held -- but only while
+   it was on screen, and the sync writes to storage whether anybody is looking
+   or not. Sitting in a conversation was enough to lose them. So the merge is
+   part of the write now. */
+
+const JOBS = `studioHistory:${SCOPE}`;
+const job = (id, state, at) => ({ id, state, startedAt: at, prompt: `p-${id}`, outputs: [{ media: 'image' }] });
+/* As `saveHistory` writes it: every job carries when it last changed, because
+   each is a record of its own on the wire and a record whose timestamp never
+   moves cannot report that its state did. */
+const writeJobs = (list) => {
+  localStorage.setItem(JOBS, JSON.stringify(list.map(j => ({ ...j, savedAt: Date.now() }))));
+  S.stampSetting(SCOPE, JOBS);
+};
+const jobsHere = () => JSON.parse(localStorage.getItem(JOBS) || '[]');
+
+on(laptop);
+await new Promise(r => setTimeout(r, 3));
+writeJobs([job('a', 'done', 100), job('b', 'done', 200)]);
+await E.syncFully(SCOPE);
+
+// The phone makes one of its own, and keeps what the desktop made.
+on(phone);
+await E.syncFully(SCOPE);
+eq('a second device receives the gallery', jobsHere().length, 2);
+await new Promise(r => setTimeout(r, 3));
+writeJobs([...jobsHere(), job('c', 'done', 300)]);
+await E.syncFully(SCOPE);
+
+/* And the desktop, which has meanwhile made one more and is not looking at the
+   Studio at all, keeps its own and gains the phone's. This is the assertion
+   the whole change exists for: before it, `d` was simply gone. */
+on(laptop);
+await new Promise(r => setTimeout(r, 3));
+writeJobs([...jobsHere(), job('d', 'running', 400)]);
+result = await E.syncFully(SCOPE);
+const ids = jobsHere().map(j => j.id).sort();
+eq('neither gallery replaces the other', ids.join(','), 'a,b,c,d');
+eq('  and they are newest first', jobsHere()[0].id, 'd');
+check('  counted as a studio change, which re-reads rather than reloads',
+  result.applied.studio >= 1, JSON.stringify(result.applied));
+
+// What this device added has to go back up, or the other never learns of it.
+await E.syncFully(SCOPE);
+on(phone);
+await E.syncFully(SCOPE);
+eq('the job made while looking elsewhere reaches the other device',
+  jobsHere().map(j => j.id).sort().join(','), 'a,b,c,d');
+
+/* Where both know a job, the one further along wins: "done" never turns back
+   into "running". The phone still thinks `d` is running; the desktop has
+   finished it. */
+on(laptop);
+await new Promise(r => setTimeout(r, 3));
+writeJobs(jobsHere().map(j => (j.id === 'd' ? { ...j, state: 'done' } : j)));
+await E.syncFully(SCOPE);
+on(phone);
+await E.syncFully(SCOPE);
+eq('a finished job is not undone by a device that saw it running',
+  jobsHere().find(j => j.id === 'd').state, 'done');
+
+/* Forgetting one. A whole-list record could not say this at all -- a job
+   missing from a list is indistinguishable from a list written by a device
+   that never had it -- which is the other half of why this is per job. */
+on(laptop);
+await new Promise(r => setTimeout(r, 3));
+writeJobs(jobsHere().filter(j => j.id !== 'a'));
+await E.syncFully(SCOPE);
+on(phone);
+await E.syncFully(SCOPE);
+check('a job forgotten on one device is forgotten on the other',
+  !jobsHere().some(j => j.id === 'a'), jobsHere().map(j => j.id).join(','));
+eq('  and the rest are still there', jobsHere().map(j => j.id).sort().join(','), 'b,c,d');
+
+// Two devices that already agree must not bounce the record between them.
+const galleryBefore = localStorage.getItem(JOBS);
+result = await E.syncFully(SCOPE);
+eq('an agreed gallery is no change at all', result.applied.studio, 0);
+eq('  and storage is untouched', localStorage.getItem(JOBS), galleryBefore);
+on(laptop);
+
+/* ================================================ what the account will take
+
+   Reported as "the pictures do not reach my phone". Two things were true at
+   once, and each on its own is enough to stop an account syncing altogether.
+
+   The browser has a list of the whole-list records it uploads, and the server
+   has a list of the record kinds it accepts, and they were not the same list:
+   `studio` and `studioJobs` were added to the first and never to the second.
+   The server did not merely drop them -- validation threw, outside the
+   transaction, so the entire upload failed. A device that had ever opened the
+   Studio stopped syncing everything: chats, settings, documents.
+
+   And a generated picture is kept in a chat as a base64 PNG, around thirteen
+   megabytes, where one record may be eight. So a conversation with a picture
+   in it was refused for its size -- which, before the fix above, also took the
+   whole batch with it. */
+
+{
+  const { KINDS } = await import(pathToFileURL(path.join(HERE, '../server/records.js')).href);
+  const source = fs.readFileSync(path.join(HERE, '../src/syncEngine.js'), 'utf8');
+  const lists = /const WHOLE_LISTS = \[([^\]]*)\]/.exec(source)[1]
+    .split(',').map(word => word.trim().replace(/'/g, '')).filter(Boolean);
+  const sends = ['chat', 'document', 'memory', 'setting', ...lists];
+  const unknown = sends.filter(kind => !KINDS.has(kind));
+  eq('every kind the browser uploads is a kind the account stores', unknown.join(', '), '');
+  check('  including the Studio\'s two', KINDS.has('studio') && KINDS.has('studioJobs'));
+
+  /* One unacceptable record must not take the batch with it. Checked on the
+     source because the alternative is standing up a database here; what
+     matters is that validation is per record and inside a list, not a `map`
+     that throws on the first one. */
+  const records = fs.readFileSync(path.join(HERE, '../server/records.js'), 'utf8');
+  check('a record that cannot be stored is refused, not thrown',
+    /const refused = \[\];/.test(records)
+    && /try \{\s*clean\.push\(validate\(record\)\);/.test(records)
+    && !/^\s*const clean = records\.map\(validate\);/m.test(records));
+  check('and what was refused is reported back', /refused: refused\.slice/.test(records));
+}
+
+/* -------------------------------------------- a picture, by address
+
+   The bytes are already on the machine serving the app, and `/studio/view`
+   hands them back by name. So what goes up is the address; an `<img src>` and
+   a `fetch()` cannot tell the two apart. */
+
+{
+  const bytes = `data:image/png;base64,${'A'.repeat(400)}`;
+  const chat = {
+    id: 'c1',
+    updatedAt: 5,
+    messages: [
+      { role: 'user', content: 'draw me one', images: ['AAAA'] },
+      {
+        role: 'assistant',
+        generated: [
+          { dataUrl: bytes, filename: 'mtx1_00001_.png', prompt: '1girl' },
+          { dataUrl: bytes, filename: 'mtx2_00001_.png', url: '/studio/view?filename=mtx2_00001_.png&subfolder=webui&type=output' },
+        ],
+      },
+    ],
+  };
+  const sent = E.withoutPictureBytes(chat);
+  const shown = sent.messages[1].generated;
+  check('a picture goes up as an address, not as itself', !shown[0].dataUrl.startsWith('data:'));
+  eq('  built from the name it was saved under', shown[0].dataUrl,
+    '/studio/view?filename=mtx1_00001_.png&subfolder=webui&type=output');
+  eq('  or the one it already knows', shown[1].dataUrl,
+    '/studio/view?filename=mtx2_00001_.png&subfolder=webui&type=output');
+  eq('  and everything else about it is untouched', shown[0].prompt, '1girl');
+  check('the chat it came from is not changed', chat.messages[1].generated[0].dataUrl === bytes);
+  /* A picture the reader attached has no copy on the server, so there is no
+     address to give: it goes up as it is, or not at all. */
+  eq('a picture the reader attached is left alone', sent.messages[0].images[0], 'AAAA');
+
+  // The one a redraw was made instead of is a whole picture of its own.
+  const withOriginal = E.withoutPictureBytes({
+    id: 'c2',
+    messages: [{
+      generated: [{
+        dataUrl: bytes,
+        filename: 'new.png',
+        retouch: { region: 'hands', other: { dataUrl: bytes, filename: 'old.png' } },
+      }],
+    }],
+  });
+  const one = withOriginal.messages[0].generated[0];
+  check('the picture kept beside a redraw goes by address too',
+    !one.retouch.other.dataUrl.startsWith('data:'));
+  eq('  and still says what it was', one.retouch.region, 'hands');
+
+  // Nothing to say, nothing changed: the same object back, so nothing re-uploads.
+  const plain = { id: 'c3', messages: [{ role: 'user', content: 'hello' }] };
+  check('a chat with no pictures is the chat it was', E.withoutPictureBytes(plain) === plain);
+  const nameless = { id: 'c4', messages: [{ generated: [{ dataUrl: bytes }] }] };
+  check('and a picture with no name keeps its bytes, since nothing can fetch them',
+    E.withoutPictureBytes(nameless).messages[0].generated[0].dataUrl === bytes);
+  eq('a picture that cannot be addressed says so', E.pictureUrl({}), '');
+
+  /* Twice is once: a device that received a chat by address and uploads it
+     again must not wrap the address in another address. */
+  check('sending an already-addressed chat changes nothing',
+    E.withoutPictureBytes(sent) === sent);
+}
+
+/* And the whole point of it: a chat with a picture in it is small enough to
+   store. Measured against the server's own limit rather than a number written
+   out here, so raising one raises the other. */
+{
+  const { MAX_RECORD_BYTES } = await import(pathToFileURL(path.join(HERE, '../server/records.js')).href);
+  // A 9.5 MB PNG, which is what these workflows save at their finished size.
+  const real = `data:image/png;base64,${'A'.repeat(Math.round(9.5 * 1024 * 1024 * 4 / 3))}`;
+  const heavy = {
+    id: 'c5',
+    messages: [{ generated: [{ dataUrl: real, filename: 'big.png' }] }],
+  };
+  check('one finished picture is past what a record may be',
+    Buffer.byteLength(JSON.stringify(heavy)) > MAX_RECORD_BYTES);
+  check('and by address the same chat fits with room to spare',
+    Buffer.byteLength(JSON.stringify(E.withoutPictureBytes(heavy))) < 4096);
+}
+
+/* And the reason that matters for more than the upload.
+
+   Reported as "leaving it open a long time and running the models many times
+   makes it very laggy". It was not a leak. `persistSessions` -- the one door
+   to storage -- reads the whole chat store, merges it, and writes the whole
+   store back, and the save timer runs it every 400 to 800 milliseconds for
+   the entire length of every reply. With the bytes in it, ten pictures made
+   that a hundred and ten megabytes read and a hundred and ten written, twice
+   a second, through IndexedDB's structured clone, on the main thread -- for
+   an edit to one message. So the same transform guards that door too, and
+   this pins it there rather than leaving it to the upload alone. */
+{
+  const app = fs.readFileSync(path.join(HERE, '../src/App.jsx'), 'utf8');
+  check('the one door to storage writes pictures by address',
+    /list = persistable\(list\)\.map\(withoutPictureBytes\);/.test(app));
+  check('  using this transform, not a second one of its own',
+    /withoutPictureBytes[\s\S]{0,600}from '\.\/syncEngine\.js'/.test(app));
+
+  /* And the tab itself stops holding them, which is the other half of the
+     same report: a finished result goes into the message as its address, not
+     as eleven megabytes of base64 that storage then has to be told to strip
+     out again. `withoutPictureBytes` stays where it is -- a chat that came
+     from an older version, or a picture the reader attached, still goes
+     through it -- but on this path there is now nothing left for it to do. */
+  check('a finished picture goes into the message as its address',
+    /const outputAddress = async \(url, signal\) => \{/.test(app)
+    && /const dataUrl = await outputAddress\(output\.url, signal\);/.test(app));
+  check('  and nothing turns a result into base64 any more',
+    !/outputAsDataUrl/.test(app));
+  check('  while what really needs the bytes fetches them back',
+    /asBase64\(picture\.dataUrl\)/.test(app) && /await asDataUrl\(/.test(app));
+  check('  including an export, which has to open on another machine',
+    /sessionToHtml\(await sessionWithPictures\(target\)\)/.test(app)
+    && /sessionToMarkdown\(await sessionWithPictures\(target\)\)/.test(app)
+    && /sessionToPrintableHtml\(await sessionWithPictures\(target\)\)/.test(app));
+}
+
+{
+  const browser = makeBrowser(); on(browser);
+  const originalFetch = globalThis.fetch;
+  await current.forage.setItem(CHATS, [{ id: 'inflight-edit', updatedAt: 100, messages: ['old'] }]);
+  let intercept = true;
+  globalThis.fetch = async (...args) => {
+    const response = await originalFetch(...args);
+    if (intercept && args[0] === '/api/auth/sync') {
+      intercept = false;
+      await current.forage.setItem(CHATS, [{ id: 'inflight-edit', updatedAt: 200, messages: ['old', 'latest reply'] }]);
+    }
+    return response;
+  };
+  await E.syncOnce(SCOPE);
+  globalThis.fetch = originalFetch;
+  await E.syncOnce(SCOPE);
+  eq('an edit during upload is sent on the next sync', server.rows.get('chat:inflight-edit').updatedAt, 200);
+  eq('the final reply reaches the server', server.rows.get('chat:inflight-edit').payload.messages.at(-1), 'latest reply');
+
+  await current.forage.setItem(CHATS, [{ id: 'legacy-unsent', updatedAt: 300, messages: ['previously skipped'] }]);
+  localStorage.setItem(`syncSent@${SCOPE}`, JSON.stringify({ 'chat:legacy-unsent': 300 }));
+  localStorage.removeItem(`syncSentAckVersion@${SCOPE}`);
+  await E.syncOnce(SCOPE);
+  eq('upgrade recovers chats incorrectly marked as already uploaded', server.rows.get('chat:legacy-unsent')?.updatedAt, 300);
+}
+
+{
+  const huge = { kind: 'chat', id: 'oversized', updatedAt: 999, payload: 'x'.repeat(9 * 1024 * 1024) };
+  const small = Array.from({ length: 205 }, (_, i) => ({ kind: 'chat', id: String(i), updatedAt: i, payload: 'small' }));
+  const limited = E.uploadBatch([huge, ...small]);
+  eq('oversized history does not block ordinary chats', limited.batch.length, 100);
+  eq('oversized chat is explicitly reported', limited.refused.length, 1);
+  eq('upload prioritizes newest chats', limited.batch[0].id, '204');
+  eq('remaining upload pages are tracked', limited.remaining, 105);
+  const moderate = Array.from({ length: 8 }, (_, i) => ({ kind: 'chat', id: String(i), updatedAt: i, payload: 'x'.repeat(5 * 1024 * 1024) }));
+  check('large recovery is split below the request limit', JSON.stringify(E.uploadBatch(moderate).batch).length < 9 * 1024 * 1024);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

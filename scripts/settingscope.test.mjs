@@ -133,7 +133,27 @@ const rawReads = [...app.matchAll(/localStorage\.getItem\(([^)]*)\)/g)].map(m =>
 //     whatever was being typed here. It carries its own scope, like
 //     lastChatKey, and `settingsStore` lists it under NOT_A_SETTING_PREFIX so
 //     the sync cannot pick it up by accident either.
-const ALLOWED_RAW_READS = new Set(['lastChatKey', "'ollama-sessions'", 'DRAFTS_KEY']);
+//   generationStorageKey, drawingStorageKey -- what is being generated right
+//     now and in which chat. They exist so a reload does not lose a running
+//     job, which makes them facts about this browser in this minute rather than
+//     preferences: synced, they would put a spinner on a phone for a job on the
+//     desktop. Both carry their own scope and both are listed under
+//     NOT_A_SETTING_PREFIX, so the sync cannot pick them up either.
+const ALLOWED_RAW_READS = new Set([
+  'lastChatKey', "'ollama-sessions'", 'DRAFTS_KEY',
+  // The same key, built by the one helper that knows how to spell it.
+  'generationStorageKey', 'drawingStorageKey', 'otherChatKey',
+  /* And one of those keys for a chat that is not on screen. A picture key is
+     only ever written and removed for the chat being looked at, so one left
+     behind by a turn somebody walked away from has nobody to clean it -- and
+     while it sat there it held a finished generation open for ever. Same
+     family of key, same scope, read to ask how old it is. */
+  'drawingKey',
+  /* The picture key of the chat a generation belongs to, which is not always
+     the chat on screen: reading it by `currentSessionId` restored a picture into
+     whichever chat happened to be open. Same family, same scope. */
+  'restoreDrawingKey',
+]);
 const strayReads = rawReads.filter(arg => !ALLOWED_RAW_READS.has(arg));
 check('App.jsx reads no setting straight out of localStorage',
   strayReads.length === 0,
@@ -142,7 +162,14 @@ check('App.jsx reads no setting straight out of localStorage',
 // The same for writes, which were never the broken half but would break the
 // pair just as thoroughly from the other side.
 const rawWrites = [...app.matchAll(/localStorage\.setItem\(([^,]*),/g)].map(m => m[1].trim());
-const ALLOWED_RAW_WRITES = new Set(['lastChatKey', 'DRAFTS_KEY']);
+const ALLOWED_RAW_WRITES = new Set([
+  'lastChatKey', 'DRAFTS_KEY', 'generationStorageKey', 'drawingStorageKey',
+  /* A picture key written under the chat the picture belongs to rather than the
+     chat on screen. Keyed by what is on screen, leaving a chat mid-generation
+     wrote the job under the chat you moved to and left the old key with nobody
+     to clean it -- the leftover that held a finished answer open for ever. */
+  'drawingKeyFor(drawing.sessionId || currentSessionId)',
+]);
 const strayWrites = rawWrites.filter(arg => !ALLOWED_RAW_WRITES.has(arg));
 check('App.jsx writes no setting straight to localStorage',
   strayWrites.length === 0,

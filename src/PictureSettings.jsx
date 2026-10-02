@@ -15,7 +15,14 @@ import { copyText } from './clipboard.js';
 export const PictureSettings = ({ picture, t }) => {
   const [fromFile, setFromFile] = useState(null);
   const [copied, setCopied] = useState(false);
-  const wantsFile = !picture.settings && !picture.video && /^data:image\/png/i.test(String(picture.dataUrl || ''));
+  /* A PNG, wherever it is being held. A generated picture is kept in the chat
+     by address rather than as its own bytes, and `fetch` reads either one --
+     so the test is "is there a PNG at the other end of this", not "are the
+     bytes right here". A `.png` address is as good as a `data:image/png`. */
+  const source = String(picture.dataUrl || '');
+  const wantsFile = !picture.settings && !picture.video && (source.startsWith('data:')
+    ? /^data:image\/png/i.test(source)
+    : !!source && /\.png$/i.test(String(picture.filename || '')));
 
   useEffect(() => {
     if (!wantsFile) return undefined;

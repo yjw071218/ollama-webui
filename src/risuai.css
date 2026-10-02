@@ -1,0 +1,79 @@
+/* Roleplay place. The toolbar speaks the same language as the chat header:
+   quiet ghost buttons, one accent action, the model in a pill, statuses as
+   small text -- so moving between 대화 and 상황극 does not feel like
+   switching apps. */
+.risu-panel { height: 100%; display: flex; flex-direction: column; background: var(--bg-main); color: var(--text-primary); }
+
+.risu-toolbar { position: relative; display: flex; align-items: center; gap: 6px; min-height: 56px; padding: 8px 16px; border-bottom: 1px solid var(--border-color); }
+.risu-toolbar button { display: inline-flex; align-items: center; justify-content: center; gap: 6px; min-height: 34px; padding: 0 11px; color: var(--text-secondary); background: transparent; border: 1px solid transparent; border-radius: var(--radius-sm, 8px); font: inherit; font-size: 13px; white-space: nowrap; cursor: pointer; transition: background .15s, color .15s, border-color .15s; }
+.risu-toolbar button:hover:not(:disabled) { background: var(--hover-bg); color: var(--text-primary); }
+.risu-toolbar button:disabled { opacity: .45; cursor: default; }
+.risu-toolbar .risu-import { color: var(--btn-active-text, #fff); background: var(--btn-active); font-weight: 600; }
+.risu-toolbar .risu-import:hover:not(:disabled) { background: var(--btn-active); color: var(--btn-active-text, #fff); filter: brightness(1.08); }
+.risu-toolbar .risu-icon-button { width: 34px; padding: 0; }
+.risu-toolbar :is(button, select, summary):focus-visible { outline: 2px solid var(--btn-active); outline-offset: 2px; }
+
+/* Model: the same pill as the header's model button. */
+.risu-model { display: flex; align-items: center; gap: 7px; min-width: 0; max-width: min(30vw, 280px); height: 34px; padding: 0 6px 0 11px; color: var(--text-secondary); background: var(--bg-primary); border: 1px solid var(--border-color); border-radius: 999px; font-size: 13px; transition: border-color .15s; }
+.risu-model:hover { border-color: var(--text-secondary); }
+.risu-model svg { flex-shrink: 0; }
+.risu-model select { min-width: 0; flex: 1; color: var(--text-primary); background: transparent; border: 0; font: inherit; padding: 4px 0; cursor: pointer; text-overflow: ellipsis; }
+.risu-model select option { background: var(--surface); color: var(--text-primary); }
+.risu-model.is-error { color: var(--btn-active); border-color: color-mix(in srgb, var(--btn-active) 55%, transparent); }
+
+/* Sync: a dot and a short line beside the model, the full sentence on hover.
+   It takes the room the buttons leave, so the actions stay right-aligned. */
+.risu-sync { display: inline-flex; align-items: center; gap: 7px; flex: 1 1 0; min-width: 0; margin-right: 6px; color: var(--text-secondary); font-size: 12px; }
+.risu-sync > span { min-width: 0; overflow: hidden; white-space: nowrap; text-overflow: ellipsis; }
+.risu-sync > i { flex-shrink: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--text-secondary); opacity: .55; }
+.risu-sync-synced > i { background: #3fa46a; opacity: 1; }
+.risu-sync-pending > i { background: #d9a441; opacity: 1; }
+.risu-sync-syncing > i, .risu-sync-waiting > i { background: #d9a441; opacity: 1; animation: risu-pulse 1.4s ease-in-out infinite; }
+.risu-sync-error, .risu-sync-conflict { color: var(--btn-active); }
+.risu-sync-error > i, .risu-sync-conflict > i { background: var(--btn-active); opacity: 1; }
+@keyframes risu-pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .risu-sync > i { animation: none !important; } }
+
+.risu-toolbar details { font-size: 13px; }
+.risu-toolbar summary { cursor: pointer; list-style: none; display: grid; place-items: center; width: 34px; height: 34px; border-radius: var(--radius-sm, 8px); color: var(--text-secondary); }
+.risu-toolbar summary:hover, .risu-toolbar details[open] summary { background: var(--hover-bg); color: var(--text-primary); }
+.risu-toolbar summary::-webkit-details-marker { display: none; }
+.risu-help { position: absolute; top: calc(100% + 6px); right: 12px; width: min(380px, calc(100% - 24px)); padding: 6px 18px; background: var(--surface); border: 1px solid var(--border-color); box-shadow: 0 12px 36px #0003; border-radius: var(--radius-md, 12px); z-index: 10; color: var(--text-secondary); }
+.risu-help p { line-height: 1.75; margin: 12px 0; }
+.risu-help a { color: var(--text-primary); }
+
+.risu-status { margin: 0; padding: 7px 18px; border-bottom: 1px solid var(--border-color); font-size: 12px; color: var(--text-secondary); background: var(--bg-primary); overflow-wrap: anywhere; }
+.risu-status.is-error { color: #c66b4e; }
+
+.risu-stage { position: relative; flex: 1; min-height: 0; display: flex; }
+.risu-panel iframe { display: block; flex: 1; min-height: 0; width: 100%; border: 0; background: var(--bg-main); }
+.risu-loading { position: absolute; inset: 0; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; padding: 24px; text-align: center; color: var(--text-secondary); font-size: 13px; background: var(--bg-main); }
+.risu-loading span { max-width: 360px; line-height: 1.7; }
+
+.risu-install { margin: auto; padding: 24px; text-align: center; color: var(--text-secondary); line-height: 1.8; }
+.risu-install code { display: inline-block; margin: 6px 0; padding: 6px 12px; border-radius: 8px; background: var(--bg-primary); color: var(--text-primary); }
+.sidebar-places:has([data-risu-tab]) { flex-wrap: wrap; }
+
+/* Tablet: labels go before the controls do. */
+@media (max-width: 1100px) {
+  .risu-toolbar > button:not(.risu-import):not(.risu-icon-button) { width: 34px; padding: 0; font-size: 0; gap: 0; }
+}
+
+/* Phone: model + sync on the first row, the actions as a full-width row of
+   thumb-sized buttons under it. */
+@media (max-width: 700px) {
+  .risu-panel { min-height: 0; padding-bottom: env(safe-area-inset-bottom, 0px); }
+  .risu-toolbar { flex-wrap: wrap; gap: 6px; padding: 8px 10px; }
+  .risu-model { flex: 1 1 auto; max-width: none; height: 40px; }
+  .risu-model select { font-size: 16px; }
+  /* Row 1: model. Row 2: import (labelled, takes the width) and four
+     44px icon buttons. Row 3: the sync sentence, in full -- a phone has
+     no hover to reveal it. */
+  .risu-model { order: 0; flex-basis: 100%; }
+  .risu-toolbar > button, .risu-toolbar details { order: 1; }
+  .risu-toolbar .risu-import { flex: 1; min-height: 44px; font-size: 13px; }
+  .risu-toolbar > button:not(.risu-import) { width: 44px; min-height: 44px; padding: 0; }
+  .risu-toolbar summary { width: 44px; height: 44px; }
+  .risu-sync { order: 2; flex-basis: 100%; margin: 0 2px; font-size: 11px; }
+  .risu-status { padding: 6px 12px; }
+}

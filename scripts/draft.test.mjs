@@ -111,7 +111,7 @@ eq('nothing mints an id from the clock any more', (code.match(/id: Date\.now\(\)
 check('they all go through the generator', (code.match(/id: nextSessionId\(\)/g) || []).length >= 6);
 
 check('the sidebar hides drafts', /visibleSessions = sortedSessions\.filter\(s => !isDraft\(s\)/.test(code));
-check('storage is filtered in one place', /list = persistable\(list\);/.test(code));
+check('storage is filtered in one place', /list = persistable\(list\)\.map\(withoutPictureBytes\);/.test(code));
 check('pressing new chat drops the previous draft', /withoutStaleDrafts\(prev, newSession\.id\)/.test(code));
 check('and the first message promotes it', /promoted\(\{/.test(code));
 

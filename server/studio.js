@@ -43,6 +43,7 @@ import { readRequestBody } from './requestBody.js';
 import {
   WORKFLOWS, buildPrompt, applyJob, applyLoras, applyImg2Img, stampOutputs, clearAuthorContent,
   applyRegionEdit, regionTerms, REGION_NODES, MASK_NODES, readSettings, readDenoise, dropReference,
+  applyPoseGuide, pickPoseLLLite,
 } from './workflows.js';
 import { shapeAnimaPrompt, framedAnimaPrompt } from './animaPrompt.js';
 import {
@@ -139,6 +140,12 @@ export const describe = (definition, installed = null) => {
          hair" there is offering something that silently becomes a whole-
          picture edit. See `applyRegionEdit`. */
       ...(definition.img2img?.inpaint ? { region: true } : {}),
+      /* Following the pose of another picture: only where the workflow has a
+         model link for the guide *and* the guide is installed, since without
+         the patch file the switch would do nothing. See applyPoseGuide. */
+      ...(definition.pose && installed?.objectInfo?.AnimaLLLiteApply
+        && pickPoseLLLite(installed.objectInfo?.ModelPatchLoader?.input?.required?.name?.[0] || [])
+        ? { pose: true, poseDetect: !!installed.objectInfo?.DWPreprocessor } : {}),
       /* Long clips and looping ones. Offered only where the node pack that can
          pin a keyframe *and* keep the reference picture is actually installed:
          without it the ceiling really is one pass, and a "loop" switch that
@@ -1084,6 +1091,29 @@ export const createStudioRoutes = (env = {}, { identify = () => '' } = {}) => {
       guideStrength = region.strength;
     }
 
+    /* The pose of another picture, where the workflow and ComfyUI can. See
+       applyPoseGuide in server/workflows.js. Independent of the reference
+       picture: a new drawing in someone's pose needs no picture to edit. */
+    const poseImage = typeof job.poseImage === 'string' ? job.poseImage.trim() : '';
+    let posed = null;
+    if (poseImage) {
+      posed = applyPoseGuide(graph, definition, {
+        image: poseImage,
+        strength: job.poseStrength ?? 1,
+        end: job.poseEnd,
+        detect: job.poseDetect !== false,
+        multi: job.poseMulti === true,
+        size: parseSize(job.size, `${definition.defaults?.width || 1024}x${definition.defaults?.height || 1024}`),
+        available,
+        patches: installed.objectInfo?.ModelPatchLoader?.input?.required?.name?.[0] || [],
+      });
+      if (!posed.applied && posed.reason === 'missing') {
+        warnings.push(`Following a pose needs ${posed.missing.join(', ')} in ComfyUI; it was drawn without one.`);
+      } else if (!posed.applied && posed.reason === 'unsupported') {
+        warnings.push(`${definition.label} cannot follow a pose picture; it was ignored.`);
+      }
+    }
+
     /* The segments, and the pins that join them. After the picture goes in:
        a loop is pinned to the reference picture itself, at both ends. */
     let motion = null;
@@ -1168,6 +1198,7 @@ export const createStudioRoutes = (env = {}, { identify = () => '' } = {}) => {
       ...(denoiseUsed !== undefined ? { denoise: denoiseUsed } : {}),
       ...(stacked.used?.length ? { loras: stacked.used } : {}),
       ...(job.referenceImage ? { reference: true } : {}),
+      ...(posed?.applied ? { pose: posed.patch.replace(/\.safetensors$/i, ''), poseStrength: posed.strength } : {}),
       /* What was actually rendered. "Six segments of ten seconds" is not the
          same fact as "60s", and it is the first thing worth knowing about a
          clip that drifts at one particular join. */

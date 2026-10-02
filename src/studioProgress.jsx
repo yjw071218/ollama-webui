@@ -34,15 +34,17 @@
 import React, { useEffect, useRef, useState } from 'react';
 import {
   Download, Wand2, Sparkles, Aperture, Maximize2, ScanFace, Film, Save, Loader2,
-  Eye, Image as ImageIcon, SlidersHorizontal,
+  Eye, Image as ImageIcon, SlidersHorizontal, TriangleAlert, MemoryStick, Square, Music,
+  MonitorSmartphone, FileMusic, AudioWaveform, Disc3, NotebookPen,
 } from 'lucide-react';
 /* The arithmetic lives next door, in a file with no React in it -- see
    `jobProgress.js`. Re-exported so callers have one import for the feature. */
 import {
-  previewUrl, formatDuration, remainingMs, phaseLabel, isClip, frameRatio, promptExcerpt,
+  previewUrl, formatDuration, formatSpeed, remainingMs, phaseLabel, isClip, frameRatio, promptExcerpt,
+  learnedRemaining, explainFailure, memoryNote,
 } from './jobProgress.js';
 
-export { previewUrl, formatDuration, remainingMs, phaseLabel, isClip, frameRatio, promptExcerpt };
+export { previewUrl, formatDuration, formatSpeed, remainingMs, phaseLabel, isClip, frameRatio, promptExcerpt, explainFailure };
 
 /**
  * Subscribe to one job's progress.
@@ -67,7 +69,8 @@ export const useJobStream = (id) => {
       let data;
       try { data = JSON.parse(event.data); } catch (e) { return; }
       if (data?.id !== id) return;
-      setSnapshot(data);
+      // When it was heard, so a "time left" in it can be counted down.
+      setSnapshot({ ...data, receivedAt: Date.now() });
       if (data.state === 'done' || data.state === 'failed') source.close();
     };
     source.addEventListener('message', onMessage);
@@ -95,6 +98,11 @@ const PHASE_ICONS = {
   upscaling: Maximize2,
   video: Film,
   saving: Save,
+  // A song's stages -- see MUSIC_PHASES in server/music.js.
+  planning: NotebookPen,
+  composing: FileMusic,
+  performing: AudioWaveform,
+  mixing: Disc3,
 };
 
 const PhaseIcon = ({ phase, size = 13 }) => {
@@ -111,9 +119,12 @@ const PhaseIcon = ({ phase, size = 13 }) => {
  * from the server, read off this particular graph — see `phasesOf` — so a
  * workflow with no face detailer never shows one greyed out for ever.
  */
-export const PhaseTrack = ({ phases, phase, state, t }) => {
+export const PhaseTrack = ({ phases, phase, state, failedPhase = '', t }) => {
   if (!phases?.length) return null;
-  const here = phases.indexOf(phase);
+  const failed = state === 'failed';
+  // A failure is marked where it happened, which is not always where the
+  // track last was: the error names the node.
+  const here = phases.indexOf(failed && phases.includes(failedPhase) ? failedPhase : phase);
   const finished = state === 'done';
 
   return (
@@ -123,7 +134,8 @@ export const PhaseTrack = ({ phases, phase, state, t }) => {
         // rather than by remembering what has been seen, because ComfyUI runs
         // loaders lazily and interleaves them with the work that needs them.
         const done = finished || (here >= 0 && i < here);
-        const now = !finished && i === here;
+        const now = !finished && !failed && i === here;
+        const broke = failed && i === here;
         return (
           /* Icons only. The name of the current stage is on the line directly
              below this one, and having it in both places made the card repeat
@@ -132,7 +144,7 @@ export const PhaseTrack = ({ phases, phase, state, t }) => {
              thing it names is a 12px glyph. */
           <li
             key={name}
-            className={`studio-phase ${done ? 'is-done' : ''} ${now ? 'is-now' : ''}`}
+            className={`studio-phase ${done ? 'is-done' : ''} ${now ? 'is-now' : ''} ${broke ? 'is-failed' : ''}`}
             title={phaseLabel(name, t)}
           >
             <PhaseIcon phase={name} size={12} />
@@ -273,11 +285,84 @@ const PreviewLayers = ({ src, clip, alt, onMeasure }) => {
   )));
 };
 
+/**
+ * What ComfyUI has in memory, looked at every few seconds while a job runs.
+ *
+ * The card could say a job was slow but not why, and the why today was a
+ * model 0% on the card with the rest in system RAM -- visible only in
+ * ComfyUI's console. Asked only while the card is running, so an idle card
+ * costs nothing.
+ */
+const useComfyMemory = (active) => {
+  const [note, setNote] = useState(null);
+  useEffect(() => {
+    if (!active) { setNote(null); return undefined; }
+    let stopped = false;
+    const look = () => fetch('/studio/loaded')
+      .then(r => (r.ok ? r.json() : null))
+      .then(data => { if (!stopped) setNote(memoryNote(data)); })
+      .catch(() => { /* no ComfyUI, nothing to say */ });
+    look();
+    const every = setInterval(look, 4000);
+    return () => { stopped = true; clearInterval(every); };
+  }, [active]);
+  return note;
+};
+
+const gb = (bytes) => `${(bytes / 1024 ** 3).toFixed(1)} GB`;
+
+/** One line about memory, under the numbers. See `memoryNote`. */
+const MemoryLine = ({ note, t }) => {
+  if (!note) return null;
+  return (
+    <div className={`studio-progress-memory ${note.reserved ? 'is-warning' : ''}`}>
+      <MemoryStick size={12} />
+      <span>
+        {note.reserved
+          ? t('studio.memory.reserved', { size: gb(note.reserved) })
+          : t('studio.memory.offloaded', { model: note.offloaded.name, on: gb(note.offloaded.onGpu), total: gb(note.offloaded.size) })}
+      </span>
+    </div>
+  );
+};
+
+/**
+ * A failure, said so it can be acted on, with ComfyUI's own words one press
+ * away. See `explainFailure`. Used by the progress card and by the Studio's
+ * finished cards alike, so a failure reads the same wherever it is seen.
+ */
+export const FailureNote = ({ error, node = '', t, compact = false }) => {
+  const [open, setOpen] = useState(false);
+  const failure = explainFailure(error);
+  const where = failure.node || node;
+  const text = failure.kind === 'generic'
+    ? (where ? t('studio.fail.generic', { node: where }) : t('studio.failed'))
+    : t(`studio.fail.${failure.kind}`, { node: where || '' });
+  return (
+    <div className={`studio-failure ${compact ? 'is-compact' : ''}`}>
+      <div className="studio-failure-line">
+        <TriangleAlert size={14} />
+        <span>{text}</span>
+      </div>
+      {failure.raw && (
+        <>
+          <button type="button" className="studio-failure-more" aria-expanded={open} onClick={() => setOpen(v => !v)}>
+            {t('studio.fail.details')}
+          </button>
+          {open && <pre className="studio-failure-raw">{failure.raw}</pre>}
+        </>
+      )}
+    </div>
+  );
+};
+
 /* What kind of job a card is about. Said at the top of the card in a
    conversation, where it is one of several things an answer can be doing. */
 const KINDS = {
   image: { Icon: ImageIcon, key: 'studio.kind.image' },
   video: { Icon: Film, key: 'studio.kind.video' },
+  // A song has no frames to preview, so the card is the clock and the style.
+  music: { Icon: Music, key: 'studio.kind.music' },
   edit: { Icon: SlidersHorizontal, key: 'studio.kind.edit' },
 };
 
@@ -293,21 +378,42 @@ const KINDS = {
  * `aspect` (width over height, as asked for -- the first frame corrects it),
  * `source` (the picture being worked from, shown until there is a frame), and
  * `batch` (`{ n, of, made }` when several pictures were asked for at once).
+ *
+ * `elsewhere` is a job another device of the reader's is running, watched from
+ * here. It is said out loud because the card is otherwise identical to one for
+ * a picture this device is making, and the difference matters: the result
+ * appears when the other device has written it into the conversation rather
+ * than the moment the bar reaches the end, and stopping it stops something
+ * happening in another room.
  */
 export const JobProgress = ({
   snapshot, jobId, t, onCancel, compact = false, queuedAhead = 0, veil = false,
-  kind = 'image', prompt = '', aspect = null, source = null, batch = null,
+  kind = 'image', prompt = '', aspect = null, source = null, batch = null, polledState = '',
+  elsewhere = false,
 }) => {
   /* `veil`: the prompt asked for something the safeguard hides, so the frames
      are frosted until someone chooses to watch. Per card, and not remembered. */
   const [peek, setPeek] = useState(false);
   const [measured, setMeasured] = useState(null);
+  // The picture being worked from, held over the frame while its corner is pressed.
+  const [comparing, setComparing] = useState(false);
   const veiled = veil && !peek;
-  const state = snapshot?.state;
+  /* The stream's word, unless the queue has said more. Reported: ComfyUI was
+     drawing while the card said "queued" -- the stream had heard nothing, and a
+     card that believes only the stream waits with it. `polledState` is what
+     the polling heard from ComfyUI's own queue, and "running" there is running. */
+  const heard = !snapshot?.state || snapshot.state === 'queued';
+  const state = heard && polledState === 'running' ? 'running' : snapshot?.state;
+  const unheard = state === 'running' && heard;
   const fraction = typeof snapshot?.fraction === 'number' ? snapshot.fraction : null;
   const preview = previewUrl(jobId, snapshot?.previewSeq);
   const elapsedMs = useElapsed(state !== 'done' && state !== 'failed');
-  const left = remainingMs(fraction, elapsedMs);
+  /* Against earlier runs of this workflow when the server has them -- right
+     from the first second, and through a minute-long step with nothing to
+     count -- and by dividing elapsed by fraction when it does not. */
+  const left = learnedRemaining(snapshot, snapshot?.receivedAt) ?? remainingMs(fraction, elapsedMs);
+  const usually = Number.isFinite(snapshot?.expectedMs) && snapshot.expectedMs > 0 ? snapshot.expectedMs : null;
+  const memory = useComfyMemory(state === 'running');
 
   /* The last frame is kept across a phase that produces none. Sampling emits
      previews and upscaling does not, so without this the picture appears, then
@@ -317,16 +423,21 @@ export const JobProgress = ({
   if (preview) held.current = { src: preview, clip: isClip(snapshot?.previewMime) };
   const shown = held.current;
 
+  // A failure's heading is short; what went wrong is the note under it.
   const heading = state === 'failed'
-    ? (snapshot?.error || t('studio.failed'))
+    ? t('studio.failed')
     : (!state || state === 'queued')
       ? (queuedAhead > 0 ? t('studio.queuedBehind', { count: queuedAhead }) : t('studio.state.queued'))
-      : phaseLabel(snapshot.phase, t);
+      // Running by the queue's account, with no stage to name yet.
+      : unheard ? t('studio.state.running') : phaseLabel(snapshot.phase, t);
 
   const Kind = KINDS[kind] || KINDS.image;
   const excerpt = compact ? promptExcerpt(prompt) : '';
   const ratio = frameRatio(measured, aspect, kind === 'video');
   const steps = snapshot?.steps > 0 ? `${snapshot.step}/${snapshot.steps}` : '';
+  // Only while the steps are counting: a speed left over from the sampler is
+  // not the speed of the upscaler after it.
+  const speed = steps && state === 'running' ? formatSpeed(snapshot?.stepMs) : '';
 
   const frame = (shown || compact) && (
     <div className={`studio-progress-frame ${veiled ? 'is-veiled' : ''} ${shown ? '' : 'is-empty'}`}>
@@ -354,6 +465,33 @@ export const JobProgress = ({
           {compact && steps && <span className="studio-progress-tag-steps">{steps}</span>}
         </span>
       )}
+      {/* An edit, with the picture it started from in the corner. Pressed and
+          held, it is laid over the frame -- so what the edit is changing can be
+          seen while it changes, instead of after, by scrolling up to find the
+          original. */}
+      {shown && source && (
+        <>
+          {comparing && <img className="studio-progress-compare" src={source} alt="" />}
+          <button
+            type="button"
+            className={`studio-progress-origin ${comparing ? 'is-on' : ''}`}
+            onPointerDown={(event) => { event.preventDefault(); setComparing(true); }}
+            onPointerUp={() => setComparing(false)}
+            onPointerLeave={() => setComparing(false)}
+            onPointerCancel={() => setComparing(false)}
+            onKeyDown={(event) => { if (event.key === ' ' || event.key === 'Enter') { event.preventDefault(); setComparing(true); } }}
+            onKeyUp={() => setComparing(false)}
+            onBlur={() => setComparing(false)}
+            onContextMenu={(event) => event.preventDefault()}
+            title={t('studio.holdToCompare')}
+            aria-label={t('studio.holdToCompare')}
+            aria-pressed={comparing}
+          >
+            <img src={source} alt="" draggable={false} />
+            <span>{t('studio.original')}</span>
+          </button>
+        </>
+      )}
       {veiled && (shown || source) && (
         <button type="button" className="safe-veil-show is-floating" onClick={() => setPeek(true)}>
           <Eye size={13} /> {t('safe.show')}
@@ -364,7 +502,7 @@ export const JobProgress = ({
 
   const body = (
     <div className="studio-progress-body">
-      <PhaseTrack phases={snapshot?.phases} phase={snapshot?.phase} state={state} t={t} />
+      <PhaseTrack phases={snapshot?.phases} phase={snapshot?.phase} state={state} failedPhase={snapshot?.errorPhase} t={t} />
 
       <div className="studio-progress-head">
         <span className="studio-progress-phase">
@@ -401,10 +539,24 @@ export const JobProgress = ({
             + `${snapshot.nodeClass ? ` · ${snapshot.nodeClass}` : ''}`
           : undefined}
       >
-        {fraction !== null && <b className="studio-progress-pct">{Math.round(fraction * 100)}%</b>}
+        {/* Not on a failure: how far it got is on the bar, and "80%" beside a
+            failure reads as a job still going. */}
+        {fraction !== null && state !== 'failed' && <b className="studio-progress-pct">{Math.round(fraction * 100)}%</b>}
         {elapsedMs > 0 && <span>{formatDuration(elapsedMs)}</span>}
-        {left !== null && <span className="studio-progress-left">{t('studio.remaining', { time: formatDuration(left) })}</span>}
+        {left !== null && state !== 'failed' && (
+          <span className="studio-progress-left">{t('studio.remaining', { time: formatDuration(left) })}</span>
+        )}
+        {/* Before there is anything to measure, what it took last time: a
+            wait with a length is a different wait from one without. */}
+        {left === null && usually && state !== 'failed' && state !== 'done' && (
+          <span className="studio-progress-left">{t('studio.usually', { time: formatDuration(usually) })}</span>
+        )}
+        {/* Last, so it is the first to go when the line is short. */}
+        {speed && <span className="studio-progress-speed" title={t('studio.speedHelp')}>{speed}</span>}
       </div>
+
+      {state === 'failed' && <FailureNote error={snapshot?.error} node={snapshot?.errorNode} t={t} compact={compact} />}
+      {state !== 'failed' && <MemoryLine note={memory} t={t} />}
     </div>
   );
 
@@ -421,7 +573,21 @@ export const JobProgress = ({
             {t(Kind.key)}
             {batch?.of > 1 && <span className="studio-progress-count">{batch.n}/{batch.of}</span>}
           </span>
+          {elsewhere && (
+            <span className="studio-progress-elsewhere" title={t('studio.elsewhereHelp')}>
+              <MonitorSmartphone size={11} />
+              {t('studio.elsewhere')}
+            </span>
+          )}
           {excerpt && <span className="studio-progress-prompt" title={prompt}>{excerpt}</span>}
+          {/* Stopping it from the card, where the eye is. The composer's stop
+              button did the same thing from the other end of the screen. */}
+          {onCancel && state !== 'done' && state !== 'failed' && (
+            <button type="button" className="studio-progress-cancel" onClick={onCancel}
+              title={t('studio.stop')} aria-label={t('studio.stop')}>
+              <Square size={10} fill="currentColor" />
+            </button>
+          )}
         </div>
         {frame}
         {body}

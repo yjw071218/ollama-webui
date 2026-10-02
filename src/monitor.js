@@ -52,6 +52,10 @@ export const residency = (runningModels = [], now = Date.now()) =>
       const expiresAt = m.expires_at ? Date.parse(m.expires_at) : NaN;
       return {
         name: m.name,
+        // Ollama's, or a picture or video model ComfyUI is holding -- see
+        // `comfyResident` in server/studio.js.
+        source: m.source || 'ollama',
+        approximate: !!m.approximate,
         total,
         vram: vram ?? null,
         cpu: vram === null ? null : Math.max(0, total - vram),
@@ -187,9 +191,17 @@ export const alerts = ({ stats, running = [], pressure = null } = {}) => {
     }
   }
 
-  // The expensive one, and the one nothing else reports.
+  /* Commit nearly gone. A model load past it does not slow down -- ComfyUI exits
+     with an access violation -- so this is said before anything is started. */
+  if (stats?.commit?.total > 0 && stats.commit.used / stats.commit.total >= 0.9) {
+    out.push({ kind: 'commit', level: 'high', used: stats.commit.used / stats.commit.total, free: stats.commit.free });
+  }
+
+  // The expensive one, and the one nothing else reports. Ollama's only: a
+  // video model bigger than the card is offloaded by design, and "a smaller
+  // quantisation would fit" is advice for a language model.
   for (const model of residency(running)) {
-    if (model.partial) {
+    if (model.partial && model.source === 'ollama') {
       out.push({ kind: 'offloaded', level: 'high', model: model.name, onGpu: model.onGpu, cpu: model.cpu });
     }
   }

@@ -199,10 +199,9 @@ export const readDescription = (raw, { maxChars = 400 } = {}) => {
  * SDXL-family models read best — and the order the rest of this app already
  * writes in.
  *
- * Appended by default, for the same reason a pasted booru link is: describing
- * a second reference should add to what is there, and somebody who did not
- * want that cannot un-destroy the prompt they had written. `replace` is asked
- * for rather than guessed at.
+ * Appended unless `replace` is asked for. The Studio's picture button asks for
+ * it: a prompt read from a picture is that picture's prompt, and appended to
+ * the one already in the box it drew two pictures at once.
  */
 export const composePrompt = (existing, { tags = [], sentence = '' } = {}, { replace = false } = {}) => {
   const base = replace ? '' : String(existing || '').trim().replace(/[,\s]+$/, '');

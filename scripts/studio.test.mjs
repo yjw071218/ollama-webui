@@ -336,6 +336,30 @@ eq('both kinds of output are found', outputs.length, 2);
 eq('a png is an image', outputs.find(o => o.filename === 'a.png').media, 'image');
 eq('and a webm filed under gifs is still a video',
   outputs.find(o => o.filename === 'b.webm').media, 'video');
+/* Reported as: one picture made in the Studio showed up in the gallery three
+   times, some of them only a prompt, and pressing one opened a different
+   picture from the one on the card. Anima's graph previews twice on the way to
+   its one save -- before SeedVR2 enlarges it, and after -- and ComfyUI's history
+   lists them in the order they ran. */
+{
+  const anima = S.outputsOf({ outputs: {
+    '1357': { images: [{ filename: 'PB-_temp_abcde_00001_.png', subfolder: 'PreviewBridge', type: 'temp' }] },
+    '1334': { images: [{ filename: 'ComfyUI_temp_fghij_00001_.png', subfolder: '', type: 'temp' }] },
+    '1044': { images: [{ filename: 'mtwofw5j_00001_.png', subfolder: 'webui', type: 'output' }] },
+  } });
+  deep('a picture that was saved is one result, not three', anima.map(o => o.filename), ['mtwofw5j_00001_.png']);
+  eq('and the first result is the finished one', anima[0]?.type, 'output');
+
+  const previewOnly = S.outputsOf({ outputs: { '9': { images: [{ filename: 'ComfyUI_temp_x_00001_.png', type: 'temp' }] } } });
+  eq('a graph that only previews still shows what it made', previewOnly.length, 1);
+
+  const film = S.outputsOf({ outputs: {
+    '3': { images: [{ filename: 'frame_temp.png', type: 'temp' }] },
+    '42': { gifs: [{ filename: 'clip.mp4', subfolder: 'webui', type: 'output' }] },
+  } });
+  deep('a saved video does not hide a preview of a different kind', film.map(o => o.media).sort(), ['image', 'video']);
+}
+
 eq('an entry with no filename is not an output', S.outputsOf({ outputs: { '7': { images: [{}] } } }).length, 0);
 eq('and neither is nothing at all', S.outputsOf(null).length, 0);
 
@@ -377,14 +401,14 @@ const api = fs.readFileSync(path.join(ROOT, 'server/api.js'), 'utf8');
 // middleware stack and the production server call — so `npm run dev` and
 // `npm start` cannot end up with different features.
 check('the studio routes are mounted with the rest of the API',
-  /createStudioRoutes\(env\)/.test(api));
+  /createStudioRoutes\(env, \{/.test(api));
 // Unlike the backend switch these are always on: the panel answers with a
 // legible "ComfyUI is not running" rather than a 404, which is the difference
 // between a feature that looks broken and one that says what to start. Checked
 // by indentation, which is what says whether the call is inside the `if` — two
 // spaces is the body of the function, four would be the body of the branch.
 check('and are not conditional on the inference backend',
-  /^ {2}for \(const studioRoute of createStudioRoutes\(env\)\)/m.test(api));
+  /^ {2}for \(const studioRoute of createStudioRoutes\(env, \{/m.test(api));
 
 const app = fs.readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8');
 // The two places the sidebar offers. The studio used to be a tab inside the
@@ -518,11 +542,18 @@ check('and the other workflows have no artist input',
   !W.WORKFLOWS['krea2-turbo'].controls.artist && !W.WORKFLOWS['minimax-h3'].controls.artist);
 check('krea2 empties the style it appends to every prompt',
   (W.WORKFLOWS['krea2-turbo'].blank || []).some(b => b.node === '30:27' && b.input === 'string_b'));
-// Queued jobs go through it before the user's values, or none of the above
-// reaches a picture.
-check('and the queue route clears before it fills in',
-  /clearAuthorContent\(graph, definition\)[\s\S]{0,900}applyJob\(graph/.test(
-    fs.readFileSync(path.join(ROOT, 'server/studio.js'), 'utf8')));
+/* Queued jobs go through it before the user's values, or none of the above
+   reaches a picture. Checked as an order rather than a distance: what has to
+   be true is that one comes first, and the lines between them are free to
+   grow -- pinning a character count meant an unrelated comment could fail
+   this. */
+{
+  const src = fs.readFileSync(path.join(ROOT, 'server/studio.js'), 'utf8');
+  const cleared = src.indexOf('clearAuthorContent(graph, definition)');
+  const filled = src.indexOf('applyJob(graph');
+  check('and the queue route clears before it fills in',
+    cleared > 0 && filled > cleared, `clear at ${cleared}, fill at ${filled}`);
+}
 
 /* ============================== the seed has to reach the thing that samples
 
@@ -736,6 +767,47 @@ check('a control behind a gate is left out when this job did not set it', !('dur
 eq('and reported when it did', W.readSettings(graph(), DEF, { applied: ['duration'] }).duration, 5);
 eq('an edit reports the strength it ran at', W.readDenoise(graph(), DEF), 0.6);
 check('and a workflow without edits reports none', W.readDenoise(graph(), { controls: {} }) === undefined);
+
+// A graph ComfyUI queues with a branch left out still counts as refused.
+eq('an accepted graph has nothing to complain about', S.nodeErrorsText({ prompt_id: 'a', node_errors: {} }), '');
+eq('nor does an answer with no node errors at all', S.nodeErrorsText({ prompt_id: 'a' }), '');
+eq('a branch left out is named with what it disliked',
+  S.nodeErrorsText({ prompt_id: 'a', node_errors: { '30:10': { errors: [{ message: 'Value not in list', details: "unet_name: 'kroma-v0.2-turbo.safetensors' not in [...]" }] } } }),
+  "30:10: Value not in list (unet_name: 'kroma-v0.2-turbo.safetensors' not in [...])");
+check('and a long list of choices is cut short',
+  S.nodeErrorsText({ node_errors: { 1: { errors: [{ message: 'm', details: 'x'.repeat(500) }] } } }).length < 200);
+/* Counted against the routes that queue rather than pinned at a number: a
+   graph ComfyUI accepts with a branch left out is a job that runs, produces
+   the wrong thing and reports success, so every route that queues one has to
+   check for it -- and a route added later without the check is exactly the
+   case worth catching. */
+{
+  const queues = (studioSource.match(/await withTimeout\(`\$\{base\}\/prompt`/g) || []).length;
+  const guards = (studioSource.match(/if \(!queued\?\.prompt_id \|\| refused\)/g) || []).length;
+  const taken = (studioSource.match(/await withdraw\(base, queued\.prompt_id\)/g) || []).length;
+  check('every route that queues a graph refuses a half-accepted one, and takes it back',
+    queues >= 3 && guards === queues && taken === queues, `${queues} queue, ${guards} check, ${taken} withdraw`);
+}
+
+/* ------------------------------------ a video with no reference picture
+
+   Reported: a clip asked for from words alone came out of the character in the
+   workflow's own "Reference Image" loader -- the picture its author exported it
+   with. With no picture given, the loader and its link are taken out. */
+{
+  const fsMod = await import('node:fs');
+  const info = JSON.parse(fsMod.readFileSync(path.join(ROOT, 'scripts', 'fixtures', 'object-info-minimax.json'), 'utf8'));
+  const definition = W.WORKFLOWS['minimax-h3'];
+  const graph = W.buildPrompt(definition, info).prompt;
+  const loader = Object.keys(graph).find(id => graph[id]._meta?.source === definition.controls.referenceImage.node);
+  const dropped = W.dropReference(graph, definition);
+  deep('the workflow\'s own reference picture is removed', [dropped.dropped, loader in graph], [true, false]);
+  check('  and nothing points at it any more',
+    !Object.values(graph).some(n => Object.values(n.inputs || {}).some(v => Array.isArray(v) && String(v[0]) === String(loader))));
+  eq('a workflow with no reference loader is left alone', W.dropReference(W.buildPrompt(W.WORKFLOWS['anima-base'], info).prompt, W.WORKFLOWS['anima-base']).dropped, false);
+  check('the route removes it only when no picture was given',
+    /if \(!job\.referenceImage && definition\.controls\?\.referenceImage\) \{\s*\n\s*const dropped = dropReference\(graph, definition\);/.test(studioSource));
+}
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

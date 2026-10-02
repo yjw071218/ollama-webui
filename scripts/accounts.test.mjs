@@ -45,6 +45,13 @@ const catching = async (fn) => {
   return threw;
 };
 
+/* A live record without JSON cannot enter the database, even if a caller
+   bypasses the normal request validation and writes directly to SQLite. */
+const integrity = database().prepare(
+  "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'records'"
+).get().sql;
+check('records enforce live payload integrity', /json_valid\(payload\)/i.test(integrity));
+
 /* ---------------------------------------------------------------- register */
 
 const alice = await A.registerUser({ name: 'Alice', email: ' Alice@Example.COM ', password: 'correct-horse' });
@@ -54,6 +61,17 @@ check('an id is assigned', typeof alice.id === 'string' && alice.id.length > 10)
 check('the public shape has no hash', !('hash' in alice) && !('salt' in alice));
 eq('it reports having a password', alice.hasPassword, true);
 eq('and no passkeys yet', alice.passkeys, 0);
+
+let integrityRejected = false;
+try {
+  database().prepare(`
+    INSERT INTO records (user_id, kind, id, rev, updated_at, deleted, payload)
+    VALUES (?, 'chat', 'invalid-live', 1, 1, 0, NULL)
+  `).run(alice.id);
+} catch (e) {
+  integrityRejected = true;
+}
+check('the database rejects a live record without a payload', integrityRejected);
 
 await catching(() => A.registerUser({ name: 'A', email: 'ALICE@example.com', password: 'another-one' }));
 check('a duplicate email is refused, case-insensitively', /already exists/i.test(threw));
@@ -207,6 +225,13 @@ eq('a device that is up to date gets nothing',
 R.applyChanges(alice.id, { records: [chat('c1', 3000, 'edited later')] });
 eq('a newer edit is applied',
   R.changesSince(alice.id, 0).records.find(r => r.id === 'c1').payload.title, 'edited later');
+eq('the previous edit is retained in history',
+  database().prepare(`
+    SELECT json_extract(payload, '$.title') AS title
+      FROM record_history
+     WHERE user_id = ? AND kind = 'chat' AND id = 'c1'
+     ORDER BY rev DESC LIMIT 1
+  `).get(alice.id).title, 'first');
 
 const stale = R.applyChanges(alice.id, { records: [chat('c1', 500, 'stale')] });
 eq('an older edit arriving late is rejected', stale.rejected, 1);
@@ -238,11 +263,39 @@ R.applyChanges(alice.id, { records: [chat('c1', 5000, 'deliberately restored')] 
 eq('a newer write does restore it',
   R.changesSince(alice.id, 0).records.find(r => r.id === 'c1').payload.title, 'deliberately restored');
 
-// Unknown kinds never reach the table.
-let refused = '';
-try { R.applyChanges(alice.id, { records: [{ kind: 'malware', id: 'x', updatedAt: 1, payload: {} }] }); }
-catch (e) { refused = e.message; }
-check('an unknown kind is refused', /Unknown record kind/i.test(refused));
+/* Unknown kinds never reach the table -- and nothing beside them is lost for
+   their sake. Refusing the whole batch is how an account stopped syncing for a
+   day: the browser sent two kinds this list had never been told about. */
+const mixed = R.applyChanges(alice.id, {
+  records: [
+    { kind: 'malware', id: 'x', updatedAt: 1, payload: {} },
+    chat('survivor', 7000, 'stored anyway'),
+  ],
+});
+eq('an unknown kind is refused', mixed.refused?.length, 1);
+check('  and named, with a reason', /Unknown record kind/i.test(mixed.refused?.[0]?.reason || ''));
+eq('  while the record beside it is stored', mixed.applied, 1);
+eq('  which is really there',
+  R.changesSince(alice.id, 0).records.find(r => r.id === 'survivor')?.payload.title, 'stored anyway');
+check('  and the unknown one is not',
+  !R.changesSince(alice.id, 0).records.some(r => r.kind === 'malware'));
+
+// A record past the size limit is refused the same way, rather than throwing.
+const huge = R.applyChanges(alice.id, {
+  records: [{ kind: 'chat', id: 'heavy', updatedAt: 7100, payload: { blob: 'x'.repeat(R.MAX_RECORD_BYTES + 64) } }],
+});
+eq('a record past the size limit is refused too', huge.refused?.length, 1);
+check('  saying which limit', /limit/i.test(huge.refused?.[0]?.reason || ''));
+eq('  and nothing was stored', huge.applied, 0);
+
+// The Studio's two kinds, which the browser has been uploading all along.
+const studio = R.applyChanges(alice.id, {
+  records: [
+    { kind: 'studio', id: 'all', updatedAt: 7200, payload: '{}' },
+    { kind: 'studioJobs', id: 'all', updatedAt: 7200, payload: '[]' },
+  ],
+});
+eq('the Studio settings and gallery are kinds the account stores', studio.applied, 2);
 
 // Paging, so a first sync of a large account does not have to arrive at once.
 const many = Array.from({ length: 12 }, (_, i) => chat(`p${i}`, 6000 + i, `page ${i}`));

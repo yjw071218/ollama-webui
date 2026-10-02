@@ -182,6 +182,45 @@ check('the composer writes through the shared writer', app.includes('finalInputT
 check('and so does a short file', app.includes('finalInputText += fileMarker(att.name, att.data)'));
 check('the module is the only definition', fs.existsSync(path.join(ROOT, 'src/attachMarkers.js')));
 
+/* -------------------------------------------- what leaves the app as text
+
+   Reported: copying a message pasted the whole attached file. On screen that
+   message is one sentence and a chip; on the clipboard it was the sentence and
+   eleven thousand lines of JSON. The transcript, the export, the share link and
+   the voice all strip the markers -- copy and share were the two readers that
+   did not, which is the same "four copies of one piece of knowledge" this
+   module was written to end. */
+check('copying a message copies what is written in it',
+  /copyToClipboard\(asWritten\(msg\.content\), i\)/.test(app));
+check('  and copying a group of them strips each one',
+  /group\.map\(g => asWritten\(g\.content\)\)/.test(app));
+check('  sharing goes the same way, question and answer',
+  /question = asWritten\(messages\[i\]\.content\)/.test(app)
+  && /answer: asWritten\(cleanForExport\(msg\.content \|\| ''\)\)/.test(app));
+check('  through the one function that knows every marker',
+  /const asWritten = \(content\) => stripAttachments\(content \|\| ''\)\.trim\(\);/.test(app));
+
+/* ------------------------------------------------ and what is shown of one
+
+   Reported: a .json attachment opened as a blank rectangle. The viewer hands
+   the file to the browser's own reader in an `<iframe>` with `background:#fff`
+   under it -- right for a PDF, which is a page of paper, and wrong for a text
+   document, which Chrome renders in the page's own colour scheme: light text,
+   on the white this stylesheet had forced beneath it.
+
+   A PDF is the only thing that reader was for. A .json *is* its text, and the
+   viewer's own `<pre>` shows that in this app's colours. */
+check('a PDF is the only thing handed to the browser reader',
+  /const readableAsDocument = \(att\) => \/\\.pdf\$\/i\.test\(String\(att\?\.name \|\| ''\)\);/.test(app));
+check('  and the viewer asks for it by name before showing one',
+  /originalOf\(viewingAttachment\) && readableAsDocument\(viewingAttachment\)/.test(app));
+const css = fs.readFileSync(path.join(ROOT, 'src/extras.css'), 'utf8');
+check('  the page inside it is paper whatever the app around it is',
+  /\.attachment-viewer-doc \{[^}]*color-scheme: light;/s.test(css));
+// Everything else is the app's own <pre>, which is themed.
+check('  everything else is drawn in the colours of this app',
+  /\.attachment-viewer-body pre \{[^}]*color: var\(--text-primary\);/s.test(css));
+
 /* ------------------------------------------------------- the tooltip's words */
 
 // The chip is identical to an ordinary attachment on purpose; what differs

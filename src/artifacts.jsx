@@ -145,6 +145,32 @@ const CONSOLE_BRIDGE = `<script>(function(){
   window.addEventListener('DOMContentLoaded', function(){
     try { parent.postMessage({ __artifactConsole: true, level: 'system', text: 'ready' }, '*'); } catch(e){}
   });
+  // Scroll bridge: report the scroll position to the parent, and accept a
+  // position to restore so a re-rendered preview keeps its place.
+  var restoring = false, pending = 0;
+  window.addEventListener('scroll', function(){
+    if (restoring || pending) return;
+    pending = requestAnimationFrame(function(){
+      pending = 0;
+      try { parent.postMessage({ __artifactScroll: true, x: window.scrollX, y: window.scrollY }, '*'); } catch(e){}
+    });
+  }, { passive: true });
+  window.addEventListener('message', function(e){
+    var d = e.data;
+    if (e.source !== parent || !d || !d.__artifactScrollRestore) return;
+    restoring = true;
+    var tries = 0;
+    (function apply(){
+      // Content (images, fonts, scripts) may still be growing; retry briefly
+      // until the page is tall enough to reach the saved position.
+      window.scrollTo(d.x, d.y);
+      if ((Math.abs(window.scrollY - d.y) > 1 || Math.abs(window.scrollX - d.x) > 1) && ++tries < 20) {
+        setTimeout(apply, 50);
+      } else {
+        setTimeout(function(){ restoring = false; }, 0);
+      }
+    })();
+  });
 })();</script>`;
 
 const BASE_STYLE = `<style>
@@ -244,33 +270,140 @@ ${scriptTag}
    Preview frame
    ========================================================================= */
 
+// How long the preview waits for the code to stop changing before rendering,
+// and how long the old and new frames crossfade.
+const PREVIEW_DEBOUNCE_MS = 180;
+const PREVIEW_FADE_MS = 220;
+
+/**
+ * Double-buffered preview. Setting srcDoc on a visible iframe blanks it while
+ * the new document loads, which flashes on every streamed change. Instead the
+ * new document loads into a hidden second frame, and only once it has loaded
+ * (plus one paint) does it fade in over the old one.
+ */
 export const PreviewFrame = ({ doc, onConsole, reloadKey = 0 }) => {
-  const frameRef = useRef(null);
+  const frameRefs = [useRef(null), useRef(null)];
+  // Each slot: { doc, key }. key bumps force a fresh load of identical docs.
+  const [slots, setSlots] = useState(() => [{ doc, key: 0 }, { doc: '', key: 0 }]);
+  const [active, setActive] = useState(0);
+  const pendingRef = useRef(null);          // slot index currently loading
+  const activeRef = useRef(0);
+  const shownRef = useRef({ doc, reloadKey });
+  const timersRef = useRef({ debounce: null, cleanup: null });
+  const scrollRef = useRef({ x: 0, y: 0 });  // last scroll of the visible frame
+
+  useEffect(() => { activeRef.current = active; }, [active]);
 
   useEffect(() => {
     const handler = (event) => {
-      const frame = frameRef.current;
-      // The frame is sandboxed without allow-same-origin, so its origin is
-      // "null"; identify it by window reference instead.
-      if (!frame || event.source !== frame.contentWindow) return;
+      // The frames are sandboxed without allow-same-origin, so their origin is
+      // "null"; identify them by window reference instead. Only the visible
+      // frame and the one about to replace it may log.
+      const allowed = [activeRef.current, pendingRef.current]
+        .filter(i => i !== null)
+        .map(i => frameRefs[i].current?.contentWindow);
+      if (!allowed.includes(event.source)) return;
       const data = event.data;
+      if (data && data.__artifactScroll) {
+        // Only the visible frame's scroll counts as the user's position.
+        if (event.source === frameRefs[activeRef.current].current?.contentWindow) {
+          scrollRef.current = { x: data.x, y: data.y };
+        }
+        return;
+      }
       if (!data || !data.__artifactConsole) return;
       if (data.level === 'system') return;
       onConsole?.({ level: data.level, text: data.text, at: Date.now() });
     };
     window.addEventListener('message', handler);
     return () => window.removeEventListener('message', handler);
-  }, [onConsole]);
+  }, [onConsole]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  useEffect(() => {
+    const shown = shownRef.current;
+    const forced = reloadKey !== shown.reloadKey;
+    if (!forced && doc === shown.doc) return undefined;
+
+    clearTimeout(timersRef.current.debounce);
+    timersRef.current.debounce = setTimeout(() => {
+      shownRef.current = { doc, reloadKey };
+      const target = 1 - activeRef.current;
+      pendingRef.current = target;
+      clearTimeout(timersRef.current.cleanup);
+      setSlots(prev => {
+        const next = prev.slice();
+        next[target] = { doc, key: prev[target].key + 1 };
+        return next;
+      });
+    }, forced ? 0 : PREVIEW_DEBOUNCE_MS);
+    return () => clearTimeout(timersRef.current.debounce);
+  }, [doc, reloadKey]);
+
+  useEffect(() => () => {
+    clearTimeout(timersRef.current.debounce);
+    clearTimeout(timersRef.current.cleanup);
+  }, []);
+
+  const handleLoad = (index) => {
+    if (pendingRef.current !== index) return;
+    // Carry the scroll position over before the new frame becomes visible.
+    const { x, y } = scrollRef.current;
+    if (x || y) {
+      try {
+        frameRefs[index].current?.contentWindow?.postMessage({ __artifactScrollRestore: true, x, y }, '*');
+      } catch { /* frame gone */ }
+    }
+    // Give the new document a paint before showing it so its first frame is
+    // already drawn when it fades in.
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      if (pendingRef.current !== index) return;
+      pendingRef.current = null;
+      const old = activeRef.current;
+      activeRef.current = index;
+      setActive(index);
+      // After the fade, empty the old frame so its timers and audio stop.
+      timersRef.current.cleanup = setTimeout(() => {
+        if (activeRef.current === old || pendingRef.current === old) return;
+        setSlots(prev => {
+          const next = prev.slice();
+          next[old] = { doc: '', key: prev[old].key };
+          return next;
+        });
+      }, PREVIEW_FADE_MS + 50);
+    }));
+  };
 
   return (
-    <iframe
-      key={reloadKey}
-      ref={frameRef}
-      title="Artifact preview"
-      srcDoc={doc}
-      sandbox="allow-scripts allow-modals allow-forms allow-popups"
-      style={{ width: '100%', height: '100%', border: 'none', backgroundColor: '#fff' }}
-    />
+    <div style={{ position: 'relative', width: '100%', height: '100%', backgroundColor: '#fff' }}>
+      {slots.map((slot, i) => (
+        <iframe
+          key={`${i}-${slot.key}`}
+          ref={frameRefs[i]}
+          title={i === active ? 'Artifact preview' : 'Artifact preview (buffer)'}
+          srcDoc={slot.doc}
+          onLoad={() => handleLoad(i)}
+          aria-hidden={i !== active}
+          tabIndex={i === active ? 0 : -1}
+          sandbox="allow-scripts allow-modals allow-forms allow-popups"
+          style={{
+            position: 'absolute',
+            inset: 0,
+            width: '100%',
+            height: '100%',
+            border: 'none',
+            backgroundColor: '#fff',
+            opacity: i === active ? 1 : 0,
+            zIndex: i === active ? 1 : 0,
+            pointerEvents: i === active ? 'auto' : 'none',
+            // The incoming frame fades in on top; the outgoing one stays fully
+            // visible underneath until the fade is done, so nothing dips to white.
+            transition: i === active
+              ? `opacity ${PREVIEW_FADE_MS}ms ease`
+              : `opacity 0ms linear ${PREVIEW_FADE_MS}ms`,
+          }}
+        />
+      ))}
+    </div>
   );
 };
 

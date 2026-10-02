@@ -93,8 +93,27 @@ check('the saved form is a synced record', /studio: `studioSettings:\$\{scope\}`
 check('and so is the gallery', /studioJobs: `studioHistory:\$\{scope\}`/.test(sync));
 /* Listed once because the collect and apply sides have to agree — a kind added
    to one and forgotten in the other uploads and never comes back down. */
-check('both are in the list both sides read',
-  /WHOLE_LISTS = \[[^\]]*'studio', 'studioJobs'\]/.test(sync));
+check('the saved form is one of the whole-list records',
+  /WHOLE_LISTS = \[[^\]]*'studio'[^\]]*\]/.test(sync));
+// And so are the prompt blocks kept by name -- see src/studioPresets.js -- and
+// the characters this install has been taught; see src/characters.js. Matched
+// without pinning either to the end of the list, so adding a third does not
+// fail the check for the first two.
+check('and so are the prompt blocks', /WHOLE_LISTS = \[[^\]]*'studioPrompts'/.test(sync));
+check('and the character library', /WHOLE_LISTS = \[[^\]]*'characters'/.test(sync));
+/* The gallery is not one of them, and that is the point of it. A whole-list
+   record is a single row, so whichever device uploaded last replaced the
+   other's pictures with its own -- an empty Studio on a phone was enough to
+   take an afternoon's work off a desktop, and merging on the way down cannot
+   rescue it because the upload in the same request has already overwritten the
+   row. One record per job, resolved by its own timestamp; and forgetting one
+   becomes a tombstone, which a list could never have expressed. */
+check('the gallery is a record per job, not one for the list',
+  !/WHOLE_LISTS = \[[^\]]*studioJobs/.test(sync)
+  && /kind: 'studioJob', id: String\(job\.id\)/.test(sync)
+  && /byKind\('studioJob'\)/.test(sync));
+check('and each job says when it last changed, or it can never win a conflict',
+  /savedAt: now/.test(panel) && /jobStamp/.test(sync));
 
 const settings = fs.readFileSync(path.join(ROOT, 'src/studioSettings.js'), 'utf8');
 /* Unstamped, a record uploads as `updatedAt: 0` — older than everything — and
@@ -117,15 +136,23 @@ check('neither is swept up as a plain setting',
    only thing it had been told it could do and wrote the picture out in prose. */
 
 const tools = fs.readFileSync(path.join(ROOT, 'src/tools.js'), 'utf8');
+/* Matched as a membership test rather than as the literal text of the set:
+   what matters is that these need no permission, not that there are exactly
+   five of them. Swapping a character joined them later -- it redraws a
+   picture already on screen and reaches neither the network nor the disk. */
 check('drawing is named as needing no permission',
-  /DRAWING_TOOLS = new Set\(\[\s*'generate_image', 'generate_video', 'remove_background', 'upscale_image', 'extend_image',\s*\]\)/.test(tools));
+  /DRAWING_TOOLS = new Set\(\[[\s\S]*?'generate_image'[\s\S]*?'extend_image'[\s\S]*?\]\)/.test(tools));
 check('and the schemas can be narrowed to it', /export const schemasFor/.test(tools));
 
 const T = await import(pathToFileURL(path.join(ROOT, 'src/tools.js')).href);
 const drawingOnly = T.schemasFor({ web: false }).map(t => t.function.name);
-/* Drawing, and the three things done to a picture already drawn -- none of
-   them reaches the network or the disk. */
-eq('with the switch off, the picture tools are offered', drawingOnly.length, 5);
+/* Drawing, and the four things done to a picture already drawn -- none of
+   them reaches the network or the disk. Counted against the set rather
+   than against a number, so adding one to both keeps passing and adding
+   one to only the schemas does not. */
+eq('with the switch off, the picture tools are offered', drawingOnly.length, T.DRAWING_TOOLS.size);
+check('  and swapping a character is one of them, since it draws nothing new',
+  drawingOnly.includes('swap_character'), drawingOnly.join(','));
 check('and they are the drawing ones', drawingOnly.every(n => T.DRAWING_TOOLS.has(n)), drawingOnly.join(','));
 check('with it on, everything is', T.schemasFor({ web: true }).length === T.TOOL_SCHEMAS.length);
 // Nothing that reaches the network or the disk may come through without it.

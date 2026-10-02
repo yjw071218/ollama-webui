@@ -2,6 +2,13 @@ import { StrictMode } from 'react'
 import { createRoot } from 'react-dom/client'
 import './index.css'
 import './extras.css'
+// How the whole app moves -- curves, durations, and the reduced-motion rule.
+import './motion.css'
+// And how it looks on paper. Last, so it has the final word over anything
+// above it -- every rule in it is inside `@media print` and costs nothing on
+// screen. See src/print.css.
+import './print.css'
+import './polish.css'
 import { RefreshCcw } from 'lucide-react'
 import App from './App.jsx'
 import { SessionProvider, useSession } from './session.jsx'
