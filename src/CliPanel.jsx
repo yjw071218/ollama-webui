@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { RefreshCcw, TerminalSquare, CircleCheck, CircleAlert, CircleSlash } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
-import { LimitBars, formatUsd } from './CliLimits.jsx';
+import { LimitBars, formatUsd, formatDuration, cliLabel } from './CliLimits.jsx';
 import { CliAgentPanel } from './CliAgent.jsx';
 
 /**
@@ -17,17 +17,17 @@ import { CliAgentPanel } from './CliAgent.jsx';
 /* The account kept in server/data/cli-usage.jsonl, for this reader: what the
    CLIs were used for over a month, per CLI and per conversation, in tokens and
    -- where the CLI says -- the API price it would have been. */
-const UsageSummary = ({ sessions = [] }) => {
+const UsageSummary = ({ sessions = [], refreshKey = 0 }) => {
   const { t } = useI18n();
   const [data, setData] = useState(null);
+  // Fetched again with the panel's refresh button, not only once on opening.
   useEffect(() => {
     let cancelled = false;
     fetch('/cli/usage?days=30').then(r => r.json()).then((d) => { if (!cancelled && d.success) setData(d); }).catch(() => {});
     return () => { cancelled = true; };
-  }, []);
+  }, [refreshKey]);
   if (!data) return null;
   const muted = { fontSize: '0.75rem', color: 'var(--text-muted)' };
-  const labelOf = { 'claude-code': 'Claude Code', codex: 'Codex', agy: 'Antigravity' };
   const spans = ['today', 'week', 'month'];
   const ids = [...new Set(spans.flatMap(span => Object.keys(data.totals?.[span] || {})))];
   const line = (row) => [
@@ -46,7 +46,7 @@ const UsageSummary = ({ sessions = [] }) => {
       {!ids.length && <div style={muted}>{t('cli.usageNone')}</div>}
       {ids.map(id => (
         <div key={id} style={{ ...muted, marginTop: '0.25rem' }}>
-          <strong style={{ color: 'var(--text-primary)' }}>{labelOf[id] || id}</strong>
+          <strong style={{ color: 'var(--text-primary)' }}>{cliLabel(id)}</strong>
           {spans.map(span => (data.totals?.[span]?.[id]
             ? <div key={span} style={{ marginLeft: '0.8rem' }}>{t(`cli.usage.${span}`)}: {line(data.totals[span][id])}</div>
             : null))}
@@ -67,11 +67,68 @@ const UsageSummary = ({ sessions = [] }) => {
   );
 };
 
-export const CliPanel = ({ sessions = [], onImportChat }) => {
+/* The check: installed, version, signed in for free; "test run" also asks
+   each CLI for a one-word answer (and agy for a read-only plan run, which is
+   what shows whether CLI_AGY_PLAN_TOOLS names tools agy has). */
+const Doctor = () => {
   const { t } = useI18n();
+  const [result, setResult] = useState(null);
+  const [busy, setBusy] = useState('');
+  const run = async (live) => {
+    if (busy) return;
+    if (live && !window.confirm(t('cliDoctor.liveConfirm'))) return;
+    setBusy(live ? 'live' : 'quick');
+    try {
+      const d = await fetch('/cli/doctor', live
+        ? { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ live: true }) }
+        : undefined).then(r => r.json());
+      setResult(d.success ? d : { error: d.error || 'failed' });
+    } catch (e) { setResult({ error: e.message }); }
+    setBusy('');
+  };
+  const yes = (v) => (v === true ? '✓' : v === false ? '✗' : '?');
+  return (
+    <div className="cli-doctor">
+      <div style={{ display: 'flex', gap: 6, flexWrap: 'wrap' }}>
+        <button className="btn-ghost" disabled={!!busy} onClick={() => run(false)}>
+          {busy === 'quick' ? t('cliDoctor.running') : t('cliDoctor.quick')}
+        </button>
+        <button className="btn-ghost" disabled={!!busy} onClick={() => run(true)}>
+          {busy === 'live' ? t('cliDoctor.running') : t('cliDoctor.live')}
+        </button>
+      </div>
+      {result?.error && <div className="cli-doctor-check is-bad" role="alert">{result.error}</div>}
+      {(result?.providers || []).map(p => (
+        <div key={p.id} className="cli-doctor-row">
+          <strong>{p.label}</strong>
+          <div className={`cli-doctor-check ${p.installed ? 'is-ok' : 'is-bad'}`}>
+            {yes(p.installed)} {t('cliDoctor.installed')}{p.version ? ` · ${p.version}` : ''}
+          </div>
+          <div className={`cli-doctor-check ${p.signedIn === false ? 'is-bad' : p.signedIn ? 'is-ok' : ''}`}>
+            {yes(p.signedIn)} {t('cliDoctor.signedIn')}{p.how ? ` (${p.how})` : ''}
+          </div>
+          {p.planTools && (
+            <div className="cli-doctor-check">{t('cliDoctor.planTools')}: <code>{p.planTools.join(', ')}</code></div>
+          )}
+          {p.checks.map(c => (
+            <div key={c.name} className={`cli-doctor-check ${c.ok ? 'is-ok' : 'is-bad'}`}>
+              <span>{c.ok ? '✓' : '✗'} {t(`cliDoctor.check.${c.name}`)}{c.model ? ` · ${c.model}` : ''} · {(c.ms / 1000).toFixed(1)}s</span>
+              {!c.ok && <span className="cli-doctor-error">{c.error}</span>}
+            </div>
+          ))}
+          {result.live && !p.offered && <div className="cli-doctor-check">{t('cliDoctor.notOffered')}</div>}
+        </div>
+      ))}
+    </div>
+  );
+};
+
+export const CliPanel = ({ sessions = [], onImportChat }) => {
+  const { t, lang } = useI18n();
   const [status, setStatus] = useState(null);
   const [loading, setLoading] = useState(false);
   const [failed, setFailed] = useState(false);
+  const [refreshKey, setRefreshKey] = useState(0);
 
   const load = useCallback(async (refresh = false) => {
     setLoading(true);
@@ -81,6 +138,7 @@ export const CliPanel = ({ sessions = [], onImportChat }) => {
       if (!data.success) throw new Error(data.error);
       setStatus(data);
       setFailed(false);
+      if (refresh) setRefreshKey(k => k + 1);
     } catch (e) {
       setFailed(true);
     } finally {
@@ -92,6 +150,7 @@ export const CliPanel = ({ sessions = [], onImportChat }) => {
 
   const muted = { fontSize: '0.75rem', color: 'var(--text-muted)' };
   const mono = { fontFamily: 'var(--font-mono, monospace)' };
+  const onOff = (v) => t(v ? 'cli.on' : 'cli.offShort');
 
   const stateOf = (p) => {
     if (!status?.enabled) return { icon: CircleSlash, color: 'var(--text-muted)', text: t('cli.off') };
@@ -128,6 +187,27 @@ export const CliPanel = ({ sessions = [], onImportChat }) => {
               : t('cli.fallbackNone')}
           </div>
           <div>{t('cli.resumeSetting')}: <span style={mono}>{status.settings.resume}</span></div>
+          {/* The switches and limits the server actually runs with -- not
+              the .env text, which can say nothing and still mean "on". */}
+          <div>
+            {t('cli.toolSwitches', {
+              mcp: onOff(status.settings.mcp),
+              web: onOff(status.settings.web),
+              agy: onOff(status.settings.agyMcp),
+            })}
+          </div>
+          {status.settings.effort && (
+            <div>{t('cli.effortSetting')}: <span style={mono}>{status.settings.effort}</span></div>
+          )}
+          {status.settings.timeouts && (
+            <div>
+              {t('cli.timeouts', {
+                chat: formatDuration(status.settings.timeouts.chat, lang),
+                tools: formatDuration(status.settings.timeouts.tools, lang),
+                project: formatDuration(status.settings.timeouts.project, lang),
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -188,8 +268,9 @@ export const CliPanel = ({ sessions = [], onImportChat }) => {
         );
       })}
 
-      {status?.enabled && <UsageSummary sessions={sessions} />}
-      {status?.enabled && <CliAgentPanel providers={status.providers} onImportChat={onImportChat} />}
+      {status?.enabled && <Doctor />}
+      {status?.enabled && <UsageSummary sessions={sessions} refreshKey={refreshKey} />}
+      {status?.enabled && <CliAgentPanel providers={status.providers} onImportChat={onImportChat} refreshKey={refreshKey} />}
     </div>
   );
 };

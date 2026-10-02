@@ -98,6 +98,9 @@ export const git = (cwd, args, { env = {}, input } = {}) => new Promise((resolve
 });
 
 const IDENTITY = ['-c', 'user.name=ollama-webui', '-c', 'user.email=cli@ollama-webui.local'];
+/* Snapshots and undo keep a file's bytes exactly: with core.autocrlf=true
+   (Git for Windows' default) an undo turned LF files into CRLF ones. */
+const RAW = ['-c', 'core.autocrlf=false', '-c', 'core.safecrlf=false'];
 
 /* The working tree as a git tree object, untracked files included and
    ignored ones not, written through a throwaway index so the reader's own
@@ -112,7 +115,7 @@ export const snapshotTree = async (dir) => {
     const realIndex = path.resolve(root, real.out.trim());
     if (fs.existsSync(realIndex)) fs.copyFileSync(realIndex, index);   // faster: unchanged files are not hashed again
     const gitEnv = { GIT_INDEX_FILE: index };
-    const added = await git(root, ['add', '-A', '--', '.'], { env: gitEnv });
+    const added = await git(root, [...RAW, 'add', '-A', '--', '.'], { env: gitEnv });
     if (!added.ok) return null;
     const tree = await git(root, ['write-tree'], { env: gitEnv });
     return tree.ok ? { root, tree: tree.out.trim() } : null;
@@ -124,12 +127,13 @@ export const snapshotTree = async (dir) => {
 /** `{ files: [{ file, added, removed }], diff }` between two trees. */
 export const diffTrees = async (root, before, after, { maxBytes = 400 * 1024 } = {}) => {
   if (!before || !after || before === after) return { files: [], diff: '' };
-  const stat = await git(root, ['diff', '--numstat', before, after]);
+  // --no-renames: a rename is a delete and an add, so each name is a real path to undo.
+  const stat = await git(root, ['diff', '--no-renames', '--numstat', before, after]);
   const files = stat.out.split('\n').filter(Boolean).map((line) => {
     const [added, removed, ...name] = line.split('\t');
     return { file: name.join('\t'), added: Number(added) || 0, removed: Number(removed) || 0 };
   });
-  const patch = await git(root, ['diff', before, after]);
+  const patch = await git(root, ['diff', '--no-renames', before, after]);
   const diff = patch.out.length > maxBytes ? `${patch.out.slice(0, maxBytes)}\n… (diff cut at ${Math.round(maxBytes / 1024)} KB)` : patch.out;
   return { files, diff };
 };
@@ -152,8 +156,33 @@ export const restoreTree = async (root, before) => {
     const gitEnv = { GIT_INDEX_FILE: index };
     const read = await git(root, ['read-tree', before], { env: gitEnv });
     if (!read.ok) throw new Error(read.err.trim() || 'git read-tree failed');
-    const out = await git(root, ['checkout-index', '-a', '-f'], { env: gitEnv });
+    const out = await git(root, [...RAW, 'checkout-index', '-a', '-f'], { env: gitEnv });
     if (!out.ok) throw new Error(out.err.trim() || 'git checkout-index failed');
+  } finally {
+    fs.rm(index, { force: true }, () => {});
+  }
+};
+
+/* Put only these files back as they were in `before`: one that did not exist
+   then is removed. Everything else in the folder -- including what the reader
+   changed since -- is left alone, which restoreTree does not do. */
+export const restoreFiles = async (root, before, files = []) => {
+  const index = path.join(os.tmpdir(), `ollama-webui-index-${id()}`);
+  try {
+    const gitEnv = { GIT_INDEX_FILE: index };
+    const read = await git(root, ['read-tree', before], { env: gitEnv });
+    if (!read.ok) throw new Error(read.err.trim() || 'git read-tree failed');
+    for (const file of files) {
+      const full = path.resolve(root, file);
+      if (!samePathOrInside(full, root)) continue;
+      const known = await git(root, ['ls-tree', '--name-only', before, '--', file]);
+      if (known.ok && known.out.trim()) {
+        const out = await git(root, [...RAW, 'checkout-index', '-f', '--', file], { env: gitEnv });
+        if (!out.ok) throw new Error(out.err.trim() || `git checkout-index failed for ${file}`);
+      } else {
+        fs.rmSync(full, { force: true });
+      }
+    }
   } finally {
     fs.rm(index, { force: true }, () => {});
   }
@@ -183,14 +212,29 @@ export const noteRun = ({ owner = '', chat = '', root, before, after, files }) =
 
 export const listRuns = (owner = '') => loadRuns().filter(r => r.owner === String(owner || '')).slice(-50).reverse();
 
-export const revertRun = async (owner, runId) => {
+/* Undo a run: the files it changed (or the ones picked of those), not the
+   whole folder. A run undone file by file is "reverted" once all are back. */
+export const revertRun = async (owner, runId, { files = null } = {}) => {
   const run = loadRuns().find(r => r.id === runId && r.owner === String(owner || ''));
   if (!run) throw new Error('No such run');
   if (run.reverted) throw new Error('Already undone');
-  await restoreTree(run.root, run.before);
-  run.reverted = Date.now();
+  const changed = (run.files || []).map(f => f.file);
+  const done = new Set(run.revertedFiles || []);
+  const wanted = (Array.isArray(files) && files.length ? files.map(String).filter(f => changed.includes(f)) : changed)
+    .filter(f => !done.has(f));
+  if (!wanted.length) throw new Error(Array.isArray(files) && files.length ? 'Those files were not changed by this run' : 'Already undone');
+  if (changed.length) await restoreFiles(run.root, run.before, wanted);
+  else await restoreTree(run.root, run.before);   // an old run without its file list
+  run.revertedFiles = [...done, ...wanted];
+  if (changed.every(f => run.revertedFiles.includes(f))) run.reverted = Date.now();
   saveRuns();
   return run;
+};
+
+/** One run of this owner's, for the chat's card (which files, which undone). */
+export const getRun = (owner, runId) => {
+  const run = loadRuns().find(r => r.id === runId && r.owner === String(owner || ''));
+  return run ? { id: run.id, root: run.root, at: run.at, files: run.files || [], revertedFiles: run.revertedFiles || [], reverted: run.reverted || null } : null;
 };
 
 /** The changes as the markdown the chat already renders (src/FileChanges.jsx). */

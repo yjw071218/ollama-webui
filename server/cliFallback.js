@@ -32,8 +32,24 @@ export const candidatesFor = (name, env = {}) => {
   return out;
 };
 
-/* The words a CLI uses to say it is out of quota. */
-export const LIMIT_ERROR = /usage limit|rate limit|quota|429|hit your limit|limit reached|resets? (at|in)|out of credits/i;
+/* The words a CLI uses to say it is out of quota -- as phrases, not single
+   words: a bare "429" or "quota" turned up in tool output (a web page, a
+   file) and put a CLI on hold for fifteen minutes for nothing. */
+export const LIMIT_ERROR = new RegExp([
+  'usage limit',
+  'rate[ -]?limit(ed| exceeded| reached)?\\b',
+  'hit your (usage )?limit',
+  '(usage|session|weekly|daily) limit (reached|exceeded)',
+  'out of credits',
+  'insufficient[_ ]quota',
+  'quota (exceeded|exhausted|reached)',
+  'exceeded your (current )?quota',
+  'resource[_ ]exhausted',
+  '(status|http|code|error)[ :=]{0,3}429\\b',
+  '\\b429 too many requests',
+  'too many requests',
+  'limit[^\\n]{0,40}resets? (at|in)',
+].join('|'), 'i');
 export const isLimitError = (message) => LIMIT_ERROR.test(String(message || ''));
 
 /* Not installed, or would not start: the next model is as good an answer. */

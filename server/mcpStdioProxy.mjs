@@ -32,9 +32,22 @@ import { shellPlan } from './mcp.js';
 
 const argv = process.argv.slice(2);
 let cwd = process.cwd();
+const envFrom = [];
 while (argv.length && argv[0] !== '--') {
   const flag = argv.shift();
   if (flag === '--cwd') cwd = argv.shift() || cwd;
+  else if (flag === '--env-from') { const p = argv.shift(); if (p) envFrom.push(p); }
+}
+/* `--env-from PREFIX`: variables named PREFIXKEY become KEY for the server, so
+   a token can come through the environment rather than a file on disk. */
+const childEnv = { ...process.env };
+for (const prefix of envFrom) {
+  for (const [k, v] of Object.entries(process.env)) {
+    if (k.startsWith(prefix) && k.length > prefix.length) {
+      childEnv[k.slice(prefix.length)] = v;
+      delete childEnv[k];
+    }
+  }
 }
 argv.shift(); // the '--'
 const [command, ...args] = argv;
@@ -60,7 +73,7 @@ const rewrite = (line) => {
 const plan = shellPlan({ command, args });
 const child = spawn(plan.command, plan.args, {
   cwd,
-  env: process.env,
+  env: childEnv,
   stdio: ['pipe', 'inherit', 'inherit'],
   shell: plan.shell,
   windowsHide: true,

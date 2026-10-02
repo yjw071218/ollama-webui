@@ -23,7 +23,7 @@ import {
   projectFromHeaders, snapshotTree, diffTrees, noteRun, changesMarkdown, requestApproval,
   watchApprovalDir, codexApprovalOf, codexApprovalReply, budgetState, noteLimitHistory, withForecasts,
   agyEstimate, learnAgyCapacity, maxTurnsOf, listApprovals, decideApproval, projectSettings, listRuns,
-  revertRun, resolveProject, startRace, getRace, listRaces, finishRace, listExtensions, setExtensionEnabled,
+  revertRun, getRun, resolveProject, startRace, getRace, listRaces, finishRace, listExtensions, setExtensionEnabled,
   listTerminalSessions, readTerminalSession,
 } from './cliProject.js';
 
@@ -484,12 +484,25 @@ export const codexMcpOverrides = (servers = {}) => {
 export const AGY_AGENTS = {
   chat: 'ollama-webui-chat', vision: 'ollama-webui-vision',
   chatMcp: 'ollama-webui-chat-mcp', visionMcp: 'ollama-webui-vision-mcp',
+  plan: 'ollama-webui-plan', planMcp: 'ollama-webui-plan-mcp',
 };
 
 /* The servers in agy's own spelling (`serverUrl`, `enabledTools`), as a YAML
    flow mapping -- which JSON is, so no value needs YAML's quoting rules. A
    stdio server starts through server/mcpStdioProxy.mjs, as it does for the
    other CLIs. */
+export const agyEnvPrefix = (name) => `OWUI_MCP_${String(name).replace(/[^A-Za-z0-9]/g, '_').toUpperCase()}__`;
+
+/** The servers' env, prefixed, for agy's process: what the agent file no longer holds. */
+export const agyServerEnv = (servers = {}) => {
+  const out = {};
+  for (const [name, s] of Object.entries(servers || {})) {
+    if (s.transport !== 'stdio') continue;
+    for (const [k, v] of Object.entries(s.env || {})) out[`${agyEnvPrefix(name)}${k}`] = String(v);
+  }
+  return out;
+};
+
 export const agyMcpServers = (servers = {}) => {
   const out = {};
   for (const [name, s] of Object.entries(servers)) {
@@ -497,8 +510,12 @@ export const agyMcpServers = (servers = {}) => {
     if (s.transport === 'stdio') {
       const run = launcher(s);
       entry.command = run.command;
-      entry.args = run.args;
-      if (Object.keys(s.env || {}).length) entry.env = s.env;
+      /* The server's env (tokens) is not written into the agent file: the
+         proxy reads it from agy's own environment under a prefix, which
+         runCliOnce sets for this run only (see agyServerEnv). */
+      entry.args = Object.keys(s.env || {}).length
+        ? [run.args[0], '--env-from', agyEnvPrefix(name), ...run.args.slice(1)]
+        : run.args;
     } else {
       entry.serverUrl = s.url;
       if (Object.keys(s.headers || {}).length) entry.headers = s.headers;
@@ -509,6 +526,53 @@ export const agyMcpServers = (servers = {}) => {
     out[name] = entry;
   }
   return out;
+};
+
+/* Read-only tools for agy's plan-only project runs. Names are agy's own; set
+   CLI_AGY_PLAN_TOOLS to change them should a build call them otherwise. */
+export const AGY_PLAN_TOOLS_DEFAULT = ['view_file', 'list_dir', 'grep_search', 'find_by_name'];
+const agyPlanTools = (env = {}) => {
+  const raw = String(env.CLI_AGY_PLAN_TOOLS || '').trim();
+  return raw ? raw.split(',').map(s => s.trim()).filter(Boolean) : AGY_PLAN_TOOLS_DEFAULT;
+};
+
+/* A project run that may not edit: no shell and read-only tools, so "plan
+   only" does not rest on the prompt alone. */
+export const agyPlanAgentFile = ({ name, tools, servers = null }) => {
+  const mcp = servers && Object.keys(servers).length ? agyMcpServers(servers) : null;
+  return [
+    '---',
+    `name: ${name}`,
+    'description: Read-only project planning for Ollama WebUI. Never edits files or runs commands.',
+    'mainAgent: true',
+    'subagent: false',
+    'hidden: true',
+    'commandExecutionPolicy: off',
+    'tools:',
+    ...tools.map(t => `  - ${t}`),
+    ...(mcp ? ['inheritMcp: false', `mcpServers: ${JSON.stringify(mcp)}`] : ['inheritMcp: false']),
+    '---',
+    '',
+    '# System Prompt',
+    '',
+    'You are planning a change in a project. You can read files but cannot modify them or run commands.',
+    'Propose the change step by step, naming the files and the edits.',
+    '',
+  ].join('\n');
+};
+
+export const ensureAgyPlanAgent = (env = {}, { servers = null } = {}) => {
+  const withMcp = !!(servers && Object.keys(servers).length);
+  const name = withMcp ? AGY_AGENTS.planMcp : AGY_AGENTS.plan;
+  const file = path.join(agyAgentsDir(env), name, 'agent.md');
+  const text = agyPlanAgentFile({ name, tools: agyPlanTools(env), servers: withMcp ? servers : null });
+  let current = null;
+  try { current = fs.readFileSync(file, 'utf8'); } catch { /* not there yet */ }
+  if (current !== text) {
+    fs.mkdirSync(path.dirname(file), { recursive: true });
+    fs.writeFileSync(file, text, { encoding: 'utf8', mode: 0o600 });
+  }
+  return name;
 };
 
 export const agyAgentFile = ({ name, vision, servers = null }) => {
@@ -722,7 +786,7 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
       prompt,
     ].join('\n').trim();
     const stdin = `${JSON.stringify({ event: 'user', message: { content: [{ type: 'text', text }] } })}\n`;
-    return { args, stdin, ...(pictures.length ? { cwd: files } : {}) };
+    return { args, stdin, extraEnv: hasServers ? agyServerEnv(servers) : {}, ...(pictures.length ? { cwd: files } : {}) };
   }
 
   throw new Error(`Unknown CLI ${provider.id}`);
@@ -820,7 +884,16 @@ const buildProjectInvocation = (provider, model, { system, prompt, images = [] }
     /* agy has no way to ask before it acts, so it edits only when the reader
        has said in .env that it may; otherwise it plans. */
     const mayEdit = !plan && flag(env.CLI_AGY_PROJECT_EDIT, false);
-    const agent = hasServers ? ensureAgyAgent(env, { vision: images.length > 0, servers }) : '';
+    /* Not allowed to edit: always the read-only plan agent, so the rule is
+       enforced by agy and not only asked for in the prompt. If the agent cannot
+       be written, refuse rather than run agy with its full default tools. */
+    let agent = '';
+    if (!mayEdit) {
+      try { agent = ensureAgyPlanAgent(env, { servers: hasServers ? servers : null }); }
+      catch (e) { throw new Error(`Could not prepare agy's read-only plan agent: ${e.message}`); }
+    } else if (hasServers) {
+      agent = ensureAgyAgent(env, { vision: images.length > 0, servers });
+    }
     const pictures = images.map((data, i) => {
       const file = path.join(files, `image-${i + 1}.${imageMime(data).split('/')[1] || 'png'}`);
       fs.writeFileSync(file, Buffer.from(data, 'base64'));
@@ -846,6 +919,7 @@ const buildProjectInvocation = (provider, model, { system, prompt, images = [] }
       ],
       stdin: `${JSON.stringify({ event: 'user', message: { content: [{ type: 'text', text: body }] } })}\n`,
       cwd: project.dir,
+      extraEnv: hasServers ? agyServerEnv(servers) : {},
     };
   }
 
@@ -1509,8 +1583,50 @@ const READERS = { 'claude-code': ClaudeReader, agy: AgyReader };
 /* Thirty minutes: with tools on, one answer can be a CLI reading, editing and
    running tests in its own loop, and ten minutes cut that off mid-change. */
 const CLI_TIMEOUT_DEFAULT_MS = 30 * 60 * 1000;
+/* Shorter where a run cannot be a long loop: plain chat, then chat with tools.
+   CLI_TIMEOUT_MS still sets all three at once; the _CHAT/_TOOLS/_PROJECT ones
+   set each. */
+const CLI_TIMEOUT_DEFAULTS = { chat: 3 * 60 * 1000, tools: 15 * 60 * 1000, project: CLI_TIMEOUT_DEFAULT_MS };
+export const cliTimeoutMs = (env = {}, { tools = null, project = null } = {}) => {
+  const mode = project ? 'project' : tools ? 'tools' : 'chat';
+  const raw = env[`CLI_TIMEOUT_${mode.toUpperCase()}_MS`] || env.CLI_TIMEOUT_MS;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : CLI_TIMEOUT_DEFAULTS[mode];
+};
+
+/** The provider's sign-in variables found in .env, to hand to its process. */
+const authEnvOf = (provider, env = {}) => {
+  const out = {};
+  for (const key of provider.authEnv || []) {
+    if (env[key] && !process.env[key]) out[key] = String(env[key]);
+  }
+  return out;
+};
+
+/* A resume the CLI could not pick up: the session, conversation or thread is
+   gone, not some other failure that happened while resuming. */
+const SESSION_MISSING = /(session|conversation|thread|rollout)[^\n]{0,80}(not found|no such|does not exist|doesn't exist|could not (be )?(found|load|resume)|unknown|expired|invalid)|no (conversation|session|thread) (found|with)|(could not|unable to|failed to) (resume|find|load)[^\n]{0,40}(session|conversation|thread)/i;
+export const isSessionMissingError = (message) => SESSION_MISSING.test(String(message || ''));
 
 const SCRATCH = path.join(os.tmpdir(), 'ollama-webui-cli');
+
+/* Request folders left behind by a crash or an older build: anything over an
+   hour old goes when this module loads. */
+const sweepScratch = () => {
+  fs.readdir(SCRATCH, { withFileTypes: true }, (err, entries) => {
+    if (err) return;
+    const cutoff = Date.now() - 60 * 60 * 1000;
+    for (const e of entries) {
+      if (!e.isDirectory() || !e.name.startsWith('req-')) continue;
+      const dir = path.join(SCRATCH, e.name);
+      fs.stat(dir, (statErr, st) => {
+        if (!statErr && st.mtimeMs < cutoff) fs.rm(dir, { recursive: true, force: true, maxRetries: 3, retryDelay: 200 }, () => {});
+      });
+    }
+  });
+};
+sweepScratch();
+setInterval(sweepScratch, 60 * 60 * 1000).unref?.();
 
 /* An empty directory to run in. The CLIs read instructions from where they
    start -- CLAUDE.md, AGENTS.md -- and started from this repository they would
@@ -1565,7 +1681,14 @@ const runCliOnce = ({
   }
   fs.mkdirSync(SCRATCH, { recursive: true });
   const files = fs.mkdtempSync(path.join(SCRATCH, 'req-'));
-  const cleanup = () => fs.rm(files, { recursive: true, force: true }, () => {});
+  /* Retried: on Windows taskkill is asynchronous and the CLI can still hold
+     the folder (agy runs in it when there are pictures). Once only. */
+  let cleaned = false;
+  const cleanup = () => {
+    if (cleaned) return;
+    cleaned = true;
+    fs.rm(files, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }, () => {});
+  };
 
   let invocation;
   try { invocation = buildInvocation(provider, model, request, { think, files, tools, env, resume, persist, project }); } catch (e) { cleanup(); reject(e); return; }
@@ -1580,15 +1703,20 @@ const runCliOnce = ({
   const child = spawn(binary.command, [...binary.prefix, ...invocation.args], {
     // Its own scratch directory when it has files to open there (agy's pictures).
     cwd: invocation.cwd || workDir(),
-    env: { ...process.env, NO_COLOR: '1', FORCE_COLOR: '0' },
+    /* The sign-in keys this app's .env holds reach the CLI too, as signInOf
+       already counts them; the rest of .env stays here. */
+    env: { ...process.env, ...authEnvOf(provider, env), ...(invocation.extraEnv || {}), NO_COLOR: '1', FORCE_COLOR: '0' },
     stdio: ['pipe', 'pipe', 'pipe'],
     windowsHide: true,
   });
 
   // A conversation (Codex) reads and writes; the others read a stream.
   const reader = invocation.session || new READERS[provider.id]();
-  const timeoutMs = Number(env.CLI_TIMEOUT_MS || CLI_TIMEOUT_DEFAULT_MS);
-  let settled = false, stdout = '', stderr = '', last = null;
+  const timeoutMs = cliTimeoutMs(env, { tools, project });
+  let settled = false, stdout = '', stderr = '', last = null, exited = false;
+  /* The folder goes once the process has exited, not as it is being killed;
+     a backstop in case `close` never comes. */
+  child.on('close', () => { exited = true; cleanup(); });
   const settle = (error, value) => {
     if (settled) return;
     settled = true;
@@ -1596,13 +1724,21 @@ const runCliOnce = ({
     stopWatching();
     signal?.removeEventListener('abort', onAbort);
     killTree(child);
-    cleanup();
+    if (exited) cleanup();
+    else setTimeout(cleanup, 15000).unref?.();
     if (error) reject(error); else resolve(value);
   };
   const onAbort = () => settle(new Error('Generation cancelled'));
   signal?.addEventListener('abort', onAbort);
   if (signal?.aborted) { onAbort(); return; }
-  const timer = setTimeout(() => settle(new Error(`${provider.label} did not finish within ${Math.round(timeoutMs / 1000)}s`)), timeoutMs);
+  /* A timeout keeps the session it was in (when the CLI had said one), so the
+     chat can carry on from there rather than starting the work over. */
+  const timer = setTimeout(() => {
+    const e = new Error(`${provider.label} did not finish within ${Math.round(timeoutMs / 1000)}s`);
+    e.timedOut = true;
+    e.sessionId = reader.sessionId || (reader.threadId && !reader.thread?.ephemeral ? reader.threadId : '') || '';
+    settle(e);
+  }, timeoutMs);
   timer.unref?.();
 
   const write = (message) => {
@@ -1903,7 +2039,42 @@ const OFF = /^(off|0|false|no)$/i;
  * conversation seen before is resumed rather than sent whole
  * (server/cliSessions.js).
  */
-const answer = async (req, res, env, body, target, { generate = false, providers = availableProviders(env) } = {}) => {
+/* Per-chat choices from the composer (src/CliTurn.jsx), laid over .env for
+   this request only. Narrow on purpose: the effort level, and the web/MCP
+   switches only ever turned *off* -- a browser cannot switch on what .env
+   (the one running the server) has switched off. */
+const EFFORTS = ['minimal', 'low', 'medium', 'high', 'xhigh', 'max'];
+export const envForRequest = (env = {}, headers = {}) => {
+  const out = { ...env };
+  const effort = String(headers['x-cli-effort'] || '').trim().toLowerCase();
+  if (EFFORTS.includes(effort)) out.CLI_EFFORT = effort;
+  for (const [header, key] of [['x-cli-web', 'CLI_WEB'], ['x-cli-mcp', 'CLI_MCP']]) {
+    if (String(headers[header] || '').trim().toLowerCase() === 'off') out[key] = 'off';
+  }
+  return out;
+};
+
+/* A run that timed out, by chat: its session, so "carry on" resumes it
+   instead of doing the work again. An hour at most, in memory only. */
+const CONTINUE_TTL_MS = 60 * 60 * 1000;
+const continuable = new Map();
+const continueKey = (owner, chat) => `${owner}\u0000${chat}`;
+export const noteContinuable = (owner, chat, entry) => {
+  if (!chat || !entry?.id) return;
+  continuable.set(continueKey(owner, chat), { ...entry, at: Date.now() });
+};
+export const takeContinuable = (owner, chat, { provider, keyModel }) => {
+  const key = continueKey(owner, chat);
+  const hit = continuable.get(key);
+  if (!hit) return null;
+  continuable.delete(key);
+  if (Date.now() - hit.at > CONTINUE_TTL_MS || hit.provider !== provider || hit.keyModel !== keyModel) return null;
+  return hit;
+};
+
+const answer = async (req, res, baseEnv, body, target, { generate = false, providers = availableProviders(baseEnv) } = {}) => {
+  const env = generate ? baseEnv : envForRequest(baseEnv, req.headers);
+  const wantsContinue = !generate && /^(on|1|true)$/i.test(String(req.headers['x-cli-continue'] || ''));
   const name = body.model;
   const messages = generate
     ? [...(body.system ? [{ role: 'system', content: body.system }] : []),
@@ -2006,6 +2177,13 @@ const answer = async (req, res, env, body, target, { generate = false, providers
         answered_by: answeredBy,
         fallback_from: name,
         fallback_reason: passedOver.find(p => p.model === name)?.reason || passedOver[0]?.reason || 'limit',
+        // When the model asked for is back, if its CLI has said.
+        ...(() => {
+          const asked = parseCliModel(name);
+          let at = null;
+          try { at = asked ? backAt(allLimits(env)[asked.provider.id]) : null; } catch { /* unknown */ }
+          return Number.isFinite(at) && at > Date.now() ? { fallback_back_at: at } : {};
+        })(),
       } : {}),
     });
     if (toolCalls && !generate) done.message.tool_calls = toolCalls;
@@ -2037,7 +2215,14 @@ const answer = async (req, res, env, body, target, { generate = false, providers
     // another folder (or none) is a different session.
     const keyModel = project ? `${model}@${project.dir}#${project.mode}` : model;
     let request = full, resume = '', resumeKey = '';
-    if (resumable) {
+    /* "Carry on" after a timeout: the session that ran out of time, given
+       only the newest message -- the work so far is in that session. */
+    const carry = wantsContinue && chat ? takeContinuable(owner, chat, { provider: provider.id, keyModel }) : null;
+    if (carry) {
+      const lastUser = [...messages].reverse().find(m => m.role === 'user');
+      request = { system: full.system, ...tailRequest(lastUser ? [lastUser] : [], { formatInstruction: formatInstruction(body.format) }) };
+      resume = carry.id;
+    } else if (resumable) {
       const split = splitForResume(messages);
       if (split) {
         resumeKey = historyKey(provider.id, keyModel, split.prefix);
@@ -2053,13 +2238,25 @@ const answer = async (req, res, env, body, target, { generate = false, providers
       resume: id, persist: resumable, onStart, onDelta, project, approve,
     });
     const before = project ? await snapshotTree(project.dir) : null;
+    /* Said before anything else: which CLI, since when and for how long at
+       most, so the chat can show a clock against the limit. */
+    publish(frameOf({ content: '' }, {
+      done: false,
+      cli_started: { provider: provider.id, model, startedAt: Date.now(), timeoutMs: cliTimeoutMs(env, { tools, project }), continued: !!carry },
+    }));
     let result;
     try {
       result = await attempt(request, resume);
     } catch (e) {
+      if (e.timedOut && e.sessionId && chat && !generate) {
+        noteContinuable(owner, chat, { id: e.sessionId, provider: provider.id, keyModel });
+        e.canContinue = true;
+      }
       /* A session the CLI would not pick up -- deleted, or too old on its
          side -- costs one more start, whole, and is not offered again. */
-      if (!resume || delivered || controller.signal.aborted || isLimitError(e.message)) throw e;
+      /* Only when the CLI said the session itself is missing: a timeout or a
+         crash run again from the start would cost as much again. */
+      if (!resume || delivered || controller.signal.aborted || !isSessionMissingError(e.message)) throw e;
       sessions.forget(resumeKey);
       resume = '';
       result = await attempt(full, '');
@@ -2174,7 +2371,13 @@ const answer = async (req, res, env, body, target, { generate = false, providers
   } catch (e) {
     const message = String(e.message || e);
     if (stream) {
-      if (!controller.signal.aborted) publish({ model: name, error: message, done: true, done_reason: 'error' });
+      if (!controller.signal.aborted) {
+        publish({
+          model: name, error: message, done: true, done_reason: 'error',
+          ...(e.timedOut ? { cli_timed_out: true } : {}),
+          ...(e.canContinue ? { cli_can_continue: true } : {}),
+        });
+      }
     } else if (!res.writableEnded) {
       sendJson(res, { error: message }, 502);
     }
@@ -2238,25 +2441,44 @@ export const cliInterceptor = (env = {}) => {
  * ledger as a chat; `project` is `{ dir, mode }` and is checked against
  * CLI_PROJECT_ROOTS here. Answers in Ollama's `/api/chat` shape.
  */
-export const answerOnce = async ({ model: name, messages, env = {}, owner = '', chat = '', project = null, via = 'schedule' }) => {
+export const answerOnce = async ({ model: name, messages, env = {}, owner = '', chat = '', project = null, via = 'schedule', signal = null }) => {
   const folder = project?.dir ? { dir: resolveProject(project.dir, env), mode: project.mode === 'edit' ? 'edit' : 'plan', maxTurns: maxTurnsOf(env) } : null;
   const providers = availableProviders(env);
+  const candidates = candidatesFor(name, env);
   const passed = [];
-  for (const [i, candidate] of candidatesFor(name, env).entries()) {
+  for (const [i, candidate] of candidates.entries()) {
+    if (signal?.aborted) throw new Error('Generation cancelled');
     const cli = parseCliModel(candidate);
-    const last = i === candidatesFor(name, env).length - 1;
+    const last = i === candidates.length - 1;
     if (!cli) {
-      let said = '';
-      const frame = await streamLocal(env, { model: candidate, messages }, { onFrame: (f) => { if (!f.done) said += f.message?.content || ''; } });
-      return { ...frame, model: candidate, message: { role: 'assistant', content: said || frame?.message?.content || '' } };
+      /* A local model that is not there or not running: the next one, as a
+         CLI that is unavailable would be. */
+      try {
+        let said = '';
+        const frame = await streamLocal(env, { model: candidate, messages }, { signal, onFrame: (f) => { if (!f.done) said += f.message?.content || ''; } });
+        return { ...frame, model: candidate, message: { role: 'assistant', content: said || frame?.message?.content || '' } };
+      } catch (e) {
+        if (signal?.aborted || last) throw e;
+        passed.push(candidate);
+        continue;
+      }
     }
     if (!providers.includes(cli.provider) || (!last && blockedUntil(allLimits(env)[cli.provider.id]))) { passed.push(candidate); continue; }
+    // The same daily budget as a chat.
+    if (Number(env.CLI_DAILY_BUDGET_USD) > 0) {
+      const budget = budgetState(readUsage({ since: Date.now() - 24 * 3600 * 1000 }), env);
+      if (budget.over) {
+        if (last) throw new Error(`Today's CLI budget of $${budget.cap} is spent ($${budget.spent}). Set CLI_DAILY_BUDGET_USD higher, or pick a local model.`);
+        passed.push(candidate);
+        continue;
+      }
+    }
     let text = '';
     const started = Date.now();
     const before = folder ? await snapshotTree(folder.dir) : null;
     try {
       const result = await runCli({
-        provider: cli.provider, model: cli.model, env, request: toPrompt(messages), project: folder,
+        provider: cli.provider, model: cli.model, env, request: toPrompt(messages), project: folder, signal,
         approve: (question) => requestApproval({ owner, chat, ...question }),
         onDelta: (d) => { text += d.content || ''; },
       });
@@ -2310,6 +2532,70 @@ const signInOf = (provider, env) => {
   return file ? { signedIn: true, how: path.basename(file) } : { signedIn: provider.authFiles?.length ? false : null, how: '' };
 };
 
+/* ------------------------------------------------------------ doctor */
+
+/* One check per CLI: installed, version, signed in -- and with `live`, a real
+   one-line answer, plus for agy a read-only plan run in a scratch folder, which
+   is what shows whether CLI_AGY_PLAN_TOOLS names tools agy actually has.
+   `live` spends a little quota, so it runs only when asked. */
+const DOCTOR_TIMEOUT_MS = 90 * 1000;
+const doctorRun = async (provider, model, env, extra = {}) => {
+  const started = Date.now();
+  let text = '';
+  try {
+    await runCli({
+      provider, model, env: { ...env, CLI_TIMEOUT_MS: String(DOCTOR_TIMEOUT_MS) },
+      request: toPrompt([{ role: 'user', content: 'Reply with exactly the word OK and nothing else.' }]),
+      think: false, signal: AbortSignal.timeout(DOCTOR_TIMEOUT_MS + 5000),
+      onDelta: (d) => { text += d.content || ''; },
+      ...extra,
+    });
+    return { ok: true, ms: Date.now() - started, said: text.trim().slice(0, 200) };
+  } catch (e) {
+    return { ok: false, ms: Date.now() - started, error: String(e.message || e).slice(0, 1000) };
+  }
+};
+
+export const cliDoctor = async (env = {}, { live = false, only = '' } = {}) => {
+  const providers = availableProviders(env);
+  const out = [];
+  for (const provider of Object.values(PROVIDERS)) {
+    if (only && provider.id !== only) continue;
+    const binary = resolveBinary(provider, env);
+    const row = {
+      id: provider.id, label: provider.label,
+      installed: !!binary, offered: providers.includes(provider),
+      version: binary ? await versionOf(provider, binary) : '',
+      ...signInOf(provider, env),
+      checks: [],
+    };
+    if (provider.id === 'agy') {
+      row.planTools = agyPlanTools(env);
+    }
+    if (live && row.offered) {
+      const model = (await modelsOf(provider, env).catch(() => []))[0] || '';
+      row.checks.push({ name: 'answer', model, ...(await doctorRun(provider, model, env)) });
+      if (provider.id === 'agy') {
+        const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'ollama-webui-doctor-'));
+        try {
+          fs.writeFileSync(path.join(dir, 'README.md'), '# doctor\n');
+          row.checks.push({
+            name: 'plan', model,
+            ...(await doctorRun(provider, model, env, {
+              project: { dir, mode: 'plan', maxTurns: 3 },
+              request: toPrompt([{ role: 'user', content: 'Read README.md in this folder and reply with its first line only.' }]),
+            })),
+          });
+        } finally {
+          fs.rm(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 200 }, () => {});
+        }
+      }
+    }
+    out.push(row);
+  }
+  return out;
+};
+
 /** Everything the settings panel shows about the CLIs. */
 export const cliStatus = async (env = {}) => {
   const enabled = enabledOf(env);
@@ -2353,11 +2639,17 @@ export const cliStatus = async (env = {}) => {
     settings: {
       fallback: listOf(env.CLI_FALLBACK),
       resume: String(env.CLI_RESUME ?? '') || 'on',
-      agyMcp: flag(env.CLI_AGY_MCP, false),
+      // What nativeMcpOf actually does (on unless CLI_AGY_MCP/CLI_AGY_AGENT say off).
+      agyMcp: nativeMcpOf(PROVIDERS.agy, env).length > 0,
       mcp: flag(env.CLI_MCP, true),
       web: flag(env.CLI_WEB, true),
       effort: String(env.CLI_EFFORT || ''),
-      timeoutMs: Number(env.CLI_TIMEOUT_MS || CLI_TIMEOUT_DEFAULT_MS),
+      timeoutMs: cliTimeoutMs(env, { project: {} }),
+      timeouts: {
+        chat: cliTimeoutMs(env, {}),
+        tools: cliTimeoutMs(env, { tools: {} }),
+        project: cliTimeoutMs(env, { project: {} }),
+      },
       only,
       project: projectSettings(env),
     },
@@ -2426,7 +2718,14 @@ export const createCliRoutes = (env = {}) => [
   {
     path: '/cli/limits',
     handler: async (req, res) => {
-      try { sendJson(res, { success: true, limits: withForecasts(allLimits(env)), now: Date.now() }); } catch (e) { sendJson(res, { success: false, error: String(e.message || e) }, 500); }
+      try {
+        // The daily budget beside the windows, when CLI_DAILY_BUDGET_USD sets one.
+        let budget = null;
+        if (Number(env.CLI_DAILY_BUDGET_USD) > 0) {
+          try { budget = budgetState(readUsage({ since: Date.now() - 24 * 3600 * 1000 }), env); } catch { /* shown without */ }
+        }
+        sendJson(res, { success: true, limits: withForecasts(allLimits(env)), budget, now: Date.now() });
+      } catch (e) { sendJson(res, { success: false, error: String(e.message || e) }, 500); }
     },
   },
   /* Commands a CLI is running right now (server/liveCommands.js), with their
@@ -2511,9 +2810,27 @@ export const createCliRoutes = (env = {}) => [
     path: '/cli/project-revert',
     handler: guarded(async (req, res) => {
       postOnly(req);
-      const { id } = await jsonBody(req);
-      const run = await revertRun(ownerOfRequest(req), String(id || ''));
-      sendJson(res, { success: true, run });
+      const { id, files = null } = await jsonBody(req);
+      const run = await revertRun(ownerOfRequest(req), String(id || ''), { files: Array.isArray(files) ? files : null });
+      sendJson(res, { success: true, run: getRun(ownerOfRequest(req), run.id) });
+    }),
+  },
+  /* One run, for the card under the answer that made it (src/CliTurn.jsx). */
+  {
+    path: '/cli/project-run',
+    handler: guarded(async (req, res) => {
+      const run = getRun(ownerOfRequest(req), String(queryOf(req).get('id') || ''));
+      return run ? sendJson(res, { success: true, run }) : sendJson(res, { success: false, error: 'No such run' }, 404);
+    }),
+  },
+  /* The check button in the CLI panel. GET is the free part; POST
+     `{ live: true }` also asks each CLI for a one-word answer. */
+  {
+    path: '/cli/doctor',
+    handler: guarded(async (req, res) => {
+      const body = req.method === 'POST' ? await jsonBody(req) : {};
+      const live = req.method === 'POST' && body.live === true;
+      sendJson(res, { success: true, live, providers: await cliDoctor(env, { live, only: String(body.only || '') }) });
     }),
   },
   /* The same task to several CLIs in git worktrees; merge the one you like. */
@@ -2566,7 +2883,9 @@ export const createCliRoutes = (env = {}) => [
       if (!flag(env.CLI_TERMINAL_IMPORT, false)) throw Object.assign(new Error('Set CLI_TERMINAL_IMPORT=on in .env to import terminal sessions.'), { statusCode: 403 });
       const key = queryOf(req).get('key');
       if (key) return sendJson(res, { success: true, session: readTerminalSession(env, key) });
-      return sendJson(res, { success: true, sessions: listTerminalSessions(env) });
+      // More than the default when asked (the panel searches them), never past 200.
+      const limit = Math.max(1, Math.min(200, Number(queryOf(req).get('limit')) || 40));
+      return sendJson(res, { success: true, sessions: listTerminalSessions(env, undefined, { limit }) });
     }),
   },
   /* The account kept in server/data/cli-usage.jsonl, folded: the reader's

@@ -1,6 +1,8 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ShieldQuestion, Undo2, Flag, Puzzle, History, Check, X, GitMerge, Trash2 } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
+import { cliLabel } from './CliLimits.jsx';
+import { groupSessions } from './cliTurn.js';
 
 /**
  * The CLIs as coding agents (server/cliProject.js), in the browser:
@@ -17,7 +19,6 @@ const post = (url, body) => fetch(url, {
 
 const muted = { fontSize: '0.75rem', color: 'var(--text-muted)' };
 const mono = { fontFamily: 'var(--font-mono, monospace)' };
-const LABEL = { 'claude-code': 'Claude Code', codex: 'Codex', agy: 'Antigravity' };
 
 /* ------------------------------------------------------------ approvals */
 
@@ -58,7 +59,7 @@ export const CliApprovals = () => {
         <div key={a.id} style={{ background: 'var(--bg-secondary, #1e1e1e)', border: '1px solid var(--warning, #d97706)', borderRadius: 10, padding: 12, boxShadow: '0 6px 24px rgba(0,0,0,.35)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: '0.85rem' }}>
             <ShieldQuestion size={15} style={{ color: 'var(--warning, #d97706)' }} />
-            {t('cliAgent.approvalAsks', { cli: LABEL[a.provider] || a.provider || 'CLI' })}
+            {t('cliAgent.approvalAsks', { cli: cliLabel(a.provider) })}
           </div>
           <div style={{ ...mono, fontSize: '0.8rem', marginTop: 6, wordBreak: 'break-all' }}>{a.title}</div>
           {a.detail && (
@@ -88,6 +89,8 @@ const RaceBox = ({ roots, models }) => {
   const [picked, setPicked] = useState([]);
   const [race, setRace] = useState(null);
   const [error, setError] = useState('');
+  // One request at a time: a second tap used to start a second race.
+  const [busy, setBusy] = useState(false);
 
   useEffect(() => {
     if (!race || race.entries.every(e => e.status !== 'running')) return undefined;
@@ -99,13 +102,19 @@ const RaceBox = ({ roots, models }) => {
   }, [race]);
 
   const start = async () => {
+    if (busy) return;
     setError('');
+    setBusy(true);
     const d = await post('/cli/race', { dir, prompt, models: picked }).catch(e => ({ error: e.message }));
+    setBusy(false);
     if (d.success) setRace(d.race); else setError(d.error || 'failed');
   };
   const finish = async (winner) => {
+    if (busy) return;
     setError('');
+    setBusy(true);
     const d = await post('/cli/race-finish', { id: race.id, winner }).catch(e => ({ error: e.message }));
+    setBusy(false);
     if (d.success) setRace(null); else setError(d.error || 'failed');
   };
 
@@ -126,11 +135,11 @@ const RaceBox = ({ roots, models }) => {
             {e.text && <details><summary style={{ ...muted, cursor: 'pointer' }}>{t('cliAgent.answer')}</summary><div style={{ fontSize: '0.78rem', whiteSpace: 'pre-wrap' }}>{e.text}</div></details>}
             {e.diff && <details><summary style={{ ...muted, cursor: 'pointer' }}>diff</summary><pre style={{ ...mono, fontSize: '0.7rem', maxHeight: 300, overflow: 'auto' }}>{e.diff}</pre></details>}
             {e.status === 'done' && !running && (
-              <button className="btn-ghost" onClick={() => finish(i)}><GitMerge size={13} /> {t('cliAgent.merge')}</button>
+              <button className="btn-ghost" disabled={busy} onClick={() => finish(i)}><GitMerge size={13} /> {t('cliAgent.merge')}</button>
             )}
           </div>
         ))}
-        {!running && <button className="btn-ghost" onClick={() => finish(null)}><Trash2 size={13} /> {t('cliAgent.discard')}</button>}
+        {!running && <button className="btn-ghost" disabled={busy} onClick={() => finish(null)}><Trash2 size={13} /> {t('cliAgent.discard')}</button>}
         {error && <div style={{ ...muted, color: 'var(--danger)' }}>{error}</div>}
       </div>
     );
@@ -148,33 +157,108 @@ const RaceBox = ({ roots, models }) => {
           </label>
         ))}
       </div>
-      <button className="btn-primary" disabled={!dir || !prompt.trim() || !picked.length} onClick={start}><Flag size={13} /> {t('cliAgent.raceStart')}</button>
+      <button className="btn-primary" disabled={busy || !dir || !prompt.trim() || !picked.length} onClick={start}><Flag size={13} /> {t('cliAgent.raceStart')}</button>
       <div style={muted}>{t('cliAgent.raceHelp')}</div>
       {error && <div style={{ ...muted, color: 'var(--danger)' }}>{error}</div>}
     </div>
   );
 };
 
+/* ------------------------------------------------- terminal sessions */
+
+/* Searchable, grouped by the folder each ran in, and looked into before being
+   brought over: a title alone ("fix the build") rarely says which one. */
+const PREVIEW_MESSAGES = 6;
+const TerminalSessions = ({ sessions, when, onImport, onError }) => {
+  const { t } = useI18n();
+  const [query, setQuery] = useState('');
+  const [open, setOpen] = useState('');        // the key being previewed
+  const [preview, setPreview] = useState({});  // key -> session
+  const groups = groupSessions(sessions, query);
+
+  const toggle = async (key) => {
+    if (open === key) { setOpen(''); return; }
+    setOpen(key);
+    if (preview[key]) return;
+    const d = await fetch(`/cli/terminal-sessions?key=${encodeURIComponent(key)}`).then(r => r.json()).catch(e => ({ error: e.message }));
+    if (!d.success) { onError?.(d.error || 'failed'); setOpen(''); return; }
+    setPreview(p => ({ ...p, [key]: d.session }));
+  };
+
+  return (
+    <>
+      <input
+        type="search"
+        className="cli-terminal-search"
+        value={query}
+        onChange={e => setQuery(e.target.value)}
+        placeholder={t('cliAgent.terminalSearch')}
+        aria-label={t('cliAgent.terminalSearch')}
+      />
+      {!groups.length && <div style={muted}>{t('cliAgent.terminalNoMatch')}</div>}
+      {groups.map(g => (
+        <div key={g.cwd || '-'} className="cli-terminal-group">
+          <div className="cli-terminal-folder" title={g.cwd}>{g.cwd || t('cliAgent.terminalNoFolder')} · {g.sessions.length}</div>
+          {g.sessions.map(s => (
+            <div key={s.key}>
+              <div style={{ ...muted, display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'center', marginTop: 3 }}>
+                <span>{cliLabel(s.provider)} · {when(s.at)} · <span style={{ color: 'var(--text-primary)' }}>{s.title}</span></span>
+                <span style={{ display: 'flex', gap: 4, flexShrink: 0 }}>
+                  <button className="btn-ghost" aria-expanded={open === s.key} onClick={() => toggle(s.key)}>{t('cliAgent.preview')}</button>
+                  <button className="btn-ghost" onClick={() => onImport(s.key)}>{t('cliAgent.import')}</button>
+                </span>
+              </div>
+              {open === s.key && (
+                <div className="cli-terminal-preview">
+                  {!preview[s.key] && <div style={muted}>…</div>}
+                  {preview[s.key]?.messages.slice(0, PREVIEW_MESSAGES).map((m, i) => (
+                    <div key={i} className="cli-terminal-preview-msg">
+                      <span className="cli-terminal-preview-role">{m.role === 'user' ? t('cliAgent.you') : cliLabel(s.provider)}</span>
+                      {String(m.content || '').slice(0, 600)}{String(m.content || '').length > 600 ? '…' : ''}
+                    </div>
+                  ))}
+                  {preview[s.key]?.messages.length > PREVIEW_MESSAGES && (
+                    <div style={muted}>{t('cliAgent.previewMore', { n: preview[s.key].messages.length - PREVIEW_MESSAGES })}</div>
+                  )}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      ))}
+    </>
+  );
+};
+
 /* ----------------------------------------------------------- the panel */
 
-export const CliAgentPanel = ({ providers = [], onImportChat }) => {
+export const CliAgentPanel = ({ providers = [], onImportChat, refreshKey = 0 }) => {
   const { t, lang } = useI18n();
   const [project, setProject] = useState(null);
   const [extensions, setExtensions] = useState(null);
   const [terminal, setTerminal] = useState(null);
-  const [message, setMessage] = useState('');
+  /* { text, error }: a failure is shown as one, and either goes after a while
+     instead of staying under the heading for good. */
+  const [message, setMessageState] = useState(null);
+  const setMessage = useCallback((text, error = false) => setMessageState(text ? { text, error } : null), []);
+  useEffect(() => {
+    if (!message) return undefined;
+    const timer = setTimeout(() => setMessageState(null), message.error ? 12000 : 5000);
+    return () => clearTimeout(timer);
+  }, [message]);
 
+  // The three lists at once, not one after another.
   const load = useCallback(async () => {
-    const p = await fetch('/cli/project').then(r => r.json()).catch(() => null);
+    const json = (url) => fetch(url).then(r => r.json()).catch(() => null);
+    const [p, x] = await Promise.all([json('/cli/project'), json('/cli/extensions')]);
     if (p?.success) setProject(p);
-    const x = await fetch('/cli/extensions').then(r => r.json()).catch(() => null);
     if (x?.success) setExtensions(x);
     if (p?.terminalImport) {
-      const s = await fetch('/cli/terminal-sessions').then(r => r.json()).catch(() => null);
+      const s = await json('/cli/terminal-sessions?limit=200');
       if (s?.success) setTerminal(s.sessions);
     }
   }, []);
-  useEffect(() => { load(); }, [load]);
+  useEffect(() => { load(); }, [load, refreshKey]);
 
   if (!project) return null;
   const models = providers.filter(p => p.offered).flatMap(p => p.models.map(m => `${p.id}:${m}`));
@@ -182,18 +266,18 @@ export const CliAgentPanel = ({ providers = [], onImportChat }) => {
 
   const undo = async (id) => {
     if (!window.confirm(t('cliAgent.undoConfirm'))) return;
-    const d = await post('/cli/project-revert', { id });
-    setMessage(d.success ? t('cliAgent.undone') : d.error);
+    const d = await post('/cli/project-revert', { id }).catch(e => ({ error: e.message }));
+    setMessage(d.success ? t('cliAgent.undone') : (d.error || 'failed'), !d.success);
     load();
   };
   const toggle = async (file, enabled) => {
-    const d = await post('/cli/extensions', { file, enabled });
-    if (!d.success) setMessage(d.error);
+    const d = await post('/cli/extensions', { file, enabled }).catch(e => ({ error: e.message }));
+    if (!d.success) setMessage(d.error || 'failed', true);
     load();
   };
   const importSession = async (key) => {
-    const d = await fetch(`/cli/terminal-sessions?key=${encodeURIComponent(key)}`).then(r => r.json());
-    if (!d.success) { setMessage(d.error); return; }
+    const d = await fetch(`/cli/terminal-sessions?key=${encodeURIComponent(key)}`).then(r => r.json()).catch(e => ({ error: e.message }));
+    if (!d.success) { setMessage(d.error || 'failed', true); return; }
     onImportChat?.(d.session);
     setMessage(t('cliAgent.imported', { n: d.session.messages.length }));
   };
@@ -213,9 +297,13 @@ export const CliAgentPanel = ({ providers = [], onImportChat }) => {
           {project.budget.cap ? ` / $${project.budget.cap}` : ` (${t('cliAgent.budgetNone')})`}
           {project.budget.over && <strong style={{ color: 'var(--danger)' }}> · {t('cliAgent.budgetOver')}</strong>}
         </div>
-        <div>{t('cliAgent.agyEdit')}: {project.agyEdit ? 'on' : 'off'}</div>
+        <div>{t('cliAgent.agyEdit')}: {t(project.agyEdit ? 'cli.on' : 'cli.offShort')}</div>
       </div>
-      {message && <div style={{ ...muted, marginTop: 4 }}>{message}</div>}
+      {message && (
+        <div role={message.error ? 'alert' : 'status'} style={{ ...muted, marginTop: 4, color: message.error ? 'var(--danger)' : muted.color }}>
+          {message.text}
+        </div>
+      )}
 
       {project.roots.length > 0 && (
         <>
@@ -248,7 +336,7 @@ export const CliAgentPanel = ({ providers = [], onImportChat }) => {
             <input type="checkbox" checked={x.enabled} disabled={!extensions.editable} onChange={e => toggle(x.file, e.target.checked)} />
             <span>
               <strong style={{ color: 'var(--text-primary)' }}>{x.name}</strong>
-              {' '}<span>({LABEL[x.provider]} · {t(`cliAgent.kind.${x.kind}`)})</span>
+              {' '}<span>({cliLabel(x.provider)} · {t(`cliAgent.kind.${x.kind}`)})</span>
               {x.description && <div>{x.description}</div>}
             </span>
           </label>
@@ -260,12 +348,9 @@ export const CliAgentPanel = ({ providers = [], onImportChat }) => {
         <div style={heading}><History size={13} /> {t('cliAgent.terminal')}</div>
         {!project.terminalImport && <div style={muted}>{t('cliAgent.terminalOff')}</div>}
         {terminal && !terminal.length && <div style={muted}>{t('cliAgent.terminalNone')}</div>}
-        {(terminal || []).slice(0, 20).map(s => (
-          <div key={s.key} style={{ ...muted, display: 'flex', justifyContent: 'space-between', gap: 6, alignItems: 'center', marginTop: 3 }}>
-            <span>{LABEL[s.provider]} · {when(s.at)} · <span style={{ color: 'var(--text-primary)' }}>{s.title}</span>{s.cwd ? <span style={mono}> · {s.cwd}</span> : null}</span>
-            <button className="btn-ghost" onClick={() => importSession(s.key)}>{t('cliAgent.import')}</button>
-          </div>
-        ))}
+        {terminal && terminal.length > 0 && (
+          <TerminalSessions sessions={terminal} when={when} onImport={importSession} onError={(e) => setMessage(e, true)} />
+        )}
       </div>
     </div>
   );

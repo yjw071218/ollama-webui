@@ -77,6 +77,8 @@ import {
 import { CliPanel } from './CliPanel.jsx';
 import { CliApprovals } from './CliAgent.jsx';
 import { CliLimitBadge, formatUsd } from './CliLimits.jsx';
+import { CliTurnExtras, CliChips } from './CliTurn.jsx';
+import { cliHeadersOf } from './cliTurn.js';
 
 // 113312 -> "113K", 1220 -> "1.2K", 1927279 -> "1.9M"; under 1000 as is.
 const compactFormat = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
@@ -3319,6 +3321,8 @@ function App() {
   }, [profileScope]);
 
   const retryingRef = useRef(false);
+  // Set by the "carry on" button: the next send resumes the CLI session that timed out.
+  const cliContinueRef = useRef(false);
   // The held entry being retried, for the send that retries it -- see carryAttempt.
   const retryOfRef = useRef(null);
   useEffect(() => {
@@ -9893,6 +9897,11 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         'X-Cli-Project': encodeURIComponent(startedSession.cliProject),
         'X-Cli-Project-Mode': startedSession.cliProjectMode === 'edit' ? 'edit' : 'plan',
       } : {};
+      /* This chat's CLI choices from the composer (effort, web, MCP), and
+         "carry on" after a timeout -- taken once, by this send. See
+         src/CliTurn.jsx and envForRequest in server/cliModels.js. */
+      const cliHeaders = cliHeadersOf(startedSession?.cliOptions);
+      if (cliContinueRef.current) { cliHeaders['X-Cli-Continue'] = 'on'; cliContinueRef.current = false; }
       const askOllama = (think) => fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -9907,7 +9916,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           /* The tools toggle, for a model answered by a CLI: with it on, the
              CLI is handed the MCP servers (and Claude Code the web) for this
              turn. Every other backend ignores the header. */
-          ...(mcpEnabled ? { 'X-Cli-Tools': 'on' } : {}), ...projectHeaders,
+          ...(mcpEnabled ? { 'X-Cli-Tools': 'on' } : {}), ...projectHeaders, ...cliHeaders,
         },
         signal: abortControllerRef.current.signal,
         body: JSON.stringify({
@@ -10119,7 +10128,25 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             if (delta.content) speakAsItArrives(false);
           }
 
-          if (parsed.error) throw new Error(parsed.error);
+          /* A CLI run began: which one, and its time limit -- the clock under
+             the answer while it works (src/CliTurn.jsx). */
+          if (parsed.cli_started) {
+            const cliStarted = { ...parsed.cli_started, clientAt: Date.now() };
+            reviseSession(currentSessionId, s => {
+              const msgs = [...s.messages];
+              if (!msgs[newMessageIndex]) return s;
+              msgs[newMessageIndex] = { ...msgs[newMessageIndex], cliStarted };
+              return { ...s, messages: msgs };
+            });
+          }
+
+          if (parsed.error) {
+            const failure = new Error(parsed.error);
+            // A CLI that ran out of time with its session kept can carry on.
+            if (parsed.cli_can_continue) failure.cliContinue = true;
+            if (parsed.cli_timed_out) failure.cliTimedOut = true;
+            throw failure;
+          }
           if (parsed.done && !legMetrics) {
             cancelFlush();
             assistantContent = composeContent(true);
@@ -10232,8 +10259,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                    and CLI_FALLBACK chose another (server/cliFallback.js).
                    Said under the message, never passed off as the one picked. */
                 ...(parsed.answered_by ? {
-                  fallback: { from: parsed.fallback_from || targetModel, to: parsed.answered_by, reason: parsed.fallback_reason || 'limit' },
+                  fallback: {
+                    from: parsed.fallback_from || targetModel, to: parsed.answered_by, reason: parsed.fallback_reason || 'limit',
+                    ...(Number.isFinite(parsed.fallback_back_at) ? { backAt: parsed.fallback_back_at } : {}),
+                  },
                 } : {}),
+                // The project run this answer made, for its undo card.
+                ...(typeof parsed.cli_run === 'string' && parsed.cli_run ? { cliRun: parsed.cli_run } : {}),
                 isMcpFetching: false,
                 // Only when there were any, so an ordinary answer carries no
                 // empty array into storage and over the sync.
@@ -11300,7 +11332,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           reviseSession(startedIn, session => {
             const msgs = [...session.messages];
             const previous = msgs[newMessageIndex] || { role: 'assistant', content: '' };
-            msgs[newMessageIndex] = { ...previous, content: `${previous.content || ''}\n\n**Error:** ${err.message}`, isMcpFetching: false };
+            msgs[newMessageIndex] = {
+              ...previous, content: `${previous.content || ''}\n\n**Error:** ${err.message}`, isMcpFetching: false,
+              // Offered a "carry on" button (src/CliTurn.jsx) when the CLI kept its session.
+              ...(err.cliContinue ? { cliContinue: { model: activeModel } } : {}),
+              ...(err.cliTimedOut ? { cliTimedOut: true } : {}),
+            };
             return { ...session, messages: msgs };
           });
         }
@@ -12116,6 +12153,15 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     }
     setRegenMenuOpen(false);
     handleSend(null, newMessages, overrideModel);
+  };
+
+  /* After a CLI ran out of time with its session kept: one more turn that
+     resumes that session (X-Cli-Continue), so the work goes on from where it
+     stopped instead of starting over. */
+  const continueCli = (model = null) => {
+    if (isGenerating) return;
+    cliContinueRef.current = true;
+    handleSend(null, [...messages, { role: 'user', content: t('cliTurn.continuePrompt'), at: Date.now() }], model);
   };
 
   const deleteMessage = (index) => {
@@ -14830,6 +14876,24 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           </button>
                         )}
 
+                        {/* A CLI turn: its clock while it works, the files a
+                            project run changed (to undo), "carry on" after a
+                            timeout, and the picked model again after a
+                            fallback. See src/CliTurn.jsx. */}
+                        {(() => {
+                          const lastGroup = i + group.length - 1 >= messages.length - 1;
+                          return (
+                            <CliTurnExtras
+                              message={group[group.length - 1]}
+                              live={lastGroup && isThisChatGenerating}
+                              isLast={lastGroup}
+                              busy={isGenerating || !!remoteTurnHere}
+                              onContinue={continueCli}
+                              onRetryWith={(model) => handleRetry(model)}
+                            />
+                          );
+                        })()}
+
                         {/* The whole turn, not its last leg. A group is a run
                             of bubbles, and a turn that called a tool ends on
                             a tool result with no timings at all -- so this
@@ -15460,6 +15524,9 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 icons where the first word of the message should be. The box
                 has the top line now and the controls have the one under it,
                 which is the shape every composer worth using has settled on. */}
+            {/* For a CLI model only: this chat's mode, effort, web and MCP,
+                where they can be changed without leaving the box. */}
+            <CliChips model={selectedModel} session={currentSession} onChange={updateCurrentSession} />
             <textarea
               ref={textareaRef}
               className="chat-input"

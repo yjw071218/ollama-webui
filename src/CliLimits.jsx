@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from
 import { Gauge } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
 import { notify, unattended } from './notify.js';
+import './cliTurn.css';
 
 /**
  * How much of a subscription is left, and when it comes back.
@@ -19,6 +20,10 @@ export const formatUsd = (value) => {
   if (n === 0) return '$0';
   return n < 0.01 ? `$${n.toFixed(4)}` : n < 10 ? `$${n.toFixed(3)}` : `$${n.toFixed(2)}`;
 };
+
+/** Each CLI's name as the reader knows it; one table for every CLI view. */
+export const CLI_LABELS = { 'claude-code': 'Claude Code', codex: 'Codex', agy: 'Antigravity' };
+export const cliLabel = (id) => CLI_LABELS[id] || id || 'CLI';
 
 /** Which CLI a model name belongs to, or null. */
 export const cliOf = (model) => {
@@ -140,13 +145,13 @@ export const LimitBars = ({ limits, cli = '', now = Date.now() }) => {
 
 /* Every CLI's limits from the server, fetched on demand. Nothing is run to
    answer it: the server reads what the CLIs last said. */
-export const useCliLimits = (active, refreshKey) => {
-  const [limits, setLimits] = useState(null);
+const useLimitsData = (active, refreshKey) => {
+  const [data, setData] = useState({ limits: null, budget: null });
   const load = useCallback(async () => {
     try {
       const res = await fetch('/cli/limits');
-      const data = await res.json();
-      if (data.success) setLimits(data.limits || {});
+      const d = await res.json();
+      if (d.success) setData({ limits: d.limits || {}, budget: d.budget || null });
     } catch { /* no server: nothing shown */ }
   }, []);
   useEffect(() => {
@@ -155,7 +160,24 @@ export const useCliLimits = (active, refreshKey) => {
     const timer = setInterval(load, 60_000);
     return () => clearInterval(timer);
   }, [active, load, refreshKey]);
-  return limits;
+  return data;
+};
+export const useCliLimits = (active, refreshKey) => useLimitsData(active, refreshKey).limits;
+
+/* Today's spend against CLI_DAILY_BUDGET_USD, under the windows. */
+export const BudgetBar = ({ budget }) => {
+  const { t } = useI18n();
+  if (!budget?.cap) return null;
+  const share = Math.min(1, (Number(budget.spent) || 0) / budget.cap);
+  const state = budget.over ? 'is-over' : share >= 0.8 ? 'is-near' : '';
+  return (
+    <div className="cli-budget">
+      <div>{t('cliTurn.budget', { spent: formatUsd(budget.spent), cap: formatUsd(budget.cap) })}{budget.over ? ` · ${t('cliAgent.budgetOver')}` : ''}</div>
+      <div className="cli-budget-bar" role="meter" aria-valuemin={0} aria-valuemax={budget.cap} aria-valuenow={budget.spent}>
+        <div className={`cli-budget-fill ${state}`} style={{ width: `${Math.round(share * 100)}%` }} />
+      </div>
+    </div>
+  );
 };
 
 /* Where the panel goes: under the badge, but never past either edge of the
@@ -176,7 +198,7 @@ export const placePanel = (trigger, viewportWidth, wanted = 300) => {
 export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
   const { t, lang } = useI18n();
   const cli = cliOf(model);
-  const all = useCliLimits(!!cli, refreshKey);
+  const { limits: all, budget } = useLimitsData(!!cli, refreshKey);
   /* Over the limit a minute ago, and not now: said out loud when the reader
      asked to be told things and is not looking. The server pushes the same
      news to a closed app (server/cliModels.js); this is the half that works
@@ -186,8 +208,7 @@ export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
     if (!all || !cli) return;
     const blockedNow = all[cli]?.status === 'rejected';
     if (wasBlocked.current?.cli === cli && wasBlocked.current.blocked && !blockedNow && notifyBack && unattended()) {
-      const name = { 'claude-code': 'Claude Code', codex: 'Codex', agy: 'Antigravity' }[cli] || cli;
-      notify(t('notify.cliReset', { name }), { tag: 'ollama-webui-cli-reset' });
+      notify(t('notify.cliReset', { name: cliLabel(cli) }), { tag: 'ollama-webui-cli-reset' });
     }
     wasBlocked.current = { cli, blocked: blockedNow };
   }, [all, cli, notifyBack, t]);
@@ -275,9 +296,10 @@ export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
           }}
         >
           <div style={{ fontWeight: 600, fontSize: '0.85rem', marginBottom: '0.5rem' }}>
-            {t('cli.limit.title')} · {cli}
+            {t('cli.limit.title')} · {cliLabel(cli)}
           </div>
           <LimitBars limits={limits} cli={cli} now={now} />
+          <BudgetBar budget={budget} />
         </div>
       )}
     </div>

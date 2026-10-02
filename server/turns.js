@@ -181,7 +181,10 @@ export const runServerTurn = async ({
       const ask = askCli || (await import('./cliModels.js')).answerOnce;
       // The schedule's folder, or else the chat's own (set in the composer).
       const folder = project || (chat.cliProject ? { dir: chat.cliProject, mode: chat.cliProjectMode === 'edit' ? 'edit' : 'plan' } : null);
-      data = await ask({ model: request.model, messages: request.messages, env, owner, chat: chatId, project: folder, via: origin });
+      /* A cap over the whole fallback chain, not only one run: several CLIs
+         each taking their own timeout could otherwise hold a turn for hours. */
+      const capMs = Number(env.CLI_SCHEDULE_TIMEOUT_MS) > 0 ? Number(env.CLI_SCHEDULE_TIMEOUT_MS) : 45 * 60 * 1000;
+      data = await ask({ model: request.model, messages: request.messages, env, owner, chat: chatId, project: folder, via: origin, signal: AbortSignal.timeout(capMs) });
     } else {
       const res = await fetchImpl(`${base}/api/chat`, {
         method: 'POST',
