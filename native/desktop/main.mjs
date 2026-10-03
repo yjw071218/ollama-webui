@@ -155,7 +155,10 @@ else {
       { label: '편집', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
       { label: '보기', submenu: [{ role: 'reload', label: '새로고침' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
     ]));
-    openSetup(); // Always show editable saved address at launch; never silently trust a new server.
+    if (settings.server && !process.argv.includes('--native-smoke')) {
+      try { await connect(settings.server); }
+      catch (error) { openSetup(); dialog.showErrorBox('연결 실패', error.message); }
+    } else openSetup();
     void notifyUpdate();
     const smoke = process.argv.find(v => v.startsWith('--smoke-server='));
     if (process.argv.includes('--native-smoke') && smoke) connect(smoke.slice(15)).catch(error => { console.error(error); app.exit(1); });

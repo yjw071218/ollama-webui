@@ -6666,6 +6666,7 @@ ${data.text}` : data.text));
         maxRounds: 10000,
         onProgress: ({ rev, complete }) => setInitialSync({ percent: syncPercent(rev, target, complete), error: '' }),
       } : {});
+      if (first && !result.complete) throw new Error('동기화가 아직 완료되지 않았습니다. 다시 시도하여 이어 받으세요.');
       syncStampRef.current = result.rev;
       setSyncInfo(await accountStamp());
       /* Anything the account would not take. Said rather than swallowed: a

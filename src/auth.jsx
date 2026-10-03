@@ -116,9 +116,11 @@ export const renderGoogleButton = async (container, { onCredential, onError, loc
     container.replaceChildren();
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = '브라우저에서 Google 로그인';
+    button.textContent = 'Google로 계속';
     container.appendChild(button);
+    let attempt = 0;
     button.onclick = async () => {
+      const currentAttempt = ++attempt;
       button.disabled = true;
       const post = async (action, body) => {
         const response = await fetch('/api/auth/native/' + action, {
@@ -132,17 +134,19 @@ export const renderGoogleButton = async (container, { onCredential, onError, loc
       try {
         const { id, secret } = await post('start', {});
         window.location.assign('/__native/auth#' + id);
-        button.textContent = '브라우저 인증 후 이 앱으로 돌아오세요';
+        button.textContent = 'Google로 계속';
+        button.disabled = false; // Closing the browser must not lock out another attempt.
         const deadline = Date.now() + 300000;
         while (Date.now() < deadline && button.isConnected) {
           await new Promise(resolve => setTimeout(resolve, 1500));
-          if (!button.isConnected) return;
+          if (!button.isConnected || currentAttempt !== attempt) return;
           const result = await post('poll', { id, secret });
+          if (currentAttempt !== attempt) return;
           if (result.credential) { onCredential?.(result.credential); return; }
         }
         if (button.isConnected) throw new Error('로그인 시간이 만료되었습니다. 다시 시도하세요.');
-      } catch (error) { onError?.({ error: 'auth.googleFailed', detail: error.message }); }
-      finally { button.disabled = false; button.textContent = '브라우저에서 Google 로그인'; }
+      } catch (error) { if (currentAttempt === attempt) onError?.({ error: 'auth.googleFailed', detail: error.message }); }
+      finally { if (currentAttempt === attempt) { button.disabled = false; button.textContent = 'Google로 계속'; } }
     };
     return { rendered: true };
   }

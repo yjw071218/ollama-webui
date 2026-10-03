@@ -44,7 +44,7 @@ export function nativeGooglePage(clientId) {
 <p>직접 앱에서 시작한 로그인일 때만 계속하세요. 로그인 후 앱으로 돌아가면 연결됩니다.</p>
 <div id="button"></div><p id="status"></p>
 <script>
-const id = location.hash.slice(1);
+const [id, appHint] = location.hash.slice(1).split('&');
 history.replaceState(null, '', location.pathname);
 const status = document.getElementById('status');
 window.ready = () => {

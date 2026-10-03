@@ -62,7 +62,7 @@ const NOT_A_SETTING_PREFIX = [
      synced, every signed-in device would fire the same one at the same minute.
      An account's schedules live on the server instead; see server/turns.js. */
   'schedules',
-  'settingStamps', 'syncRev', 'syncSent', 'syncSentAckVersion',
+  'settingStamps', 'syncRev', 'syncSent', 'syncSentAckVersion', 'initialSyncPending',
   // Half-typed messages. They belong to this browser and this moment, not to
   // the account: syncing them would upload on every keystroke, and a draft
   // arriving on another device would overwrite whatever was being typed there.

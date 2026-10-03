@@ -181,6 +181,7 @@ check('App.jsx writes no setting straight to localStorage',
 // files and the comment in one cannot enforce the other.
 check('drafts are not a synced setting', !isScopedSetting('chatDrafts:srv-abc'));
 check('nor under the guest key', !isScopedSetting('chatDrafts'));
+check('initial sync pending is device bookkeeping, not an account preference', !isScopedSetting('initialSyncPending'));
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

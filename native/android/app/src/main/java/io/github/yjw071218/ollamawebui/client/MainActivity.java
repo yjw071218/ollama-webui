@@ -35,7 +35,7 @@ public class MainActivity extends Activity {
     private String captureId, saveId, downloadURL;
     private byte[] saveBytes;
     private boolean connecting, notificationAllowed;
-    private static final int MEDIA = 41, FILE = 42, SAVE = 43, CAPTURE = 44, NOTIFY = 45;
+    private static final int MEDIA = 41, FILE = 42, SAVE = 43, CAPTURE = 44, NOTIFY = 45, AUTH = 46;
     private int dp(int n) { return (int) (getResources().getDisplayMetrics().density * n); }
 
     @Override public void onCreate(Bundle state) {
@@ -43,8 +43,54 @@ public class MainActivity extends Activity {
         prefs = getSharedPreferences("connection", MODE_PRIVATE);
         getWindow().setStatusBarColor(Color.rgb(17, 24, 39));
         getWindow().setNavigationBarColor(Color.rgb(17, 24, 39));
-        showSetup();
+        // The address screen is for choosing a server, not a gate on every launch:
+        // a saved server is opened directly, and "서버 변경" brings the screen back.
+        String saved = prefs.getString("server", "");
+        if (saved.isEmpty()) showSetup();
+        else { showSplash(); connect(saved, null); }
         checkUpdates(false);
+    }
+    /** Shown for the moment it takes to open the saved server. */
+    private void showSplash() {
+        int color = prefs.getInt("chrome", Color.rgb(26, 25, 22));
+        layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setGravity(Gravity.CENTER);
+        setContentView(layout);
+        applyChrome(color);
+        layout.addView(new ProgressBar(this));
+        TextView text = label("연결 중…", 15); text.setGravity(Gravity.CENTER);
+        text.setTextColor(luminance(color) > 0.6 ? Color.rgb(60, 60, 60) : Color.rgb(220, 220, 220));
+        layout.addView(text);
+    }
+    private static double luminance(int color) {
+        return (0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color)) / 255;
+    }
+    /**
+     * Sign-in pages open in a Custom Tab: a real browser shown over the app (as a
+     * sheet where the browser supports it). Google refuses sign-in inside a
+     * WebView, and Kakao's "카카오톡으로 로그인" can only hand back to a browser.
+     */
+    private void openAuthTab(Uri uri) {
+        Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+        Bundle extras = new Bundle();
+        extras.putBinder("android.support.customtabs.extra.SESSION", null);
+        intent.putExtras(extras);
+        intent.putExtra("android.support.customtabs.extra.TOOLBAR_COLOR", prefs.getInt("chrome", Color.rgb(26, 25, 22)));
+        intent.putExtra("android.support.customtabs.extra.TITLE_VISIBILITY", 1);
+        intent.putExtra("androidx.browser.customtabs.extra.INITIAL_ACTIVITY_HEIGHT_PX", (int) (getResources().getDisplayMetrics().heightPixels * 0.88));
+        try { startActivityForResult(intent, AUTH); }
+        catch (ActivityNotFoundException e) { message("로그인할 브라우저가 없습니다."); }
+    }
+    /** Tell the page to check for a finished sign-in now instead of at its next poll. */
+    private void nudgeAuth() {
+        if (web != null) web.evaluateJavascript("window.dispatchEvent(new Event('ollama-native-auth'))", null);
+    }
+    @Override protected void onNewIntent(Intent intent) {
+        super.onNewIntent(intent);
+        setIntent(intent);
+        // ollamawebui://auth is only a "come back" signal from the sign-in page; it carries nothing.
+        if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null
+            && "ollamawebui".equals(intent.getData().getScheme())) nudgeAuth();
     }
     private void checkUpdates(boolean manual) {
         io.execute(() -> {
@@ -108,7 +154,8 @@ public class MainActivity extends Activity {
         view.setPadding(0, dp(12), 0, dp(12)); return view;
     }
     private void connect(String server, Button button) {
-        connecting = true; button.setEnabled(false); button.setText("연결 중…");
+        connecting = true;
+        if (button != null) { button.setEnabled(false); button.setText("연결 중…"); }
         io.execute(() -> {
             try {
                 int port = prefs.getInt("port:" + server, 0);
@@ -141,7 +188,8 @@ public class MainActivity extends Activity {
                     else open.run();
                 });
             } catch (Exception e) {
-                runOnUiThread(() -> { connecting = false; button.setEnabled(true); button.setText("연결하기");
+                runOnUiThread(() -> { connecting = false;
+                    if (button != null) { button.setEnabled(true); button.setText("연결하기"); } else showSetup();
                     message(e instanceof BindException ? "저장된 앱 포트가 사용 중입니다. 앱을 완전히 종료하고 다시 열어 주세요." : "연결 준비 실패: " + e.getMessage()); });
             }
         });
@@ -197,9 +245,9 @@ public class MainActivity extends Activity {
                 if (local(url)) {
                     if ("/__native/auth".equals(request.getUrl().getPath())) {
                         String id = request.getUrl().getFragment();
-                        if (request.isForMainFrame() && id != null && id.matches("[a-f0-9]{64}")) {
-                            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(server + "/api/auth/native/page#" + id))); }
-                            catch (Exception e) { message("로그인할 브라우저가 없습니다."); }
+                        if (request.isForMainFrame() && id != null) {
+                            if (id.matches("[a-f0-9]{64}")) openAuthTab(Uri.parse(server + "/api/auth/native/page#" + id + "&app=android"));
+                            else if (id.matches("kakao:[a-f0-9]{64}")) openAuthTab(Uri.parse(server + "/api/auth/native/kakao?app=android&id=" + id.substring(6)));
                         }
                         return true;
                     }
@@ -396,6 +444,7 @@ public class MainActivity extends Activity {
     }
     @Override protected void onActivityResult(int code, int result, Intent intent) {
         super.onActivityResult(code, result, intent);
+        if (code == AUTH) { nudgeAuth(); return; }
         if (code == FILE && fileResult != null) {
             fileResult.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result, intent)); fileResult = null;
         }

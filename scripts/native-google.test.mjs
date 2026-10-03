@@ -39,6 +39,7 @@ test('native login leaves origin policy to Google (registered HTTP nip.io origin
   for (const [protocol, hostname, hash, allowed] of [
     ['http:', '0.0.0.0.nip.io', '#' + 'a'.repeat(64), true], ['https:', 'example.com', '#' + 'a'.repeat(64), true],
     ['http:', 'localhost', '#' + 'a'.repeat(64), true], ['http:', 'example.com', '#bad', false],
+    ['http:', 'localhost', '#' + 'a'.repeat(64) + '&app=android', true],
   ]) {
     const status = {textContent:''};
     let initialized = false;
