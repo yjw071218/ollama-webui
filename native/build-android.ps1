@@ -18,13 +18,16 @@ $env:ANDROID_KEYSTORE = "$root/ollama-client-release.jks"
 $env:ANDROID_STORE_PASSWORD = $signing.password
 $env:ANDROID_KEY_PASSWORD = $signing.password
 $env:ANDROID_KEY_ALIAS = 'ollama-client'
+$version = [regex]::Match((Get-Content "$PSScriptRoot/android/app/build.gradle" -Raw), "versionName\s+'([^']+)'").Groups[1].Value
+if (-not $version) { throw 'versionName not found in build.gradle' }
+$apk = "$PSScriptRoot/artifacts/android/OllamaWebUI-Client-$version.apk"
 Push-Location "$PSScriptRoot/android"
 try {
     & "$root/gradle-8.11.1/bin/gradle.bat" --no-daemon assembleRelease lintRelease
     if ($LASTEXITCODE -ne 0) { throw 'Android build or lint failed' }
     New-Item -ItemType Directory -Force "$PSScriptRoot/artifacts/android" | Out-Null
-    Copy-Item 'app/build/outputs/apk/release/app-release.apk' "$PSScriptRoot/artifacts/android/OllamaWebUI-Client-1.0.3.apk"
-    & "$env:ANDROID_HOME/build-tools/35.0.0/apksigner.bat" verify --verbose "$PSScriptRoot/artifacts/android/OllamaWebUI-Client-1.0.3.apk"
+    Copy-Item 'app/build/outputs/apk/release/app-release.apk' $apk
+    & "$env:ANDROID_HOME/build-tools/35.0.0/apksigner.bat" verify --verbose $apk
     if ($LASTEXITCODE -ne 0) { throw 'APK signature verification failed' }
 } finally {
     Pop-Location
