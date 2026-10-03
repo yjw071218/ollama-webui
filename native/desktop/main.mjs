@@ -37,13 +37,15 @@ function openSetup() {
   if (setupWindow && !setupWindow.isDestroyed()) { setupWindow.focus(); return; }
   setupWindow = new BrowserWindow({ ...chromeOptions, icon: path.join(directory, 'icons/app.png'), show: !process.argv.includes('--native-smoke'), width: 700, height: 650, title: '서버 연결',
     webPreferences: { preload: path.join(directory, 'setup-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const win = setupWindow;
+  win.once('closed', () => { if (setupWindow === win) setupWindow = undefined; });
   setupWindow.setMenu(null);
   setupWindow.webContents.on('will-navigate', event => event.preventDefault());
   setupWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
   setupWindow.loadURL(setupURL);
 }
 function validSetup(event) {
-  return setupWindow && event.sender === setupWindow.webContents && event.senderFrame === setupWindow.webContents.mainFrame && event.senderFrame.url === setupURL;
+  return setupWindow && !setupWindow.isDestroyed() && event.sender === setupWindow.webContents && event.senderFrame === setupWindow.webContents.mainFrame && event.senderFrame.url === setupURL;
 }
 async function connect(value) {
   if (connecting) throw new Error('연결 중입니다.');
