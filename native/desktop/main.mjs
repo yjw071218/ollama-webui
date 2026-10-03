@@ -8,6 +8,7 @@ import { createUpdater } from './updater.mjs';
 import { loadTrustedPage, kakaoAuthURL } from './navigation.mjs';
 import { createClientWindow, chromeOptions } from './chrome.mjs';
 import { appDialog } from './dialog.mjs';
+import { parseGoogleHandoff, googleAuthorizeUrl, startGoogleLoopback } from './googleLoopback.mjs';
 const showError = (title, message) => appDialog(clientWindow && !clientWindow.isDestroyed() ? clientWindow : setupWindow, { title, message });
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -96,12 +97,28 @@ async function connect(value) {
     clientWindow = createClientWindow({ icon: path.join(directory, 'icons/app.png'), show: !process.argv.includes('--native-smoke'), width: 1360, height: 900, minWidth: 420, minHeight: 500, title: 'Ollama WebUI Client',
       webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, allowRunningInsecureContent: false } }, { server: openSetup, updates: () => notifyUpdate(true), menu: win => Menu.getApplicationMenu()?.popup({window:win}) });
     const win = clientWindow;
+    /* Google's account chooser in the browser, answered on 127.0.0.1:47615
+       (googleLoopback.mjs). If the port is taken, the server's page instead. */
+    const googleDirect = async ({ id, clientId }) => {
+      try {
+        await startGoogleLoopback({
+          id, finishUrl: current.origin + '/api/auth/native/finish',
+          fetcher: (url, options) => ses.fetch(url, options),
+          onDone: () => { if (!win.isDestroyed()) { if (win.isMinimized()) win.restore(); win.show(); app.focus({ steal: true }); win.focus(); } },
+        });
+        await shell.openExternal(googleAuthorizeUrl({ id, clientId }));
+      } catch {
+        await shell.openExternal(server + '/api/auth/native/page#' + id);
+      }
+    };
     const guard = (event, url) => {
       if (sameOrigin(url, current.origin)) {
         const u = new URL(url);
         if (u.pathname === '/__native/auth') {
           event.preventDefault();
-          if (/^#[a-f0-9]{64}$/.test(u.hash))
+          const google = parseGoogleHandoff(u.hash);
+          if (google) void googleDirect(google).catch(() => {});
+          else if (/^#[a-f0-9]{64}$/.test(u.hash))
             void shell.openExternal(server + '/api/auth/native/page' + u.hash).catch(() => {});
           else if (/^#kakao:[a-f0-9]{64}$/.test(u.hash))
             void shell.openExternal(server + '/api/auth/native/kakao?id=' + u.hash.slice(7)).catch(() => {});

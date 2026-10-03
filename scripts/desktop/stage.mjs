@@ -22,7 +22,8 @@ const stage = path.resolve(args.find(a => !a.startsWith('--')) || path.join(ROOT
 const app = path.join(stage, 'app');
 
 // server/ imports ../src and ../integrations at runtime, so both ship.
-const ITEMS = ['dist', 'server', 'src', 'integrations', 'assets', 'workflows', 'public',
+// docs/ ships for SOCIAL_LOGIN.ko.md, which the first run points to.
+const ITEMS = ['dist', 'server', 'src', 'integrations', 'assets', 'workflows', 'public', 'docs',
   'package.json', '.env.example', 'LICENSE', 'README.md'];
 const REQUIRED = ['dist/index.html', 'server/index.js', 'src', 'package.json'];
 

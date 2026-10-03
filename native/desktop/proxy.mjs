@@ -47,7 +47,8 @@ export async function startProxy(value, port = 0) {
     if (!authorized(req)) { res.writeHead(403); res.end('Forbidden'); return; }
     if (req.url === '/__native/info' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
-      res.end(JSON.stringify({ nativeGoogle: true, nativeKakao: true })); return;
+      // googleLoopback: this app can take Google's answer on 127.0.0.1:47615 (googleLoopback.mjs).
+      res.end(JSON.stringify({ nativeGoogle: true, nativeKakao: true, googleLoopback: 47615 })); return;
     }
     const transport = target.protocol === 'https:' ? https : http;
     const upstream = transport.request(target, {

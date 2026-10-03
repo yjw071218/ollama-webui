@@ -11,6 +11,57 @@ export function googleNativeRedirect(env = {}) {
     throw new Error('GOOGLE_NATIVE_REDIRECT_URI must be HTTPS and end with /api/auth/native/google/callback (HTTP is allowed only on localhost).');
   return url.href;
 }
+/* ------------------------------------------------ app loopback sign-in
+
+   Google accepts plain-HTTP redirect URIs only on loopback. The native apps
+   listen on this one fixed port for the few minutes a sign-in takes, so a
+   single URI registered once in the Google console ("승인된 리디렉션 URI")
+   serves every server address -- including HTTP ones like *.nip.io, for which
+   no redirect can be registered at all. The browser then goes straight to
+   Google's account chooser instead of an intermediate page. */
+export const GOOGLE_LOOPBACK_PORT = 47615;
+export const GOOGLE_LOOPBACK_REDIRECT = `http://127.0.0.1:${GOOGLE_LOOPBACK_PORT}/api/auth/native/google/callback`;
+
+export function googleAuthorizeUrl({ clientId, redirectUri, nonce, state }) {
+  const target = new URL('https://accounts.google.com/o/oauth2/v2/auth');
+  target.search = new URLSearchParams({ client_id: clientId, redirect_uri: redirectUri,
+    response_type: 'id_token', response_mode: 'fragment', scope: 'openid email profile',
+    nonce, state, prompt: 'select_account' });
+  return target.href;
+}
+
+/** True when Google's answer to an authorize request is not its error page. */
+export function googleAcceptsRedirect(status, location) {
+  if (status < 300 || status >= 400 || !location) return false;
+  try {
+    const next = new URL(location, 'https://accounts.google.com');
+    return !next.searchParams.has('authError') && !/\/oauth\/error|\/error$/.test(next.pathname);
+  } catch { return false; }
+}
+
+/**
+ * Ask Google whether `redirectUri` is registered for `clientId`. Google answers
+ * an unregistered one with a redirect to its error page (redirect_uri_mismatch)
+ * before any account is involved, so this needs no user and no secret. A yes is
+ * kept for hours; a no for a minute, so registering it takes effect quickly.
+ */
+export function createRedirectProbe({ fetcher = fetch, now = Date.now, yesFor = 6 * 3600e3, noFor = 60e3 } = {}) {
+  const cache = new Map();
+  return async (clientId, redirectUri) => {
+    const key = clientId + ' ' + redirectUri;
+    const hit = cache.get(key);
+    if (hit && hit.until > now()) return hit.ok;
+    let ok = false;
+    try {
+      const response = await fetcher(googleAuthorizeUrl({ clientId, redirectUri, nonce: 'probe', state: 'probe' }),
+        { redirect: 'manual', signal: AbortSignal.timeout(6000) });
+      ok = googleAcceptsRedirect(response.status, response.headers.get('location'));
+    } catch { ok = false; }
+    cache.set(key, { ok, until: now() + (ok ? yesFor : noFor) });
+    return ok;
+  };
+}
+
 const json = value => JSON.stringify(value).replace(/</g, '\\u003c');
 export function nativeGoogleDirectPage(clientId, redirectUri) {
   return `<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width">

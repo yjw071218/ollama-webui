@@ -22,6 +22,7 @@ import readline from 'node:readline/promises';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readEnvValue, writeEnvValue } from './envFile.js';
+import { socialLoginSetup } from './socialSetup.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ENV_FILE = path.join(ROOT, '.env');
@@ -63,7 +64,7 @@ line();
 /* ------------------------------------------------------------ 1. token */
 
 console.log('');
-console.log('[1/3] 접속 토큰');
+console.log('[1/4] 접속 토큰');
 console.log('  다른 기기(휴대폰, 외부망)에서 접속할 때 입력하는 비밀번호입니다.');
 console.log('  비워 두면 자동으로 만들어 드립니다.');
 let token = '';
@@ -77,6 +78,22 @@ for (;;) {
 ensureNetwork(token);
 console.log('  저장했습니다. 나중에 바꾸려면 .env의 ACCESS_TOKEN을 고치거나');
 console.log('  이 설정을 다시 실행하세요 (node server/first-run.mjs --reconfigure).');
+
+/* ---------------------------------------------------- 2. social sign-in */
+
+// Google and Kakao answer only addresses registered in their consoles. The
+// step-by-step guide with this server's exact values is server/socialSetup.mjs;
+// it is also saved next to .env as SOCIAL_LOGIN_SETUP.ko.txt.
+console.log('');
+line();
+console.log(' [2/4] 소셜 로그인 (Google · 카카오)');
+const openUrl = (url) => (WIN
+  ? spawnSync('cmd.exe', ['/d', '/c', 'start', '', url], { stdio: 'ignore' })
+  : spawnSync(process.platform === 'darwin' ? 'open' : 'xdg-open', [url], { stdio: 'ignore' }));
+const socialNote = await socialLoginSetup({
+  env: () => env, save, readEnvValue, ask, yes, openUrl,
+  writeGuide: (text) => { const file = path.join(ROOT, 'SOCIAL_LOGIN_SETUP.ko.txt'); fs.writeFileSync(file, text); return file; },
+});
 
 /* --------------------------------------------------------------- 2. CLIs */
 
@@ -155,11 +172,12 @@ const launch = (file, args) => (WIN && /\.cmd$/i.test(file)
   : run(file, args));
 
 console.log('');
-console.log('[2/3] AI 코딩 CLI (Claude Code · Codex · Antigravity)');
+console.log('[3/4] AI 코딩 CLI (Claude Code · Codex · Antigravity)');
 console.log('  각 서비스의 유료 구독이 있어야 쓸 수 있습니다. 구독이 있는 것만');
 console.log('  설치하고 로그인합니다. 없으면 n 을 눌러 건너뛰세요.');
 
 const summary = [];
+summary.push(socialNote);
 for (const cli of CLIS) {
   console.log('');
   line();
@@ -197,7 +215,7 @@ for (const cli of CLIS) {
 // recommended ones on a single "yes" -- the web guide offers the same.
 console.log('');
 line();
-console.log(' [3/3] Ollama 점검');
+console.log(' [4/4] Ollama 점검');
 const OLLAMA = ([readEnvValue(env, 'OLLAMA_URL'), readEnvValue(env, 'OLLAMA_HOST')].find(v => /^https?:\/\//.test(v || '')) || 'http://127.0.0.1:11434').replace(/\/$/, '');
 let tags = null;
 try { tags = (await (await fetch(`${OLLAMA}/api/tags`, { signal: AbortSignal.timeout(4000) })).json()).models || []; } catch { /* down */ }

@@ -106,11 +106,13 @@ export const renderGoogleButton = async (container, { onCredential, onError, loc
   if (!container) return { error: 'auth.googleFailed' };
 
   // A native gateway answers this locally; normal servers do not.
-  let native = false;
+  let native = false, loopback = false;
   try {
     const response = await fetch('/__native/info', { cache: 'no-store' });
-    native = response.ok && response.headers.get('content-type')?.includes('application/json')
-      && (await response.json()).nativeGoogle === true;
+    const info = response.ok && response.headers.get('content-type')?.includes('application/json')
+      ? await response.json() : {};
+    native = info.nativeGoogle === true;
+    loopback = native && info.googleLoopback === 47615;
   } catch {}
   if (native) {
     container.replaceChildren();
@@ -135,7 +137,18 @@ export const renderGoogleButton = async (container, { onCredential, onError, loc
       try {
         const { id, secret } = await post('start', {});
         if (currentAttempt !== attempt || !button.isConnected) return;
-        window.location.assign('/__native/auth#' + id);
+        /* Straight to Google's account chooser when the app can take the answer
+           on loopback and the server has seen that redirect URI registered with
+           Google; otherwise the server's page with the Google button. */
+        let direct = false;
+        if (loopback) {
+          try {
+            const ready = await fetch('/api/auth/native/google/ready', { cache: 'no-store', signal: AbortSignal.timeout(8000) });
+            direct = ready.ok && (await ready.json()).direct === true;
+          } catch {}
+          if (currentAttempt !== attempt || !button.isConnected) return;
+        }
+        window.location.assign('/__native/auth#' + (direct ? 'google:' + id + ':' + googleClientId : id));
         button.disabled = false; // Closing the browser must not lock out another attempt.
         const deadline = Date.now() + 300000;
         while (Date.now() < deadline && button.isConnected) {
@@ -225,23 +238,32 @@ export const signInWithKakao = async ({ onOpened } = {}) => {
       const post = (action, body) => api('/api/auth/native/kakao/' + action, {
         method: 'POST', body, signal: AbortSignal.timeout(15000),
       });
-      const { id, secret } = await post('start', {});
-      if (attempt !== kakaoAttempt) return { superseded: true };
-      window.location.assign('/__native/auth#kakao:' + id);
-      onOpened?.(); // A closed browser must not lock the button for five minutes.
-      const deadline = Date.now() + 300000;
-      while (Date.now() < deadline && attempt === kakaoAttempt) {
-        await new Promise(resolve => setTimeout(resolve, 1500));
-        if (attempt !== kakaoAttempt) return { superseded: true };
-        const result = await post('poll', { id, secret });
-        if (attempt !== kakaoAttempt) return { superseded: true };
-        if (result.sessionId) {
-          window.location.assign('/?kakao=ok&sid=' + encodeURIComponent(result.sessionId));
-          return { redirecting: true };
-        }
+      let started = null;
+      try { started = await post('start', {}); }
+      catch (e) {
+        // A server older than the app has no handoff route (404): sign in
+        // inside the app instead, the way those servers always have.
+        if (e.status !== 404) throw e;
       }
       if (attempt !== kakaoAttempt) return { superseded: true };
-      throw new Error('로그인 시간이 만료되었습니다. 다시 시도하세요.');
+      if (started) {
+        const { id, secret } = started;
+        window.location.assign('/__native/auth#kakao:' + id);
+        onOpened?.(); // A closed browser must not lock the button for five minutes.
+        const deadline = Date.now() + 300000;
+        while (Date.now() < deadline && attempt === kakaoAttempt) {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          if (attempt !== kakaoAttempt) return { superseded: true };
+          const result = await post('poll', { id, secret });
+          if (attempt !== kakaoAttempt) return { superseded: true };
+          if (result.sessionId) {
+            window.location.assign('/?kakao=ok&sid=' + encodeURIComponent(result.sessionId));
+            return { redirecting: true };
+          }
+        }
+        if (attempt !== kakaoAttempt) return { superseded: true };
+        throw new Error('로그인 시간이 만료되었습니다. 다시 시도하세요.');
+      }
     }
   } catch (e) {
     if (attempt !== kakaoAttempt) return { superseded: true };

@@ -40,7 +40,9 @@ HTTP 네트워크 구간은 암호화되지 않습니다. 비밀번호·대화·
 카카오 콜백은 `KAKAO_REDIRECT_URI` 또는 `PUBLIC_ORIGIN`을 사용하고, 로그인 시작 시 정한 주소를 교환 시에도 그대로 사용합니다.
 로그인을 시작한 브라우저의 state 쿠키가 필요합니다. 다른 origin으로 시작/완료하거나 외부 브라우저로 바꾸면 쿠키는 공유되지 않습니다.
 Google과 카카오는 시스템 브라우저에서 인증하고 일회성 polling secret으로 앱 세션을 연결합니다. 자동 앱 복귀는 보장하지 않습니다.
-Google 직접 계정 선택은 HTTPS 콜백 등록과 `GOOGLE_NATIVE_REDIRECT_URI` 설정이 필요하며 미설정 시 기존 중간 버튼이 유지됩니다. 현재 운영 설정은 `redirect_uri_mismatch` 상태이며 실계정 로그인 성공은 미검증입니다. 자세한 설정은 `docs/NATIVE-SOCIAL-LOGIN.md`를 확인하세요.
+Google 계정 선택 창 바로 열기(1.0.8): 앱은 로그인하는 동안만 `127.0.0.1:47615`에서 Google의 응답을 받고(`desktop/googleLoopback.mjs`, `GoogleLoopback.java`), ID 토큰을 앱 게이트웨이를 거쳐 서버 `/api/auth/native/finish`로 넘깁니다. 서버가 audience와 nonce(=일회성 로그인 ID)를 검증합니다.
+켜려면 Google 콘솔 웹 클라이언트의 승인된 리디렉션 URI에 `http://127.0.0.1:47615/api/auth/native/google/callback` 하나만 등록하면 됩니다. 서버(v1.0.3+)가 `/api/auth/native/google/ready`에서 Google에 등록 여부를 확인하며(거절은 1분, 허용은 6시간 캐시), 등록 전·포트 사용 중·옛 서버에서는 기존 중간 페이지를 엽니다. 단계별 설정: `docs/SOCIAL_LOGIN.ko.md`.
+카카오는 서버가 앱 전용 경로를 모르면(HTTP 404, 서버 v1.0.2 이하) 앱 안 카카오 로그인으로 자동 전환합니다.
 Google WebView 로그인을 지원하는 것처럼 표시하거나 인증서/브라우저 정책을 우회하지 않습니다.
 실제 공급자 로그인, 모바일 실기기 및 기존 앱에서 업데이트 설치 검증은 별도 확인이 필요합니다.
 

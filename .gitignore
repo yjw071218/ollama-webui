@@ -27,6 +27,9 @@ dist-ssr
 .env
 .env.local
 
+# The first run's sign-in guide carries this server's own address (server/socialSetup.mjs).
+SOCIAL_LOGIN_SETUP.ko.txt
+
 # Local machine configuration: GPT-SoVITS paths, provider keys.
 # Everything machine-specific belongs here, never in tracked source.
 .env

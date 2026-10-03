@@ -4532,17 +4532,27 @@ ${data.text}` : data.text));
 
   useEffect(() => { setSetting('viewportPreset', viewportPreset); }, [viewportPreset]);
 
-  // Keep the panels usable when the window shrinks.
+  /* How wide the code panel may get. The chat in the middle keeps at least
+     MIN_CHAT_WIDTH next to the open sidebar (it only overlays below 1024px),
+     and the panel never takes more than 60% of the window: dragged wider, the
+     conversation was squeezed into a column its toolbar and composer broke in. */
+  const MIN_CHAT_WIDTH = 480;
+  const artifactMaxWidth = useCallback(() => {
+    const vw = window.innerWidth;
+    const sidebar = isSidebarOpen && vw > 1024 ? sidebarWidth : 0;
+    return Math.max(320, Math.min(Math.round(vw * 0.6), vw - sidebar - MIN_CHAT_WIDTH));
+  }, [isSidebarOpen, sidebarWidth]);
+
+  // Keep the panels usable when the window shrinks or the sidebar opens.
   useEffect(() => {
     const onResize = () => {
-      const maxArtifact = Math.max(320, window.innerWidth - 420);
-      setArtifactWidth(w => clamp(w, 320, maxArtifact));
+      setArtifactWidth(w => clamp(w, 320, artifactMaxWidth()));
       setSidebarWidth(w => clamp(w, 200, Math.max(200, Math.min(480, window.innerWidth - 360))));
     };
     onResize();
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [setArtifactWidth, setSidebarWidth]);
+  }, [setArtifactWidth, setSidebarWidth, artifactMaxWidth]);
 
   const [artifactEdits, setArtifactEdits] = useState({});
   const [consoleEntries, setConsoleEntries] = useState([]);
@@ -18626,8 +18636,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 setSize={setArtifactWidth}
                 cssVar="--artifact-width"
                 min={320}
-                max={() => Math.max(320, window.innerWidth - 420)}
-                onReset={() => setArtifactWidth(DEFAULT_ARTIFACT_WIDTH)}
+                max={artifactMaxWidth}
+                onReset={() => setArtifactWidth(clamp(DEFAULT_ARTIFACT_WIDTH, 320, artifactMaxWidth()))}
               />
             )}
             <div className="artifact-panel-header">

@@ -33,7 +33,7 @@ import {
 } from './webauthn.js';
 import { verifyGoogleIdToken } from './social.js';
 import { createGoogleHandoffs, nativeGooglePage } from './nativeGoogle.js';
-import { googleNativeRedirect, nativeGoogleDirectPage, nativeGoogleCallbackPage } from './nativeGoogleDirect.js';
+import { googleNativeRedirect, nativeGoogleDirectPage, nativeGoogleCallbackPage, createRedirectProbe, GOOGLE_LOOPBACK_REDIRECT } from './nativeGoogleDirect.js';
 import {
   issueState, consumeState, authorizeUrl, exchangeCode, fetchProfile,
   validAccessToken, readTokens, writeTokens, clearTokens,
@@ -1173,6 +1173,17 @@ export const createApiRoutes = (env = {}, options = {}) => {
         res.writeHead(302, { Location: authorizeUrl({ restKey, redirectUri, state }) });
         res.end();
       } catch (error) { sendError(res, error, 400); }
+    });
+    /* Whether the apps may open Google's account chooser directly, through
+       their loopback listener (nativeGoogleDirect.js). No means the page below. */
+    const googleRedirectProbe = createRedirectProbe();
+    route('/api/auth/native/google/ready', async (req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      if (req.method !== 'GET') return sendJson(res, { error: 'GET required.' }, 405);
+      const clientId = env.VITE_GOOGLE_CLIENT_ID || env.GOOGLE_CLIENT_ID || '';
+      if (!clientId) return sendJson(res, { direct: false, reason: 'not-configured' });
+      const direct = await googleRedirectProbe(clientId, GOOGLE_LOOPBACK_REDIRECT);
+      sendJson(res, { direct, redirectUri: GOOGLE_LOOPBACK_REDIRECT, ...(direct ? {} : { reason: 'redirect-not-registered' }) });
     });
     route('/api/auth/native/page', (req, res) => {
       if (req.method !== 'GET') return sendJson(res, { error: 'GET required.' }, 405);

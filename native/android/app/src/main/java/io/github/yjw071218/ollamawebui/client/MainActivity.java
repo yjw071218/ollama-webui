@@ -82,6 +82,20 @@ public class MainActivity extends Activity {
         try { startActivityForResult(intent, AUTH); }
         catch (ActivityNotFoundException e) { message("로그인할 브라우저가 없습니다."); }
     }
+    /**
+     * Google's account chooser opened directly in the Custom Tab, answered on
+     * 127.0.0.1:47615 (GoogleLoopback). If that port is taken, the server's page.
+     */
+    private void googleDirect(String server, String id, String clientId) {
+        if (proxy == null) return;
+        String gateway = proxy.origin;
+        try {
+            GoogleLoopback.start(id, gateway, () -> runOnUiThread(this::nudgeAuth));
+            openAuthTab(Uri.parse(GoogleLoopback.authorizeUrl(id, clientId)));
+        } catch (Exception e) {
+            openAuthTab(Uri.parse(server + "/api/auth/native/page#" + id + "&app=android"));
+        }
+    }
     /** Tell the page to check for a finished sign-in now instead of at its next poll. */
     private void nudgeAuth() {
         if (web != null) web.evaluateJavascript("window.dispatchEvent(new Event('ollama-native-auth'))", null);
@@ -253,7 +267,9 @@ public class MainActivity extends Activity {
                 if (local(url)) {
                     if ("/__native/auth".equals(request.getUrl().getPath())) {
                         String id = request.getUrl().getFragment();
-                        if (request.isForMainFrame() && id != null) {
+                        String[] google = GoogleLoopback.parse(id);
+                        if (request.isForMainFrame() && google != null) googleDirect(server, google[0], google[1]);
+                        else if (request.isForMainFrame() && id != null) {
                             if (id.matches("[a-f0-9]{64}")) openAuthTab(Uri.parse(server + "/api/auth/native/page#" + id + "&app=android"));
                             else if (id.matches("kakao:[a-f0-9]{64}")) openAuthTab(Uri.parse(server + "/api/auth/native/kakao?app=android&id=" + id.substring(6)));
                         }
