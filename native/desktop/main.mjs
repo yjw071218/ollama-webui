@@ -4,7 +4,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { normalizeServer, startProxy } from './proxy.mjs';
-import { checkUpdate } from './updates.mjs';
+import { createUpdater } from './updater.mjs';
 import { loadTrustedPage, kakaoAuthURL } from './navigation.mjs';
 import { createClientWindow, chromeOptions } from './chrome.mjs';
 import { appDialog } from './dialog.mjs';
@@ -22,19 +22,15 @@ async function external(url, owner) {
   const result = await appDialog(owner, { type: 'question', title: '외부 링크', message: '기본 브라우저에서 이 링크를 여시겠습니까?', detail: url, buttons: ['취소', '열기'], defaultId: 0, cancelId: 0 });
   if (result.response === 1) await shell.openExternal(url);
 }
-async function notifyUpdate(manual = false) {
+let updater = null;
+/** In-app update: check, download with progress, verify and install (updater.mjs). */
+function notifyUpdate(manual = false) {
   if (process.argv.includes('--native-smoke')) return;
-  try {
-    const update = await checkUpdate(app.getVersion());
-    const owner = clientWindow && !clientWindow.isDestroyed() ? clientWindow : setupWindow;
-    if (!owner || owner.isDestroyed()) return;
-    if (!update) { if (manual) await appDialog(owner, { message: '새 버전이 없습니다.' }); return; }
-    const result = await appDialog(owner, { type: 'info', title: '업데이트 안내',
-      message: '새 버전 ' + update.version + '을 사용할 수 있습니다.',
-      detail: 'GitHub 릴리스에서 설치 파일과 변경 사항을 확인하세요. 자동 설치하지 않습니다.',
-      buttons: ['나중에', '릴리스 열기'], defaultId: 0, cancelId: 0 });
-    if (result.response === 1) await shell.openExternal(update.url);
-  } catch { if (manual) showError('업데이트 확인 실패', '네트워크 연결 또는 GitHub 요청 제한을 확인하고 다시 시도하세요.'); }
+  updater ??= createUpdater({
+    ownerWindow: () => (clientWindow && !clientWindow.isDestroyed() ? clientWindow : setupWindow),
+    beforeInstall: async () => { await gateway?.close(); },
+  });
+  return updater.check({ manual });
 }
 function openSetup() {
   if (setupWindow && !setupWindow.isDestroyed()) { setupWindow.focus(); return; }

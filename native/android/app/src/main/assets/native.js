@@ -26,6 +26,7 @@
   Object.defineProperty(window, 'ollamaNative', { value: Object.freeze({
     platform: 'android',
     changeServer: () => call('changeServer'),
+    checkUpdates: () => call('checkUpdates'),
     captureScreen: async () => {
       const value = await call('capture');
       if (!value) return null;

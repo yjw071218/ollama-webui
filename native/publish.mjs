@@ -43,7 +43,12 @@ if (process.argv.includes('--check')) {
   }
   const checksums = path.join(root, 'native/artifacts/SHA256SUMS.txt');
   await writeFile(checksums, hashes.join('\n') + '\n'); files.push(checksums);
+  // The in-app update window shows the "## 이번 버전" section (desktop/updates.mjs releaseNotes).
+  const notesFile = (await readFile(path.join(root, 'native/RELEASE_NOTES.md'), 'utf8')).replace(/\r\n/g, '\n').trim();
+  const [heading, ...noteLines] = notesFile.split('\n');
+  if (heading.trim() !== '# ' + version) throw new Error('native/RELEASE_NOTES.md 첫 줄이 "# ' + version + '"이 아닙니다.');
   const body = [
+    '## 이번 버전 (' + version + ')', ...noteLines.filter(l => l.trim()), '',
     '## 서버 연결형 Android / Windows 앱',
     '- 처음 실행할 때 서버 주소를 입력하세요. 이후에는 저장된 서버에 자동 연결됩니다. 주소 입력은 서버 변경에서 가능합니다. http://0.0.0.0:5173/는 실제 연결용이 아닌 예시입니다.',
     '- Android 8+ APK / Windows x64 설치형 및 포터블 EXE',
@@ -58,7 +63,7 @@ if (process.argv.includes('--check')) {
     '- Google 버튼 디자인을 수정했습니다. 카카오는 외부 인증 화면으로 바로 연결하고 일회성 앱 세션 전달을 지원합니다(새 서버 코드 필요).',
     '- Google 직접 이동은 GOOGLE_NATIVE_REDIRECT_URI 및 공급자 콘솔의 HTTPS 콜백 등록 후에만 활성화됩니다. 현재 운영 설정의 redirect_uri_mismatch는 해결되지 않았으며 기존 중간 버튼 방식은 유지됩니다.',
     '- 실계정 로그인 성공은 미검증입니다. 공급자 모의 응답 테스트는 실제 로그인 성공을 의미하지 않습니다. 설정 동기화 누락 전체 해결도 미완료입니다. OAuth 키는 앱에 내장하지 않습니다.',
-    '- 앱 실행 시 새 버전이 GitHub에 올라오면 업데이트 안내가 표시됩니다.',
+    '- 앱 실행 시 새 버전이 있으면 업데이트 창이 열리고, 앱 안에서 내려받아(SHA-256 검증) 설치합니다. 1.0.6 이하에서는 1.0.7을 한 번 직접 설치해야 합니다.',
     '- 종료 후 Web Push, 서버 도메인 패스키는 지원하지 않습니다. 모든 브라우저 API의 지원을 보장하지 않습니다.',
     '- Windows 실행 파일은 상용 코드 서명 인증서가 없어 SmartScreen 경고가 나올 수 있습니다.',
     '- Android APK는 지속 보관하는 로컬 릴리스 키로 서명했습니다. Android 실제 기기의 카메라·마이크·화면 캡처는 추가 확인이 필요합니다.',

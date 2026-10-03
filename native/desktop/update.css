@@ -1,0 +1,33 @@
+*{box-sizing:border-box}
+[hidden]{display:none!important}
+html,body{height:100%}
+body{margin:0;background:#292620;color:#eee9e0;font:14px system-ui,"Segoe UI","Malgun Gothic",sans-serif}
+main{height:100vh;border:1px solid #514a40;display:flex;flex-direction:column}
+header{display:flex;gap:9px;align-items:center;padding:14px 18px 6px 22px;app-region:drag;color:#b9ad9b;font-size:12px}
+header img{width:22px;height:22px}
+button.icon{app-region:no-drag;cursor:pointer;margin-left:auto;background:transparent;border:0;color:#b9ad9b;padding:1px 8px;font-size:22px;border-radius:7px}
+button.icon:hover{background:#3b352d;color:#eee9e0}
+section{padding:6px 26px 0;overflow:auto;flex:1;display:flex;flex-direction:column;gap:16px}
+.hero{display:flex;gap:16px;align-items:center}
+.badge{flex:none;width:52px;height:52px;border-radius:16px;display:grid;place-items:center;font-size:26px;font-weight:700;background:#dac5a5;color:#28231d}
+.badge.ok{background:#3c5a3e;color:#cdeccc}.badge.err{background:#6b2f2a;color:#ffd9d4}.badge.busy{animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{50%{opacity:.55}}
+h1{font-size:20px;margin:0 0 4px}
+h2{font-size:12px;margin:0 0 8px;color:#b9ad9b;font-weight:600;letter-spacing:.02em}
+.muted{color:#b9ad9b;margin:0;font-size:13px}
+.notes{background:#211f1c;border:1px solid #3d3932;border-radius:12px;padding:14px 16px;max-height:220px;overflow:auto}
+.notes ul{margin:0;padding-left:18px;line-height:1.65}
+.notes li{margin:2px 0;overflow-wrap:anywhere}
+.notes li.plain{list-style:none;margin-left:-18px}
+.progress{display:grid;gap:8px}
+.bar{height:10px;border-radius:999px;background:#3b352d;overflow:hidden}
+#fill{height:100%;width:0;background:linear-gradient(90deg,#c9ad85,#efd9b6);border-radius:999px;transition:width .15s linear}
+.progress-text{display:flex;justify-content:space-between;gap:12px;font-size:13px}
+.error{margin:0;padding:10px 12px;border-radius:10px;background:#3d2522;color:#ffcfc8;line-height:1.6;overflow-wrap:anywhere;white-space:pre-wrap}
+footer{display:flex;flex-wrap:wrap;justify-content:flex-end;gap:8px;padding:18px 26px 22px}
+footer button{app-region:no-drag;background:#3b352d;border:1px solid #5b5143;border-radius:9px;color:inherit;padding:9px 17px;cursor:pointer;font:inherit}
+footer button.primary{background:#dac5a5;color:#28231d;border-color:#dac5a5;font-weight:600}
+footer button.ghost{background:transparent;border-color:transparent;color:#b9ad9b;margin-right:auto}
+footer button:hover{filter:brightness(1.12)}
+button:focus-visible{outline:2px solid #d7b888;outline-offset:3px}
+button:disabled{opacity:.5;cursor:default}

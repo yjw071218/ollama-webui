@@ -6807,6 +6807,11 @@ ${data.text}` : data.text));
       <button className="cmd-item" onClick={() => { setShowProfileMenu(false); nativeApp.changeServer().catch(() => {}); }}>
         <ServerIcon size={15} /><span className="cmd-label">{t('app.changeServer')}</span>
       </button>
+      {typeof nativeApp.checkUpdates === 'function' && (
+        <button className="cmd-item" onClick={() => { setShowProfileMenu(false); nativeApp.checkUpdates().catch(() => {}); }}>
+          <Download size={15} /><span className="cmd-label">{t('app.checkUpdates')}</span>
+        </button>
+      )}
     </>
   ) : null);
 

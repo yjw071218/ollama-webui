@@ -48,6 +48,7 @@ public class MainActivity extends Activity {
         String saved = prefs.getString("server", "");
         if (saved.isEmpty()) showSetup();
         else { showSplash(); connect(saved, null); }
+        clearOldUpdates();
         checkUpdates(false);
     }
     /** Shown for the moment it takes to open the saved server. */
@@ -92,22 +93,29 @@ public class MainActivity extends Activity {
         if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null
             && "ollamawebui".equals(intent.getData().getScheme())) nudgeAuth();
     }
+    private UpdateDialog updateDialog;
+    /** Check GitHub; on news, the in-app update screen (UpdateDialog) downloads and installs it. */
     private void checkUpdates(boolean manual) {
+        if (updateDialog != null && updateDialog.showing()) return;
         io.execute(() -> {
             try {
                 String current = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
-                String tag = ReleaseUpdates.check(current);
+                ReleaseUpdates.Update update = ReleaseUpdates.check(current);
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
-                    if (tag == null) { if (manual) message("새 버전이 없습니다."); return; }
-                    new AlertDialog.Builder(this).setTitle("업데이트 안내")
-                        .setMessage("새 버전 " + tag.substring(8) + "을 사용할 수 있습니다. GitHub 릴리스에서 설치 파일을 확인하세요. 자동 설치하지 않습니다.")
-                        .setNegativeButton("나중에", null).setPositiveButton("릴리스 열기", (d,w) -> {
-                            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/" + ReleaseUpdates.REPO + "/releases/tag/" + tag))); }
-                            catch (Exception e) { message("링크를 열 브라우저가 없습니다."); }
-                        }).show();
+                    if (update == null) { if (manual) message("최신 버전(" + current + ")을 사용 중입니다."); return; }
+                    if (!manual && update.version.equals(prefs.getString("skippedUpdate", ""))) return;
+                    updateDialog = new UpdateDialog(this, io, update, current);
+                    updateDialog.show();
                 });
             } catch (Exception e) { if (manual) runOnUiThread(() -> message("업데이트 확인에 실패했습니다. 네트워크 연결 또는 GitHub 요청 제한을 확인하세요.")); }
+        });
+    }
+    /** Installer files from an earlier update are not needed once this version runs. */
+    private void clearOldUpdates() {
+        io.execute(() -> {
+            File[] old = new File(getCacheDir(), "updates").listFiles();
+            if (old != null) for (File f : old) f.delete();
         });
     }
     private void showSetup() {
@@ -406,6 +414,8 @@ public class MainActivity extends Activity {
                     reply(reply, id, true, null); break;
                 case "changeServer":
                     confirmChangeServer(() -> reply(reply, requestId, false, null)); break;
+                case "checkUpdates":
+                    checkUpdates(true); reply(reply, id, true, null); break;
                 case "chrome": {
                     String value = request.optString("color");
                     if (!value.matches("#[0-9a-fA-F]{6}")) throw new IllegalArgumentException("잘못된 색상입니다.");
@@ -445,6 +455,7 @@ public class MainActivity extends Activity {
     @Override protected void onActivityResult(int code, int result, Intent intent) {
         super.onActivityResult(code, result, intent);
         if (code == AUTH) { nudgeAuth(); return; }
+        if (code == UpdateDialog.INSTALL_PERMISSION) { if (updateDialog != null) updateDialog.onPermissionResult(); return; }
         if (code == FILE && fileResult != null) {
             fileResult.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result, intent)); fileResult = null;
         }

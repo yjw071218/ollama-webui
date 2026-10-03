@@ -1356,6 +1356,7 @@ const en = {
   'sync.initialSkip': "Continue without waiting",
   'app.reload': "Reload",
   'app.changeServer': "Change server",
+  'app.checkUpdates': "Check for updates",
 
   // ---- Deep research ----
   'research.turnOn': 'Turn on deep research',
@@ -3048,6 +3049,7 @@ const ko = {
   'sync.initialSkip': "기다리지 않고 계속",
   'app.reload': "새로고침",
   'app.changeServer': "서버 변경",
+  'app.checkUpdates': "업데이트 확인",
 
   // ---- Deep research ----
   'research.turnOn': '심층 리서치 켜기',
@@ -4741,6 +4743,7 @@ const ja = {
   'sync.initialSkip': "待たずに続ける",
   'app.reload': "再読み込み",
   'app.changeServer': "サーバーを変更",
+  'app.checkUpdates': "アップデートを確認",
 
   // ---- Deep research ----
   'research.turnOn': 'ディープリサーチをオンにする',
@@ -6434,6 +6437,7 @@ const zhHans = {
   'sync.initialSkip': "不等待，继续",
   'app.reload': "刷新",
   'app.changeServer': "更换服务器",
+  'app.checkUpdates': "检查更新",
 
   // ---- Deep research ----
   'research.turnOn': '开启深度研究',
@@ -8127,6 +8131,7 @@ const zhHant = {
   'sync.initialSkip': "不等待，繼續",
   'app.reload': "重新整理",
   'app.changeServer': "變更伺服器",
+  'app.checkUpdates': "檢查更新",
 
   // ---- Deep research ----
   'research.turnOn': '開啟深度研究',
@@ -9820,6 +9825,7 @@ const es = {
   'sync.initialSkip': "Continuar sin esperar",
   'app.reload': "Recargar",
   'app.changeServer': "Cambiar servidor",
+  'app.checkUpdates': "Buscar actualizaciones",
 
   // ---- Deep research ----
   'research.turnOn': 'Activar la investigación profunda',
@@ -11513,6 +11519,7 @@ const fr = {
   'sync.initialSkip': "Continuer sans attendre",
   'app.reload': "Recharger",
   'app.changeServer': "Changer de serveur",
+  'app.checkUpdates': "Rechercher des mises à jour",
 
   // ---- Deep research ----
   'research.turnOn': 'Activer la recherche approfondie',
@@ -13206,6 +13213,7 @@ const de = {
   'sync.initialSkip': "Ohne Warten fortfahren",
   'app.reload': "Neu laden",
   'app.changeServer': "Server wechseln",
+  'app.checkUpdates': "Nach Updates suchen",
 
   // ---- Deep research ----
   'research.turnOn': 'Tiefenrecherche einschalten',
@@ -14899,6 +14907,7 @@ const pt = {
   'sync.initialSkip': "Continuar sem esperar",
   'app.reload': "Recarregar",
   'app.changeServer': "Trocar servidor",
+  'app.checkUpdates': "Verificar atualizações",
 
   // ---- Deep research ----
   'research.turnOn': 'Ativar a pesquisa profunda',
@@ -16592,6 +16601,7 @@ const ru = {
   'sync.initialSkip': "Продолжить без ожидания",
   'app.reload': "Перезагрузить",
   'app.changeServer': "Сменить сервер",
+  'app.checkUpdates': "Проверить обновления",
 
   // ---- Deep research ----
   'research.turnOn': 'Включить глубокое исследование',
@@ -18285,6 +18295,7 @@ const vi = {
   'sync.initialSkip': "Tiếp tục không chờ",
   'app.reload': "Tải lại",
   'app.changeServer': "Đổi máy chủ",
+  'app.checkUpdates': "Kiểm tra cập nhật",
 
   // ---- Deep research ----
   'research.turnOn': 'Bật nghiên cứu chuyên sâu',
@@ -19978,6 +19989,7 @@ const ar = {
   'sync.initialSkip': "المتابعة دون انتظار",
   'app.reload': "إعادة التحميل",
   'app.changeServer': "تغيير الخادم",
+  'app.checkUpdates': "التحقق من التحديثات",
 
   // ---- Deep research ----
   'research.turnOn': 'تفعيل البحث المعمّق',

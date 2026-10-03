@@ -1,0 +1,20 @@
+<!doctype html><html lang="ko"><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'">
+<title>업데이트</title><link rel="stylesheet" href="update.css">
+<main role="dialog" aria-modal="true" aria-labelledby="title">
+  <header><img src="icons/app.png" alt=""><span>Ollama WebUI 업데이트</span><button id="close" class="icon" aria-label="닫기">×</button></header>
+  <section>
+    <div class="hero">
+      <div class="badge" id="badge" aria-hidden="true">↑</div>
+      <div><h1 id="title">업데이트 확인 중…</h1><p id="subtitle" class="muted"></p></div>
+    </div>
+    <div id="notesBox" class="notes" hidden><h2>이번 버전 변경 사항</h2><ul id="notes"></ul></div>
+    <div id="progressBox" class="progress" hidden>
+      <div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="0" id="bar"><div id="fill"></div></div>
+      <div class="progress-text"><strong id="percent">0%</strong><span id="detail" class="muted"></span></div>
+    </div>
+    <p id="error" class="error" role="alert" hidden></p>
+  </section>
+  <footer id="buttons"></footer>
+</main>
+<script src="update-ui.mjs" type="module"></script></html>
