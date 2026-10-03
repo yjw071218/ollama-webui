@@ -50,3 +50,32 @@ Name: "{autodesktop}\Ollama WebUI"; Filename: "{app}\OllamaWebUI.cmd"; WorkingDi
 
 [Run]
 Filename: "{app}\OllamaWebUI.cmd"; Description: "{cm:LaunchProgram,Ollama WebUI}"; Flags: nowait postinstall skipifsilent shellexec
+
+[Code]
+(* A running copy holds the install's runtime\node.exe open, and the upgrade
+  stopped on Windows' "files in use" page naming "Node.js JavaScript Runtime".
+  Stop only the node.exe that lives in this install (never a Node the user
+  runs elsewhere) before files are checked, so the page does not appear. Its
+  data is on disk (SQLite), so stopping it loses nothing. *)
+procedure StopRunningCopy(const Dir: String);
+var
+  Code: Integer;
+  Ps: String;
+begin
+  Ps := 'Get-CimInstance Win32_Process -Filter ''Name=\"node.exe\"'' | ' +
+        'Where-Object { $_.ExecutablePath -and $_.ExecutablePath.StartsWith(''' + Dir + ''', ''OrdinalIgnoreCase'') } | ' +
+        'ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }; Start-Sleep -Milliseconds 800';
+  Exec('powershell.exe', '-NoProfile -ExecutionPolicy Bypass -Command "' + Ps + '"', '', SW_HIDE, ewWaitUntilTerminated, Code);
+end;
+
+function PrepareToInstall(var NeedsRestart: Boolean): String;
+begin
+  StopRunningCopy(ExpandConstant('{app}\runtime'));
+  Result := '';
+end;
+
+function InitializeUninstall(): Boolean;
+begin
+  StopRunningCopy(ExpandConstant('{app}\runtime'));
+  Result := True;
+end;
