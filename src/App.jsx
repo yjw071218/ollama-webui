@@ -179,6 +179,7 @@ import {
   setActiveScope, getActiveScope, getSetting, setSetting, clearScopeSettings,
 } from './settingsStore.js';
 import { deriveScope, ownerOfScope } from './profileScope.js';
+import { NewbieGuide, guideSeen } from './NewbieGuide.jsx';
 import { stamped, conversationTime } from './sessionEdit.js';
 import { fileMarker, indexedMarker, extractAttachments, stripAttachments } from './attachMarkers.js';
 import { forHistory, isToolResult, turnStart, wireText } from './wireHistory.js';
@@ -1354,6 +1355,9 @@ function App() {
 
   // Settings / Logs panel state
   const [showSettings, setShowSettings] = useState(false);
+  // The beginner guide (NewbieGuide.jsx): on its own on a first visit, and
+  // again from Settings -> General.
+  const [showGuide, setShowGuide] = useState(() => !guideSeen());
   const [downloadModelName, setDownloadModelName] = useState('');
   const [isDownloading, setIsDownloading] = useState(false);
   const [sessionSearchQuery, setSessionSearchQuery] = useState('');
@@ -13419,6 +13423,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       className={`claude-app ${activeArtifact && sidebarPlace === 'home' ? 'has-artifact' : ''} ${artifactMaximized && activeArtifact && sidebarPlace === 'home' ? 'artifact-maximized' : ''}`}
       style={{ '--artifact-width': `${artifactWidth}px`, '--sidebar-width': `${sidebarWidth}px` }}
     >
+      <NewbieGuide
+        open={showGuide}
+        onClose={() => setShowGuide(false)}
+        isEmbeddingModel={isEmbeddingModel}
+        onModelsChanged={fetchModels}
+      />
       {/* Tapping the conversation behind an open drawer closes it, which is
           what every drawer on a phone does. A button so it is reachable by
           keyboard and announced, rather than a bare div. */}
@@ -16435,6 +16445,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
               {settingsTab === 'general' && (
                 <>
+                  {/* The beginner guide again: its tour and the setup check. */}
+                  <div className="settings-group">
+                    <button type="button" className="guide-btn is-small" onClick={() => { setShowSettings(false); setShowGuide(true); }}>
+                      {lang?.startsWith?.('ko') ? '초보자 가이드 다시 보기' : 'Show the beginner guide'}
+                    </button>
+                  </div>
                   {/* ---- who is asking ----
                       The other half of the persona pair. Personas say who the
                       assistant is; nothing said who the person is, so every

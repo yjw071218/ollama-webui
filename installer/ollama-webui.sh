@@ -1,7 +1,7 @@
 #!/bin/sh
 # Launcher for Linux and macOS. Uses the Node runtime shipped next to it
 # (runtime/bin/node), or a system Node 22.5+ if that is missing.
-# Listens on this computer only; see README to reach it from a phone.
+# Serves on the network; the first run asks for the access token.
 set -u
 DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
 cd "$DIR/app" || { echo "Ollama WebUI: $DIR/app is missing."; exit 1; }
@@ -20,8 +20,14 @@ if [ "$(uname -s)" = "Darwin" ] && command -v xattr >/dev/null 2>&1; then
 fi
 
 [ -f .env ] || { [ -f .env.example ] && cp .env.example .env; }
-: "${HOST:=127.0.0.1}"
-export HOST
+# npm (shipped beside node) and freshly installed CLIs, for this shell.
+PATH="$(dirname "$NODE"):$HOME/.local/bin:$PATH"
+export PATH
+# First run: asks for the access token (the app serves on the network, as
+# the project's start script does) and sets up Claude Code / Codex / agy.
+# Later runs return at once.
+"$NODE" server/first-run.mjs || exit 1
+"$NODE" server/setup-env.mjs --network
 PORT=$("$NODE" server/setup-env.mjs --print-port 2>/dev/null || echo 5173)
 [ -n "$PORT" ] || PORT=5173
 URL="http://localhost:$PORT"

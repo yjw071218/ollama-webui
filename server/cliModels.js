@@ -201,6 +201,8 @@ export const resolveBinary = (provider, env = {}) => {
     path.join(HOME, '.local', 'bin'),
     path.join(HOME, 'AppData', 'Roaming', 'npm'),
     path.join(HOME, 'AppData', 'Local', 'agy', 'bin'),
+    // Where the official install.ps1 puts agy.exe (server/first-run.mjs uses it).
+    path.join(HOME, 'AppData', 'Local', 'Antigravity'),
   );
   const names = process.platform === 'win32'
     ? [`${provider.bin}.exe`, `${provider.bin}.cmd`]

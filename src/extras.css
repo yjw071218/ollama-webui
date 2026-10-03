@@ -9804,3 +9804,68 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 /* Shown for the moment a lazily loaded panel's code is arriving (lazyPanel.jsx).
    A fixed height keeps the dialog from jumping when the panel appears. */
 .lazy-panel-loading { min-height: 120px; }
+
+/* ==== Beginner guide (src/NewbieGuide.jsx) ==== */
+.guide-backdrop {
+  position: fixed; inset: 0; z-index: 10000;
+  display: grid; place-items: center; padding: 1rem;
+  background: rgba(0, 0, 0, 0.45);
+  backdrop-filter: blur(3px);
+  animation: fade-in var(--dur, 200ms) var(--ease-out, ease-out) both;
+}
+.guide-card {
+  position: relative; width: min(32rem, 100%); max-height: calc(100dvh - 2rem); overflow: auto;
+  padding: 1.6rem 1.5rem 1.1rem;
+  background: var(--surface-raised, var(--bg-main));
+  color: var(--text-primary, inherit);
+  border: 1px solid var(--border-color, rgba(127,127,127,0.25));
+  border-radius: 16px;
+  box-shadow: 0 20px 60px rgba(0, 0, 0, 0.35);
+  animation: pop-in var(--dur, 220ms) var(--ease-spring, ease-out) both;
+}
+.guide-x {
+  position: absolute; top: 0.7rem; right: 0.7rem;
+  border: none; background: none; color: var(--text-muted); cursor: pointer;
+  padding: 0.3rem; border-radius: 8px;
+}
+.guide-x:hover { background: var(--hover-bg); }
+.guide-page { animation: rise-in-soft var(--dur, 220ms) var(--ease-out, ease-out) both; min-height: 11rem; }
+.guide-page h2 { margin: 0 2rem 0.7rem 0; font-size: 1.25rem; }
+.guide-page p { margin: 0 0 0.8rem; line-height: 1.6; color: var(--text-secondary, inherit); }
+.guide-list { margin: 0; padding-left: 1.2rem; line-height: 1.7; }
+.guide-list li + li { margin-top: 0.35rem; }
+.guide-foot { margin-top: 1rem !important; font-size: 0.85rem; color: var(--text-muted) !important; }
+.guide-checks, .guide-sub { list-style: none; margin: 0 0 0.8rem; padding: 0; }
+.guide-sub { margin: 0.35rem 0 0 0.4rem; }
+.guide-row { display: flex; align-items: center; flex-wrap: wrap; gap: 0.45rem; padding: 0.3rem 0; font-size: 0.9rem; }
+.guide-row.is-block { display: block; }
+.guide-label { font-weight: 600; }
+.guide-detail { color: var(--text-muted); display: inline-flex; flex-wrap: wrap; align-items: center; gap: 0.4rem; }
+.guide-ok { color: var(--success, #22a06b); }
+.guide-warn { color: var(--warning, #d9822b); }
+.guide-error { color: var(--danger, #d14343); font-size: 0.8rem; }
+.guide-pulling { font-variant-numeric: tabular-nums; }
+.guide-hint { margin-top: 0.4rem; font-size: 0.8rem; color: var(--text-muted); line-height: 1.5; }
+.guide-hint code { display: block; margin-top: 0.3rem; padding: 0.35rem 0.5rem; border-radius: 6px; background: var(--hover-bg); user-select: all; }
+.guide-dots { display: flex; justify-content: center; gap: 0.4rem; margin: 1rem 0 0.8rem; }
+.guide-dot {
+  width: 0.5rem; height: 0.5rem; padding: 0; border: none; border-radius: 999px; cursor: pointer;
+  background: var(--text-muted); opacity: 0.35;
+  transition: width var(--dur, 200ms) var(--ease-out, ease-out), opacity var(--dur-fast, 120ms) var(--ease-out, ease-out);
+}
+.guide-dot.is-on { width: 1.4rem; opacity: 1; background: var(--accent, #d97757); }
+.guide-actions { display: flex; align-items: center; gap: 0.5rem; }
+.guide-btn {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  padding: 0.5rem 0.95rem; border-radius: 10px; cursor: pointer; font: inherit; font-size: 0.9rem;
+  border: 1px solid var(--border-color, rgba(127,127,127,0.3));
+  background: var(--bg-secondary, transparent); color: inherit;
+  transition: background-color var(--dur-fast, 120ms) var(--ease-out, ease-out), transform var(--dur-fast, 120ms) var(--ease-out, ease-out);
+}
+.guide-btn:hover { background: var(--hover-bg); }
+.guide-btn:active { transform: scale(var(--press-scale, 0.96)); }
+.guide-btn:disabled { opacity: 0.5; cursor: default; }
+.guide-btn.is-small { padding: 0.3rem 0.65rem; font-size: 0.82rem; }
+.guide-btn.is-ghost { border-color: transparent; background: none; color: var(--text-muted); }
+.guide-btn.is-primary { background: var(--accent, #d97757); border-color: transparent; color: #fff; }
+.guide-btn.is-primary:hover { filter: brightness(1.08); background: var(--accent, #d97757); }

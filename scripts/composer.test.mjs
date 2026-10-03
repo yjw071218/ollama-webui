@@ -249,6 +249,9 @@ const click = (selector) => evaluate(`(() => {
 await send('Page.enable');
 await send('Runtime.enable');
 await send('Emulation.setDeviceMetricsOverride', { width: 1280, height: 900, deviceScaleFactor: 1, mobile: false });
+// A fresh profile is a first visit, and the beginner guide (NewbieGuide.jsx)
+// would sit over everything these checks click. Mark it seen.
+await send('Page.addScriptToEvaluateOnNewDocument', { source: "try { localStorage.setItem('ollama-webui:guide-seen', '1'); } catch {}" });
 await send('Page.navigate', { url: `http://127.0.0.1:${HTTP_PORT}/` });
 await sleep(7000);
 

@@ -57,6 +57,10 @@ jobs:
           Invoke-WebRequest "https://nodejs.org/dist/v$env:NODE_RUNTIME/$zip" -OutFile $zip
           Expand-Archive $zip -DestinationPath node-tmp
           Copy-Item "node-tmp/node-v$env:NODE_RUNTIME-win-x64/node.exe" "$stage/runtime/"
+          # npm too: the first run installs Codex with it (server/first-run.mjs).
+          New-Item -ItemType Directory -Force "$stage/runtime/node_modules" | Out-Null
+          Copy-Item -Recurse "node-tmp/node-v$env:NODE_RUNTIME-win-x64/node_modules/npm" "$stage/runtime/node_modules/"
+          Copy-Item "node-tmp/node-v$env:NODE_RUNTIME-win-x64/npm.cmd", "node-tmp/node-v$env:NODE_RUNTIME-win-x64/npx.cmd" "$stage/runtime/"
           # Started with the node.exe that ships, the way the installed copy runs.
           $env:CHECK_NODE = (Resolve-Path "$stage/runtime/node.exe").Path
           node scripts/desktop/stage.mjs $stage --check
@@ -118,6 +122,9 @@ jobs:
           curl -fsSL "https://nodejs.org/dist/v$NODE_RUNTIME/$node_dir.tar.gz" | tar xz
           cp "$node_dir/bin/node" "$stage/runtime/bin/node"
           cp "$node_dir/LICENSE" "$stage/runtime/NODE-LICENSE"
+          # npm too: the first run installs Codex with it (server/first-run.mjs).
+          mkdir -p "$stage/runtime/lib/node_modules"
+          cp -R "$node_dir/lib/node_modules/npm" "$stage/runtime/lib/node_modules/"
           cp installer/ollama-webui.sh "$stage/"
           chmod +x "$stage/runtime/bin/node" "$stage/ollama-webui.sh"
           if [[ "${{ matrix.target }}" == darwin-* ]]; then

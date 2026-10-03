@@ -6,6 +6,8 @@ Everything runs on your machine: chats live in IndexedDB (via `localforage`), se
 rather have the flags. Pictures and video come from a local ComfyUI. Nothing leaves the
 building unless you configure something that does.
 
+> **처음이신가요?** [초보자 가이드](docs/GUIDE.ko.md)부터 보세요. 설치한 앱은 첫 실행에서 접속 토큰, 코딩 CLI, Ollama 모델을 차례로 안내하고, 브라우저에서는 건너뛸 수 있는 가이드가 자동 점검과 함께 열려요.
+
 ## Running it
 
 For RisuAI character roleplay, open **상황극**. Install its pinned runtime with
