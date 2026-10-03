@@ -32,6 +32,7 @@ import {
   SUPPORTED_ALGORITHMS,
 } from './webauthn.js';
 import { verifyGoogleIdToken } from './social.js';
+import { createGoogleHandoffs, nativeGooglePage } from './nativeGoogle.js';
 import {
   issueState, consumeState, authorizeUrl, exchangeCode, fetchProfile,
   validAccessToken, readTokens, writeTokens, clearTokens,
@@ -47,6 +48,7 @@ import {
 } from './shares.js';
 import { addListener, publishRev, dropListeners } from './liveSync.js';
 import { normaliseOrigin } from './origin.js';
+import { kakaoCallbackUri, oauthStateCookie, matchingStateCookie } from './oauthOrigin.js';
 import {
   fetchWithTimeout, fetchPageResponse, blockReason,
   htmlToText, decodeEntities, mainContent, readAsText, textOf,
@@ -1126,6 +1128,36 @@ export const createApiRoutes = (env = {}, options = {}) => {
     /* Signing in with Google is already proof of who you are, so it is also the
        server account. Otherwise there are two notions of "your account" and
        only the obscure one makes a history follow you anywhere. */
+    const googleHandoffs = createGoogleHandoffs();
+    route('/api/auth/native/page', (req, res) => {
+      if (req.method !== 'GET') return sendJson(res, { error: 'GET required.' }, 405);
+      const clientId = env.VITE_GOOGLE_CLIENT_ID || env.GOOGLE_CLIENT_ID || '';
+      if (!clientId) return sendJson(res, { error: 'Google login is not configured.' }, 501);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      // GIS needs the origin as referrer; never expose paths or the handoff fragment.
+      res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+      res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.end(nativeGooglePage(clientId));
+    });
+    for (const action of ['start', 'finish', 'poll']) route('/api/auth/native/' + action, async (req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      if (req.method !== 'POST') return sendJson(res, { error: 'POST required.' }, 405);
+      if (!String(req.headers['content-type'] || '').startsWith('application/json'))
+        return sendJson(res, { error: 'JSON required.' }, 415);
+      try {
+        const clientId = env.VITE_GOOGLE_CLIENT_ID || env.GOOGLE_CLIENT_ID || '';
+        if (!clientId) return sendJson(res, { error: 'Google login is not configured.' }, 501);
+        const body = await jsonBody(req);
+        if (action === 'start') return sendJson(res, googleHandoffs.start());
+        if (action === 'poll') return sendJson(res, googleHandoffs.poll(body.id, body.secret));
+        await googleHandoffs.finish(body.id, body.credential,
+          (credential, nonce) => verifyGoogleIdToken(credential, clientId, nonce));
+        sendJson(res, { success: true });
+      } catch (error) { sendError(res, error, 400); }
+    });
+
     route('/api/auth/google', async (req, res) => {
       if (req.method !== 'POST') return sendJson(res, { success: false, error: 'POST required.' }, 405);
       try {
@@ -1831,6 +1863,11 @@ export const createApiRoutes = (env = {}, options = {}) => {
         res.end();
       };
 
+      const state = url.searchParams.get('state') || '';
+      if (!matchingStateCookie(req, state)) return back({ kakao: 'error', detail: 'Sign-in browser could not be verified. Start again in the same browser.' });
+      const context = consumeState(state);
+      res.setHeader('Set-Cookie', oauthStateCookie('', isSecureRequest(req), true));
+      if (!context?.redirectUri) return back({ kakao: 'error', detail: 'That sign-in expired or was already used. Start it again.' });
       const error = url.searchParams.get('error');
       if (error) {
         // Cancelling at the consent screen is not a failure worth shouting about.
@@ -1841,24 +1878,14 @@ export const createApiRoutes = (env = {}, options = {}) => {
       }
 
       const code = url.searchParams.get('code') || '';
-      const state = url.searchParams.get('state') || '';
       if (!code) return back({ kakao: 'cancelled' });
-
-      // Verified here, where it was issued. A state that was never issued, has
-      // expired, or has already been spent means this callback is not one we
-      // started.
-      if (!consumeState(state)) {
-        return back({ kakao: 'error', detail: 'That sign-in could not be verified. Start it again.' });
-      }
 
       const { restKey, clientSecret } = kakaoCreds();
       if (!restKey) return back({ kakao: 'error', detail: 'Kakao is not configured on this server.' });
 
-      // Must match the authorize request exactly, so it is rebuilt from the
-      // address this request actually arrived on.
-      const host = req.headers.host || `localhost:${env.PORT || 5173}`;
-      const scheme = req.socket?.encrypted ? 'https' : 'http';
-      const redirectUri = `${scheme}://${host}/kakao/callback`;
+      // Preserve the exact URI used at authorization, including external HTTPS
+      // when TLS terminates before this server. Never rebuild from callback Host.
+      const redirectUri = context.redirectUri;
 
       try {
         const tokens = await exchangeCode({ code, restKey, redirectUri, clientSecret });
@@ -1905,9 +1932,13 @@ export const createApiRoutes = (env = {}, options = {}) => {
         return sendJson(res, { success: false, error: 'Kakao is not configured on this server.' }, 501);
       }
       const url = new URL(req.url, 'http://localhost');
-      const redirectUri = url.searchParams.get('redirect_uri') || '';
+      let redirectUri;
+      try { redirectUri = kakaoCallbackUri(req, env); }
+      catch { return sendJson(res, { success: false, error: '서버 OAuth 콜백 주소 설정을 확인하세요.' }, 503); }
       const scope = url.searchParams.get('scope') || '';
-      const state = issueState();
+      const state = issueState({ redirectUri });
+      res.setHeader('Set-Cookie', oauthStateCookie(state, isSecureRequest(req)));
+      res.setHeader('Cache-Control', 'no-store');
       sendJson(res, {
         success: true,
         state,

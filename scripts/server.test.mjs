@@ -28,7 +28,7 @@ const eq = (name, got, want) => check(name, got === want, `got ${JSON.stringify(
 // owner out or lets the internet in.
 for (const [addr, want] of [
   ['127.0.0.1', true], ['::1', true], ['::', true],
-  ['192.168.45.95', true], ['192.168.0.1', true],
+  ['192.168.0.10', true], ['192.168.0.1', true],
   ['10.0.0.5', true], ['10.255.255.255', true],
   ['172.16.0.1', true], ['172.31.255.254', true],
   ['172.15.0.1', false], ['172.32.0.1', false],   // just outside 172.16/12
@@ -52,7 +52,7 @@ eq('a missing address normalises to empty', N.normaliseAddress(undefined), '');
 // address nothing outside the PC can route to.
 const interfaces = {
   '이더넷': [
-    { address: '192.168.45.95', family: 'IPv4', internal: false },
+    { address: '192.168.0.10', family: 'IPv4', internal: false },
     { address: 'fe80::1', family: 'IPv6', internal: false },
   ],
   'vEthernet (WSL (Hyper-V firewall))': [{ address: '172.28.32.1', family: 'IPv4', internal: false }],
@@ -61,16 +61,16 @@ const interfaces = {
 };
 
 const found = N.localAddressList(interfaces);
-check('the real adapter is listed', found.includes('192.168.45.95'));
+check('the real adapter is listed', found.includes('192.168.0.10'));
 check('loopback is not', !found.includes('127.0.0.1'));
 check('ipv6 is not', !found.some(a => a.includes(':')));
 check('an unconfigured link-local is not', !found.some(a => a.startsWith('169.254')));
 eq('no interfaces is not a crash', N.localAddressList(null).length, 0);
 
 const ranked = N.localAddresses(interfaces);
-eq('the physical adapter comes first', ranked[0].address, '192.168.45.95');
+eq('the physical adapter comes first', ranked[0].address, '192.168.0.10');
 check('the WSL adapter is flagged virtual', ranked.find(e => e.address === '172.28.32.1').virtual);
-check('the physical one is not', !ranked.find(e => e.address === '192.168.45.95').virtual);
+check('the physical one is not', !ranked.find(e => e.address === '192.168.0.10').virtual);
 
 // The routing table's answer wins outright, whatever the ranking guessed.
 const preferred = N.localAddresses(interfaces, '172.28.32.1');

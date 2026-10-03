@@ -4,6 +4,8 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { normalizeServer, startProxy } from './proxy.mjs';
+import { checkUpdate } from './updates.mjs';
+import { loadTrustedPage, kakaoAuthURL } from './navigation.mjs';
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const setupURL = pathToFileURL(path.join(directory, 'setup.html')).href;
@@ -17,9 +19,23 @@ async function external(url, owner) {
   const result = await dialog.showMessageBox(owner, { type: 'question', title: '외부 링크', message: '기본 브라우저에서 이 링크를 여시겠습니까?', detail: url, buttons: ['취소', '열기'], defaultId: 0, cancelId: 0 });
   if (result.response === 1) await shell.openExternal(url);
 }
+async function notifyUpdate(manual = false) {
+  if (process.argv.includes('--native-smoke')) return;
+  try {
+    const update = await checkUpdate(app.getVersion());
+    const owner = clientWindow && !clientWindow.isDestroyed() ? clientWindow : setupWindow;
+    if (!owner || owner.isDestroyed()) return;
+    if (!update) { if (manual) await dialog.showMessageBox(owner, { message: '새 버전이 없습니다.' }); return; }
+    const result = await dialog.showMessageBox(owner, { type: 'info', title: '업데이트 안내',
+      message: '새 버전 ' + update.version + '을 사용할 수 있습니다.',
+      detail: 'GitHub 릴리스에서 설치 파일과 변경 사항을 확인하세요. 자동 설치하지 않습니다.',
+      buttons: ['나중에', '릴리스 열기'], defaultId: 0, cancelId: 0 });
+    if (result.response === 1) await shell.openExternal(update.url);
+  } catch { if (manual) dialog.showErrorBox('업데이트 확인 실패', '네트워크 연결 또는 GitHub 요청 제한을 확인하고 다시 시도하세요.'); }
+}
 function openSetup() {
   if (setupWindow && !setupWindow.isDestroyed()) { setupWindow.focus(); return; }
-  setupWindow = new BrowserWindow({ show: !process.argv.includes('--native-smoke'), width: 700, height: 650, title: '서버 연결',
+  setupWindow = new BrowserWindow({ icon: path.join(directory, 'icons/app.png'), show: !process.argv.includes('--native-smoke'), width: 700, height: 650, title: '서버 연결',
     webPreferences: { preload: path.join(directory, 'setup-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   setupWindow.setMenu(null);
   setupWindow.webContents.on('will-navigate', event => event.preventDefault());
@@ -76,21 +92,31 @@ async function connect(value) {
     });
     ses.removeAllListeners('will-download');
     ses.on('will-download', (_event, item) => item.setSaveDialogOptions({ title: '파일 저장' }));
-    clientWindow = new BrowserWindow({ show: !process.argv.includes('--native-smoke'), width: 1360, height: 900, minWidth: 420, minHeight: 500, title: 'Ollama WebUI Client',
+    clientWindow = new BrowserWindow({ icon: path.join(directory, 'icons/app.png'), show: !process.argv.includes('--native-smoke'), width: 1360, height: 900, minWidth: 420, minHeight: 500, title: 'Ollama WebUI Client',
       webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, allowRunningInsecureContent: false } });
     const win = clientWindow;
     const guard = (event, url) => {
-      if (sameOrigin(url, current.origin)) return;
+      if (sameOrigin(url, current.origin)) {
+        const u = new URL(url);
+        if (u.pathname === '/__native/auth') {
+          event.preventDefault();
+          if (/^#[a-f0-9]{64}$/.test(u.hash))
+            void external(server + '/api/auth/native/page' + u.hash, win).catch(() => {});
+        }
+        return;
+      }
+      // Kakao login finishes in this window so the state cookie on the app origin matches.
+      if (kakaoAuthURL(url)) return;
       event.preventDefault();
       if (sameOrigin(url, server)) {
-        const u = new URL(url); win.loadURL(current.origin + u.pathname + u.search + u.hash);
+        const u = new URL(url); void win.loadURL(current.origin + u.pathname + u.search + u.hash).catch(() => {}); // loadTrustedPage observes completion/failure.
       } else external(url, win);
     };
     win.webContents.on('will-navigate', guard);
     win.webContents.on('will-redirect', guard);
     win.webContents.on('will-attach-webview', event => event.preventDefault());
     win.webContents.setWindowOpenHandler(({ url }) => {
-      if (sameOrigin(url, current.origin)) win.loadURL(url);
+      if (sameOrigin(url, current.origin)) void win.loadURL(url).catch(() => {});
       else external(url, win);
       return { action: 'deny' };
     });
@@ -102,7 +128,12 @@ async function connect(value) {
     settings.server = server;
     settings.ports[key] = current.port;
     await writeFile(configPath(), JSON.stringify(settings, null, 2), { mode: 0o600 });
-    await win.loadURL(current.origin);
+    try { await loadTrustedPage(win, current.origin + '/', current.origin); }
+    catch (error) {
+      if (!win.isDestroyed()) win.destroy();
+      openSetup();
+      throw error;
+    }
     setupWindow?.close();
     if (process.argv.includes('--native-smoke')) {
       const result = await win.webContents.executeJavaScript('({secure:isSecureContext,media:!!navigator.mediaDevices?.getUserMedia,clipboard:!!navigator.clipboard,node:typeof process})');
@@ -120,11 +151,12 @@ else {
     ipcMain.handle('connection:current', event => { if (!validSetup(event)) throw new Error('Forbidden'); return settings.server; });
     ipcMain.handle('connection:connect', (event, value) => { if (!validSetup(event) || typeof value !== 'string') throw new Error('Forbidden'); return connect(value); });
     Menu.setApplicationMenu(Menu.buildFromTemplate([
-      { label: '앱', submenu: [{ label: '서버 주소 변경', click: openSetup }, { label: '권한 초기화 / 다시 연결', click: () => settings.server && connect(settings.server).catch(e => dialog.showErrorBox('연결 실패', e.message)) }, { type: 'separator' }, { role: 'quit', label: '종료' }] },
+      { label: '앱', submenu: [{ label: '서버 주소 변경', click: openSetup }, { label: '업데이트 확인', click: () => notifyUpdate(true) }, { label: '권한 초기화 / 다시 연결', click: () => settings.server && connect(settings.server).catch(e => dialog.showErrorBox('연결 실패', e.message)) }, { type: 'separator' }, { role: 'quit', label: '종료' }] },
       { label: '편집', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
       { label: '보기', submenu: [{ role: 'reload', label: '새로고침' }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
     ]));
     openSetup(); // Always show editable saved address at launch; never silently trust a new server.
+    void notifyUpdate();
     const smoke = process.argv.find(v => v.startsWith('--smoke-server='));
     if (process.argv.includes('--native-smoke') && smoke) connect(smoke.slice(15)).catch(error => { console.error(error); app.exit(1); });
   });

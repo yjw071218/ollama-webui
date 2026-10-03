@@ -10,7 +10,7 @@ const server = http.createServer((_req, res) => { res.setHeader('content-type', 
 server.listen(0, '127.0.0.1'); await once(server, 'listening');
 const exe = process.env.NATIVE_EXE || root + '/desktop/node_modules/electron/dist/electron.exe';
 const args = process.env.NATIVE_EXE ? [] : [root + '/desktop'];
-args.push('--native-smoke', '--smoke-server=http://127.0.0.1:' + server.address().port, '--smoke-profile=' + profile);
+args.push('--native-smoke', '--smoke-server=' + (process.env.NATIVE_SERVER || 'http://127.0.0.1:' + server.address().port), '--smoke-profile=' + profile);
 const env = { ...process.env }; delete env.ELECTRON_RUN_AS_NODE;
 const child = spawn(exe, args, {windowsHide:true, stdio:['ignore','pipe','pipe'], env});
 let output = '';

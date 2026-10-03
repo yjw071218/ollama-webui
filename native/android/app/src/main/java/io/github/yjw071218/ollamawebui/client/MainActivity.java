@@ -44,6 +44,25 @@ public class MainActivity extends Activity {
         getWindow().setStatusBarColor(Color.rgb(17, 24, 39));
         getWindow().setNavigationBarColor(Color.rgb(17, 24, 39));
         showSetup();
+        checkUpdates(false);
+    }
+    private void checkUpdates(boolean manual) {
+        io.execute(() -> {
+            try {
+                String current = getPackageManager().getPackageInfo(getPackageName(), 0).versionName;
+                String tag = ReleaseUpdates.check(current);
+                runOnUiThread(() -> {
+                    if (isFinishing() || isDestroyed()) return;
+                    if (tag == null) { if (manual) message("새 버전이 없습니다."); return; }
+                    new AlertDialog.Builder(this).setTitle("업데이트 안내")
+                        .setMessage("새 버전 " + tag.substring(8) + "을 사용할 수 있습니다. GitHub 릴리스에서 설치 파일을 확인하세요. 자동 설치하지 않습니다.")
+                        .setNegativeButton("나중에", null).setPositiveButton("릴리스 열기", (d,w) -> {
+                            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse("https://github.com/" + ReleaseUpdates.REPO + "/releases/tag/" + tag))); }
+                            catch (Exception e) { message("링크를 열 브라우저가 없습니다."); }
+                        }).show();
+                });
+            } catch (Exception e) { if (manual) runOnUiThread(() -> message("업데이트 확인에 실패했습니다. 네트워크 연결 또는 GitHub 요청 제한을 확인하세요.")); }
+        });
     }
     private void showSetup() {
         denyMedia();
@@ -62,15 +81,17 @@ public class MainActivity extends Activity {
             return insets;
         });
         TextView title = label("Ollama WebUI", 30); layout.addView(title);
-        layout.addView(label("연결할 서버의 기본 주소를 입력하세요.", 16));
+        layout.addView(label("연결할 서버의 기본 주소를 입력하세요. 0.0.0.0은 예시이며 실제 접속 주소가 아닙니다.", 16));
         EditText address = new EditText(this); address.setSingleLine(true);
         address.setTextColor(Color.WHITE); address.setHintTextColor(Color.LTGRAY);
         address.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        address.setHint("http://218.48.73.149.nip.io:5173/");
+        address.setHint("http://0.0.0.0:5173/");
         address.setText(prefs.getString("server", "")); layout.addView(address);
         TextView warning = label("HTTP 통신은 암호화되지 않습니다. 대화·비밀번호·첨부 파일을 보호하려면 HTTPS를 사용하세요. 신뢰하는 서버에만 연결하세요.\n\n서버 변경 시 로그인 쿠키는 삭제됩니다. 서버별 앱 저장 데이터는 분리됩니다.", 14);
         warning.setTextColor(Color.rgb(252, 211, 77)); layout.addView(warning);
         Button connect = new Button(this); connect.setText("연결하기"); layout.addView(connect);
+        Button updates = new Button(this); updates.setText("업데이트 확인"); layout.addView(updates);
+        updates.setOnClickListener(v -> checkUpdates(true));
         connect.setOnClickListener(v -> {
             if (connecting) return;
             try {
@@ -132,6 +153,11 @@ public class MainActivity extends Activity {
             return Objects.equals(u.getScheme(), origin.getScheme()) && Objects.equals(u.getRawAuthority(), origin.getRawAuthority());
         } catch (Exception e) { return false; }
     }
+    static boolean kakaoAuth(Uri uri) {
+        if (uri == null || !"https".equals(uri.getScheme()) || uri.getHost() == null || uri.getPort() != -1) return false;
+        String host = uri.getHost().toLowerCase(Locale.ROOT);
+        return host.equals("kauth.kakao.com") || host.equals("accounts.kakao.com") || host.equals("logins.kakao.com");
+    }
     private void showWeb(String server) {
         layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
         layout.setBackgroundColor(Color.rgb(17, 24, 39)); setContentView(layout);
@@ -154,9 +180,29 @@ public class MainActivity extends Activity {
         web.setWebViewClient(new WebViewClient() {
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
-                if (local(url)) return false;
+                if (local(url)) {
+                    if ("/__native/auth".equals(request.getUrl().getPath())) {
+                        String id = request.getUrl().getFragment();
+                        if (request.isForMainFrame() && id != null && id.matches("[a-f0-9]{64}")) {
+                            try { startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(server + "/api/auth/native/page#" + id))); }
+                            catch (Exception e) { message("로그인할 브라우저가 없습니다."); }
+                        }
+                        return true;
+                    }
+                    return false;
+                }
                 if (!request.isForMainFrame()) return true;
                 if (url.startsWith(server + "/") || url.equals(server)) { view.loadUrl(proxy.origin + url.substring(server.length())); return true; }
+                // Kakao login must finish in this WebView: the state cookie lives on the app origin.
+                if (kakaoAuth(request.getUrl())) return false;
+                if ("intent".equals(request.getUrl().getScheme())) {
+                    try {
+                        String fallback = Intent.parseUri(url, Intent.URI_INTENT_SCHEME).getStringExtra("browser_fallback_url");
+                        if (fallback != null && kakaoAuth(Uri.parse(fallback))) { view.loadUrl(fallback); return true; }
+                    } catch (Exception ignored) { }
+                    message("앱 안에서는 카카오계정(이메일/전화번호) 로그인을 사용하세요.");
+                    return true;
+                }
                 if ("http".equals(request.getUrl().getScheme()) || "https".equals(request.getUrl().getScheme()))
                     new AlertDialog.Builder(MainActivity.this).setTitle("외부 링크").setMessage(url).setNegativeButton("취소", null)
                         .setPositiveButton("브라우저로 열기", (d,w) -> { try { startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl())); } catch (Exception e) { message("링크를 열 앱이 없습니다."); } }).show();

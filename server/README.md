@@ -137,7 +137,7 @@ The Kakao **client secret** stays server-side and is never in that response.
 
 #### Google will not accept an IP address
 
-Registering `http://192.168.45.95:5173` in the Google console fails with
+Registering `http://192.168.0.10:5173` in the Google console fails with
 *"Invalid Origin: must end with a public top-level domain"*. Google only accepts
 `localhost` and real domain names — a bare IP is never allowed, on any port.
 
@@ -146,14 +146,14 @@ The way round it is a hostname that resolves to the LAN address anyway.
 name straight back to itself:
 
 ```
-192.168.45.95.nip.io  ->  192.168.45.95
+192.168.0.10.nip.io  ->  192.168.0.10
 ```
 
 That is a real `.io` hostname, so Google accepts it, and it points at your PC,
 so it works on the phone. Register and browse to:
 
 ```
-http://192.168.45.95.nip.io:5173
+http://192.168.0.10.nip.io:5173
 ```
 
 The server prints the exact hostname for your machine at startup. Substitute
@@ -248,7 +248,7 @@ Everything so far only covers your own network. For access from outside, the
 router has to send traffic in.
 
 1. Open the router's admin page — usually the default gateway shown by
-   `ipconfig` (commonly `192.168.0.1`, `192.168.1.1` or `192.168.45.1`).
+   `ipconfig` (commonly `192.168.0.1`, `192.168.1.1` or `10.0.0.1`).
 2. Find **Port Forwarding** / **포트포워딩** / NAT.
 3. Add: external port `8080` → this machine's LAN IP, internal port `8080`, TCP.
 4. Give this machine a **static/reserved DHCP lease**, or the forward will point

@@ -120,7 +120,7 @@ const HISTORY_KEEP_RECENT = Number(env.HISTORY_KEEP_RECENT || 50);
 const HISTORY_KEEP_DAYS = Number(env.HISTORY_KEEP_DAYS ?? 90);
 
 // The address everybody should be opening. A browser keys storage and cookies
-// to an origin, so `http://localhost:5173` and `http://1.2.3.4.nip.io:5173`
+// to an origin, so `http://localhost:5173` and `http://0.0.0.0:5173`
 // reach the same server and the same database while being, to the browser, two
 // unrelated websites: two local caches, two logins. Naming one here is how the
 // launcher and the app stop handing out both. See server/origin.js.

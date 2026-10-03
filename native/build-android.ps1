@@ -23,8 +23,8 @@ try {
     & "$root/gradle-8.11.1/bin/gradle.bat" --no-daemon assembleRelease lintRelease
     if ($LASTEXITCODE -ne 0) { throw 'Android build or lint failed' }
     New-Item -ItemType Directory -Force "$PSScriptRoot/artifacts/android" | Out-Null
-    Copy-Item 'app/build/outputs/apk/release/app-release.apk' "$PSScriptRoot/artifacts/android/OllamaWebUI-Client-1.0.0.apk"
-    & "$env:ANDROID_HOME/build-tools/35.0.0/apksigner.bat" verify --verbose "$PSScriptRoot/artifacts/android/OllamaWebUI-Client-1.0.0.apk"
+    Copy-Item 'app/build/outputs/apk/release/app-release.apk' "$PSScriptRoot/artifacts/android/OllamaWebUI-Client-1.0.3.apk"
+    & "$env:ANDROID_HOME/build-tools/35.0.0/apksigner.bat" verify --verbose "$PSScriptRoot/artifacts/android/OllamaWebUI-Client-1.0.3.apk"
     if ($LASTEXITCODE -ne 0) { throw 'APK signature verification failed' }
 } finally {
     Pop-Location

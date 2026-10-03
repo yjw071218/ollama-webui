@@ -105,6 +105,48 @@ export const renderGoogleButton = async (container, { onCredential, onError, loc
   if (!googleClientId) return { error: 'auth.notConfigured' };
   if (!container) return { error: 'auth.googleFailed' };
 
+  // A native gateway answers this locally; normal servers do not.
+  let native = false;
+  try {
+    const response = await fetch('/__native/info', { cache: 'no-store' });
+    native = response.ok && response.headers.get('content-type')?.includes('application/json')
+      && (await response.json()).nativeGoogle === true;
+  } catch {}
+  if (native) {
+    container.replaceChildren();
+    const button = document.createElement('button');
+    button.type = 'button';
+    button.textContent = '브라우저에서 Google 로그인';
+    container.appendChild(button);
+    button.onclick = async () => {
+      button.disabled = true;
+      const post = async (action, body) => {
+        const response = await fetch('/api/auth/native/' + action, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body), signal: AbortSignal.timeout(15000),
+        });
+        const result = await response.json();
+        if (!response.ok) throw new Error(result.error || 'Google 로그인 연결 실패');
+        return result;
+      };
+      try {
+        const { id, secret } = await post('start', {});
+        window.location.assign('/__native/auth#' + id);
+        button.textContent = '브라우저 인증 후 이 앱으로 돌아오세요';
+        const deadline = Date.now() + 300000;
+        while (Date.now() < deadline && button.isConnected) {
+          await new Promise(resolve => setTimeout(resolve, 1500));
+          if (!button.isConnected) return;
+          const result = await post('poll', { id, secret });
+          if (result.credential) { onCredential?.(result.credential); return; }
+        }
+        if (button.isConnected) throw new Error('로그인 시간이 만료되었습니다. 다시 시도하세요.');
+      } catch (error) { onError?.({ error: 'auth.googleFailed', detail: error.message }); }
+      finally { button.disabled = false; button.textContent = '브라우저에서 Google 로그인'; }
+    };
+    return { rendered: true };
+  }
+
   try {
     await loadScriptOnce('google-gsi', 'https://accounts.google.com/gsi/client');
   } catch (e) {

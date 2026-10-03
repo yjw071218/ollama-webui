@@ -1716,7 +1716,7 @@ This server answers on every address that reaches it — `localhost`, its LAN
 address, a `nip.io` hostname, a public one — and a browser treats each of them
 as a **separate website**. Chats, settings and the sign-in cookie are all keyed
 to the origin, so opening the desktop on `http://localhost:5173` while the phone
-uses `http://1.2.3.4.nip.io:5173` is one person signed in twice, with two local
+uses `http://0.0.0.0:5173` is one person signed in twice, with two local
 caches that only the account sync ever brings together. Nothing is lost when it
 happens; it is filed under an address you are not looking at.
 
@@ -1728,8 +1728,10 @@ another's data.
 So: put the address you want in `PUBLIC_ORIGIN` in `.env`.
 
 ```
-PUBLIC_ORIGIN=http://192.168.1.20.nip.io:5173
+PUBLIC_ORIGIN=http://0.0.0.0:5173
 ```
+
+`0.0.0.0` is a placeholder here, not a usable public origin. Replace it with your actual HTTPS server origin.
 
 The launcher then opens *that* instead of `localhost`, the startup banner leads
 with it, and the app says so — with a link — whenever it is loaded from anywhere

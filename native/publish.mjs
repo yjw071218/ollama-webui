@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 
 const root = fileURLToPath(new URL('..', import.meta.url));
 const repo = 'yjw071218/ollama-webui';
-const tag = 'native-v1.0.0';
+const version = JSON.parse(await readFile(path.join(root, 'native/desktop/package.json'), 'utf8')).version;
+const tag = 'native-v' + version;
 const command = args => execFileSync('git', args, {cwd:root, encoding:'utf8', env:{...process.env, GIT_TERMINAL_PROMPT:'0', GCM_INTERACTIVE:'Never'}}).trim();
 function credential() {
   if (process.env.GH_TOKEN) return process.env.GH_TOKEN;
@@ -32,7 +33,7 @@ if (process.argv.includes('--check')) {
   const ref = await api('/git/ref/tags/' + tag);
   if (ref.object.type !== 'commit' || ref.object.sha !== sha) throw new Error('원격 릴리스 태그가 현재 커밋과 일치하지 않습니다.');
   if (command(['diff','HEAD','--','native', 'src/capture.js', '.github/workflows/native-clients.yml'])) throw new Error('커밋하지 않은 앱 변경이 있습니다.');
-  const names = ['android/OllamaWebUI-Client-1.0.0.apk', 'windows/OllamaWebUI-Client-1.0.0-x64-Setup.exe', 'windows/OllamaWebUI-Client-1.0.0-x64-Portable.exe'];
+  const names = [`android/OllamaWebUI-Client-${version}.apk`, `windows/OllamaWebUI-Client-${version}-x64-Setup.exe`, `windows/OllamaWebUI-Client-${version}-x64-Portable.exe`];
   const files = names.map(name => path.join(root, 'native/artifacts', name));
   const hashes = [];
   for (const file of files) {
@@ -44,7 +45,7 @@ if (process.argv.includes('--check')) {
   await writeFile(checksums, hashes.join('\n') + '\n'); files.push(checksums);
   const body = [
     '## 서버 연결형 Android / Windows 앱',
-    '- 앱을 열고 서버 주소를 입력하세요. 예: http://218.48.73.149.nip.io:5173/',
+    '- 앱을 열고 서버 주소를 입력하세요. 예: http://0.0.0.0:5173/',
     '- Android 8+ APK / Windows x64 설치형 및 포터블 EXE',
     '- 마이크·카메라, 파일 업로드·저장, 클립보드, 화면 캡처. Android 네이티브 공유·실행 중 알림.',
     '- HTTP 원격 서버를 앱 내부 loopback 보안 컨텍스트에 연결합니다. HTTP 네트워크 통신 자체는 암호화되지 않습니다.',
@@ -58,7 +59,7 @@ if (process.argv.includes('--check')) {
   const releases = await api('/releases?per_page=100');
   let release = releases.find(r => r.tag_name === tag);
   if (release && !release.draft) throw new Error('이미 공개된 릴리스는 변경하지 않습니다.');
-  if (!release) release = await api('/releases', {method:'POST', body:JSON.stringify({tag_name:tag, target_commitish:sha, name:'Ollama WebUI Client 1.0.0 — Android / Windows', body, draft:true, prerelease:false, make_latest:'false'})});
+  if (!release) release = await api('/releases', {method:'POST', body:JSON.stringify({tag_name:tag, target_commitish:sha, name:'Ollama WebUI Client ' + version + ' — Android / Windows', body, draft:true, prerelease:false, make_latest:'false'})});
   for (const file of files) {
     const name = path.basename(file);
     const old = release.assets?.find(a => a.name === name);

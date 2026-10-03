@@ -45,6 +45,10 @@ export async function startProxy(value, port = 0) {
   };
   const server = http.createServer((req, res) => {
     if (!authorized(req)) { res.writeHead(403); res.end('Forbidden'); return; }
+    if (req.url === '/__native/info' && req.method === 'GET') {
+      res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
+      res.end(JSON.stringify({ nativeGoogle: true })); return;
+    }
     const transport = target.protocol === 'https:' ? https : http;
     const upstream = transport.request(target, {
       path: req.url, method: req.method, headers: headersFor(req),

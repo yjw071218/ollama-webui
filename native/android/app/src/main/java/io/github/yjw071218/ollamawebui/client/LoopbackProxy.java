@@ -94,6 +94,11 @@ public final class LoopbackProxy implements Closeable {
                 "cross-site".equals(header(h, "sec-fetch-site"))) {
                 write(client.getOutputStream(), "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); return;
             }
+            if ("GET".equals(parts[0]) && "/__native/info".equals(parts[1])) {
+                byte[] body = "{\"nativeGoogle\":true}".getBytes(StandardCharsets.UTF_8);
+                write(client.getOutputStream(), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: " + body.length + "\r\nConnection: close\r\n\r\n");
+                client.getOutputStream().write(body); return;
+            }
             boolean secure = "https".equals(target.getScheme());
             int port = target.getPort() < 0 ? (secure ? 443 : 80) : target.getPort();
             Socket raw = new Socket(); sockets.add(raw); upstream = raw;

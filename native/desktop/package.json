@@ -1,6 +1,6 @@
 {
   "name": "ollama-webui-client",
-  "version": "1.0.0",
+  "version": "1.0.3",
   "description": "Ollama WebUI server-connected desktop app",
   "author": "Ollama WebUI contributors",
   "license": "MIT",
@@ -10,10 +10,13 @@
   "scripts": {
     "start": "electron .",
     "test": "node --test ../tests/*.test.mjs",
+    "prepack": "node make-icon.mjs",
+    "prepack:dir": "node make-icon.mjs",
     "pack": "electron-builder --win nsis portable",
     "pack:dir": "electron-builder --dir"
   },
   "devDependencies": {
+    "@resvg/resvg-js": "2.6.2",
     "electron": "44.5.1",
     "electron-builder": "26.15.3"
   },
@@ -27,9 +30,11 @@
       "*.mjs",
       "*.cjs",
       "*.html",
-      "*.css"
+      "*.css",
+      "icons/**"
     ],
     "win": {
+      "icon": "icons/app.ico",
       "target": [
         "nsis",
         "portable"
