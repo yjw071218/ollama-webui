@@ -66,7 +66,8 @@ const DEFAULT_TIMEOUT = 300000;   // a cold 30B load is minutes, not seconds
 /** One JSON request to llama-server, with a deadline. */
 export const callServer = async (base, path, { method = 'GET', body, signal, timeout = DEFAULT_TIMEOUT } = {}) => {
   const controller = new AbortController();
-  const timer = setTimeout(() => controller.abort(), timeout);
+  const timer = timeout > 0 ? setTimeout(() => controller.abort(), timeout) : null;
+  if (signal?.aborted) controller.abort();
   // The caller's abort (the reader pressed Stop) and ours (the deadline) are
   // two reasons to give up on one request, and both have to reach it.
   const onAbort = () => controller.abort();
@@ -700,6 +701,7 @@ export const createLlamaRoutes = (env = {}) => {
       upstream = await callServer(base, '/v1/chat/completions', {
         method: 'POST',
         body: toChatRequest(body, { stream: true }),
+        timeout: 0,
         signal: controller.signal,
       });
     } catch (e) {
@@ -787,6 +789,7 @@ export const createLlamaRoutes = (env = {}) => {
       const data = await jsonOf(await callServer(base, '/v1/chat/completions', {
         method: 'POST',
         body: toChatRequest(asChat, { stream: false }),
+        timeout: 0,
       }));
       const choice = data.choices?.[0];
       sendJson(res, {

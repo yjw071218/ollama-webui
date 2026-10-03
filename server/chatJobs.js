@@ -3,7 +3,7 @@ import { noteFinished, sendPush } from './push.js';
 // Bounded replay storage. Conversation history is persisted separately.
 export const CHAT_LIMITS = Object.freeze({
   maxJobs: 128, maxBytes: 32 * 1024 * 1024, maxJobBytes: 4 * 1024 * 1024,
-  maxFrames: 16000, retentionMs: 30 * 60 * 1000, maxRunMs: 30 * 60 * 1000,
+  maxFrames: 16000, retentionMs: 30 * 60 * 1000, maxRunMs: 0, // No generation deadline; cancellation and memory limits remain.
 });
 
 export const createChatJobStore = ({ limits = {}, now = Date.now, onFinished = null } = {}) => {
@@ -48,7 +48,7 @@ export const createChatJobStore = ({ limits = {}, now = Date.now, onFinished = n
   };
   const prune = () => {
     for (const [id, job] of jobs) {
-      if (!job.finished && now() - job.startedAt >= cap.maxRunMs) stop(id, 'Generation exceeded the time limit');
+      if (!job.finished && cap.maxRunMs > 0 && now() - job.startedAt >= cap.maxRunMs) stop(id, 'Generation exceeded the time limit');
       if (job.finished && now() - job.updatedAt >= cap.retentionMs) remove(id);
     }
   };

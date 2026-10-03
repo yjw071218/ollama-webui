@@ -1,0 +1,49 @@
+{
+  "name": "ollama-webui-client",
+  "version": "1.0.0",
+  "description": "Ollama WebUI server-connected desktop app",
+  "author": "Ollama WebUI contributors",
+  "license": "MIT",
+  "private": true,
+  "type": "module",
+  "main": "main.mjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test ../tests/*.test.mjs",
+    "pack": "electron-builder --win nsis portable",
+    "pack:dir": "electron-builder --dir"
+  },
+  "devDependencies": {
+    "electron": "44.5.1",
+    "electron-builder": "26.15.3"
+  },
+  "build": {
+    "appId": "io.github.yjw071218.ollamawebui.client",
+    "productName": "Ollama WebUI Client",
+    "directories": {
+      "output": "../artifacts/windows"
+    },
+    "files": [
+      "*.mjs",
+      "*.cjs",
+      "*.html",
+      "*.css"
+    ],
+    "win": {
+      "target": [
+        "nsis",
+        "portable"
+      ],
+      "artifactName": "OllamaWebUI-Client-${version}-${arch}.${ext}"
+    },
+    "portable": {
+      "artifactName": "OllamaWebUI-Client-${version}-${arch}-Portable.${ext}"
+    },
+    "nsis": {
+      "artifactName": "OllamaWebUI-Client-${version}-${arch}-Setup.${ext}",
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true,
+      "createDesktopShortcut": true
+    }
+  }
+}

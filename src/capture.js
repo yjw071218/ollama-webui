@@ -24,7 +24,8 @@ export const fitWithin = (w, h, max = MAX_EDGE) => {
 };
 
 export const canCaptureScreen = () =>
-  typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia;
+  (typeof window !== 'undefined' && typeof window.ollamaNative?.captureScreen === 'function') ||
+  (typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getDisplayMedia);
 
 export const canUseCamera = () =>
   typeof navigator !== 'undefined' && !!navigator.mediaDevices?.getUserMedia;
@@ -72,6 +73,8 @@ export const videoFor = async (stream) => {
  * this button. Returns `null` if the picker was cancelled.
  */
 export const captureScreen = async () => {
+  // Android WebView does not implement getDisplayMedia; the app uses OS consent.
+  if (typeof window !== 'undefined' && window.ollamaNative?.captureScreen) return window.ollamaNative.captureScreen();
   let stream;
   try {
     stream = await navigator.mediaDevices.getDisplayMedia({

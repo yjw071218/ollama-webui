@@ -55,7 +55,21 @@ test('global response bytes and job count stay bounded under repeated jobs', () 
   assert.equal(busy.stats().jobs, 2);
 });
 
-test('hung jobs expire, finished jobs are removed, and late frames cannot resurrect them', () => {
+test('default generation survives days of silence and still supports cancellation', () => {
+  let time = 0, cancelled = 0;
+  const store = createChatJobStore({ now: () => time });
+  store.begin('long');
+  store.attach('long', { abort: () => cancelled++ });
+  time = 7 * 24 * 60 * 60 * 1000;
+  store.prune();
+  assert.equal(store.read('long').finished, false);
+  assert.equal(cancelled, 0);
+  assert.equal(store.appendChunk('long', 'still running'), true);
+  assert.equal(store.stop('long'), true);
+  assert.equal(cancelled, 1);
+});
+
+test('opt-in deadlines expire jobs, finished jobs are removed, and late frames cannot resurrect them', () => {
   let time = 0, cancelled = 0;
   const store = createChatJobStore({ now: () => time, limits: { maxRunMs: 100, retentionMs: 50 } });
   store.begin('hung');

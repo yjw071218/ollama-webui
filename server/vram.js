@@ -42,8 +42,8 @@ import { backendOf } from './llamacpp.js';
 
 const trimmed = (url) => String(url).replace(/\/$/, '');
 
-/* Silence from Ollama before a request is given up on. Ten minutes: see `forward`. */
-export const OLLAMA_IDLE_MS = 10 * 60 * 1000;
+/* Generation has no idle deadline by default; explicit operator limits remain opt-in. */
+export const OLLAMA_IDLE_MS = 0;
 
 /** The requests that load a language model, and so need the card to themselves. */
 export const INFERENCE_PATHS = ['/api/chat', '/api/generate', '/api/embed', '/api/embeddings'];
@@ -465,7 +465,7 @@ const forward = (target, req, res, body, track, completed, idleMs = OLLAMA_IDLE_
   const finish = () => {
     if (done) return;
     done = true;
-    clearTimeout(deadline); clearInterval(memoryCheck);
+    clearInterval(memoryCheck);
     untrack();
     if (jobId) finishChatJob(jobId);
     completed();
@@ -514,8 +514,6 @@ const forward = (target, req, res, body, track, completed, idleMs = OLLAMA_IDLE_
       finish();
     });
   });
-  const deadline = setTimeout(() => fail(new Error('Generation exceeded 30 minutes'), 504), 30 * 60 * 1000);
-  deadline.unref?.();
   const memoryCheck = setInterval(() => {
     if (memoryPressure(true)) fail(new Error('Generation stopped: system RAM is critically low'), 503);
   }, 2000);
@@ -531,7 +529,7 @@ const forward = (target, req, res, body, track, completed, idleMs = OLLAMA_IDLE_
      timeline is a minute and a half of generating with nothing on the wire.
      Ollama logged `500 | 2m0s | POST /api/chat` with the model 427 tokens in,
      the answer was thrown away, and the browser sent the same request again.
-     The 30-minute deadline above is still the ceiling for "something is wrong". */
+     There is no wall-clock ceiling; cancellation, connection errors and RAM protection remain. */
   out.setTimeout(idleMs, () => fail(new Error(`Model sent nothing for ${Math.round(idleMs / 1000)} seconds`), 504));
   out.on('error', fail);
   out.on('close', () => {
@@ -558,7 +556,7 @@ const forward = (target, req, res, body, track, completed, idleMs = OLLAMA_IDLE_
  * Ollama request is sent on from here rather than by the proxy, so that the
  * guard knows it is under way and can stop it when a picture needs the card.
  * While one of our jobs is still being drawn, new inference is refused.
- * Request size, concurrency, duration and system RAM are bounded here.
+ * Request size, concurrency and system RAM are bounded here.
  * llama.cpp decides its layers when it starts, not per request, and its routes
  * translate the request themselves, so its requests are passed on to `next()`.
  */

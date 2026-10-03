@@ -1,0 +1,10 @@
+**/node_modules/
+**/build/
+**/.gradle/
+**/local.properties
+**/*.jks
+**/*.keystore
+.tools/
+artifacts/
+desktop/audit.json
+*.log
