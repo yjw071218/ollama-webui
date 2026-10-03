@@ -25,6 +25,7 @@
   };
   Object.defineProperty(window, 'ollamaNative', { value: Object.freeze({
     platform: 'android',
+    changeServer: () => call('changeServer'),
     captureScreen: async () => {
       const value = await call('capture');
       if (!value) return null;
@@ -57,6 +58,28 @@
     close() {}
   }
   Object.defineProperty(window, 'Notification', { value: NativeNotification });
+  // Status and navigation bars take the page's own background, so the app has
+  // no frame of a different colour around the site. Re-sent on theme changes.
+  let lastChrome = '';
+  const sendChrome = () => {
+    const css = getComputedStyle(document.body || document.documentElement).backgroundColor;
+    const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/.exec(css || '');
+    if (!m || (m[4] !== undefined && Number(m[4]) === 0)) return;
+    const color = '#' + [m[1], m[2], m[3]].map(v => Number(v).toString(16).padStart(2, '0')).join('');
+    if (color === lastChrome) return;
+    lastChrome = color;
+    call('chrome', { color }).catch(() => {});
+  };
+  const watchChrome = () => {
+    sendChrome();
+    const observer = new MutationObserver(() => requestAnimationFrame(sendChrome));
+    observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
+    if (document.body) observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
+    matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => requestAnimationFrame(sendChrome));
+  };
+  if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchChrome, { once: true });
+  else watchChrome();
+  window.addEventListener('load', sendChrome, { once: true });
   document.addEventListener('click', async event => {
     const a = event.target.closest?.('a[download]');
     if (!a || !/^(blob:|data:)/.test(a.href)) return;

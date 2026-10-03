@@ -1349,6 +1349,13 @@ const en = {
   'profile.account': 'Account',
   'sync.holds': 'The account holds {chats} chats · last change {when}',
   'sync.upToDate': 'Already up to date.',
+  'sync.initialTitle': "Syncing your account",
+  'sync.initialBody': "Bringing chats and settings to this device. The app opens when it finishes.",
+  'sync.initialFailed': "Sync failed: {error}",
+  'sync.initialRetry': "Try again",
+  'sync.initialSkip': "Continue without waiting",
+  'app.reload': "Reload",
+  'app.changeServer': "Change server",
 
   // ---- Deep research ----
   'research.turnOn': 'Turn on deep research',
@@ -3034,6 +3041,13 @@ const ko = {
   'profile.account': '계정',
   'sync.holds': '계정에 대화 {chats}개 · 마지막 변경 {when}',
   'sync.upToDate': '이미 최신입니다.',
+  'sync.initialTitle': "계정 동기화 중",
+  'sync.initialBody': "대화와 설정을 이 기기로 가져오고 있습니다. 완료되면 앱이 열립니다.",
+  'sync.initialFailed': "동기화 실패: {error}",
+  'sync.initialRetry': "다시 시도",
+  'sync.initialSkip': "기다리지 않고 계속",
+  'app.reload': "새로고침",
+  'app.changeServer': "서버 변경",
 
   // ---- Deep research ----
   'research.turnOn': '심층 리서치 켜기',
@@ -4720,6 +4734,13 @@ const ja = {
   'profile.account': 'アカウント',
   'sync.holds': 'アカウントにチャット{chats}件 · 最終更新 {when}',
   'sync.upToDate': 'すでに最新です。',
+  'sync.initialTitle': "アカウントを同期中",
+  'sync.initialBody': "チャットと設定をこの端末に取り込んでいます。完了するとアプリが開きます。",
+  'sync.initialFailed': "同期に失敗しました: {error}",
+  'sync.initialRetry': "再試行",
+  'sync.initialSkip': "待たずに続ける",
+  'app.reload': "再読み込み",
+  'app.changeServer': "サーバーを変更",
 
   // ---- Deep research ----
   'research.turnOn': 'ディープリサーチをオンにする',
@@ -6406,6 +6427,13 @@ const zhHans = {
   'profile.account': '账号',
   'sync.holds': '账号中有 {chats} 个对话 · 最后更改 {when}',
   'sync.upToDate': '已是最新。',
+  'sync.initialTitle': "正在同步账号",
+  'sync.initialBody': "正在将对话和设置同步到此设备。完成后将打开应用。",
+  'sync.initialFailed': "同步失败：{error}",
+  'sync.initialRetry': "重试",
+  'sync.initialSkip': "不等待，继续",
+  'app.reload': "刷新",
+  'app.changeServer': "更换服务器",
 
   // ---- Deep research ----
   'research.turnOn': '开启深度研究',
@@ -8092,6 +8120,13 @@ const zhHant = {
   'profile.account': '帳號',
   'sync.holds': '帳號中有 {chats} 個對話 · 最後變更 {when}',
   'sync.upToDate': '已是最新。',
+  'sync.initialTitle': "正在同步帳號",
+  'sync.initialBody': "正在將對話與設定同步到此裝置。完成後將開啟應用程式。",
+  'sync.initialFailed': "同步失敗：{error}",
+  'sync.initialRetry': "重試",
+  'sync.initialSkip': "不等待，繼續",
+  'app.reload': "重新整理",
+  'app.changeServer': "變更伺服器",
 
   // ---- Deep research ----
   'research.turnOn': '開啟深度研究',
@@ -9778,6 +9813,13 @@ const es = {
   'profile.account': 'Cuenta',
   'sync.holds': 'La cuenta guarda {chats} chats · último cambio {when}',
   'sync.upToDate': 'Ya está al día.',
+  'sync.initialTitle': "Sincronizando tu cuenta",
+  'sync.initialBody': "Trayendo chats y ajustes a este dispositivo. La app se abrirá al terminar.",
+  'sync.initialFailed': "Error de sincronización: {error}",
+  'sync.initialRetry': "Reintentar",
+  'sync.initialSkip': "Continuar sin esperar",
+  'app.reload': "Recargar",
+  'app.changeServer': "Cambiar servidor",
 
   // ---- Deep research ----
   'research.turnOn': 'Activar la investigación profunda',
@@ -11464,6 +11506,13 @@ const fr = {
   'profile.account': 'Compte',
   'sync.holds': 'Le compte contient {chats} conversations · dernière modification {when}',
   'sync.upToDate': 'Déjà à jour.',
+  'sync.initialTitle': "Synchronisation du compte",
+  'sync.initialBody': "Récupération des conversations et réglages sur cet appareil. L’app s’ouvrira à la fin.",
+  'sync.initialFailed': "Échec de la synchronisation : {error}",
+  'sync.initialRetry': "Réessayer",
+  'sync.initialSkip': "Continuer sans attendre",
+  'app.reload': "Recharger",
+  'app.changeServer': "Changer de serveur",
 
   // ---- Deep research ----
   'research.turnOn': 'Activer la recherche approfondie',
@@ -13150,6 +13199,13 @@ const de = {
   'profile.account': 'Konto',
   'sync.holds': 'Das Konto hält {chats} Chats · letzte Änderung {when}',
   'sync.upToDate': 'Bereits aktuell.',
+  'sync.initialTitle': "Konto wird synchronisiert",
+  'sync.initialBody': "Chats und Einstellungen werden auf dieses Gerät geholt. Die App öffnet sich danach.",
+  'sync.initialFailed': "Synchronisierung fehlgeschlagen: {error}",
+  'sync.initialRetry': "Erneut versuchen",
+  'sync.initialSkip': "Ohne Warten fortfahren",
+  'app.reload': "Neu laden",
+  'app.changeServer': "Server wechseln",
 
   // ---- Deep research ----
   'research.turnOn': 'Tiefenrecherche einschalten',
@@ -14836,6 +14892,13 @@ const pt = {
   'profile.account': 'Conta',
   'sync.holds': 'A conta guarda {chats} conversas · última alteração {when}',
   'sync.upToDate': 'Já está atualizado.',
+  'sync.initialTitle': "Sincronizando sua conta",
+  'sync.initialBody': "Trazendo conversas e configurações para este dispositivo. O app abre ao terminar.",
+  'sync.initialFailed': "Falha na sincronização: {error}",
+  'sync.initialRetry': "Tentar novamente",
+  'sync.initialSkip': "Continuar sem esperar",
+  'app.reload': "Recarregar",
+  'app.changeServer': "Trocar servidor",
 
   // ---- Deep research ----
   'research.turnOn': 'Ativar a pesquisa profunda',
@@ -16522,6 +16585,13 @@ const ru = {
   'profile.account': 'Аккаунт',
   'sync.holds': 'В аккаунте чатов: {chats} · последнее изменение {when}',
   'sync.upToDate': 'Уже актуально.',
+  'sync.initialTitle': "Синхронизация аккаунта",
+  'sync.initialBody': "Чаты и настройки загружаются на это устройство. Приложение откроется по завершении.",
+  'sync.initialFailed': "Ошибка синхронизации: {error}",
+  'sync.initialRetry': "Повторить",
+  'sync.initialSkip': "Продолжить без ожидания",
+  'app.reload': "Перезагрузить",
+  'app.changeServer': "Сменить сервер",
 
   // ---- Deep research ----
   'research.turnOn': 'Включить глубокое исследование',
@@ -18208,6 +18278,13 @@ const vi = {
   'profile.account': 'Tài khoản',
   'sync.holds': 'Tài khoản có {chats} cuộc trò chuyện · thay đổi lần cuối {when}',
   'sync.upToDate': 'Đã là mới nhất.',
+  'sync.initialTitle': "Đang đồng bộ tài khoản",
+  'sync.initialBody': "Đang tải cuộc trò chuyện và cài đặt về thiết bị này. Ứng dụng sẽ mở khi xong.",
+  'sync.initialFailed': "Đồng bộ thất bại: {error}",
+  'sync.initialRetry': "Thử lại",
+  'sync.initialSkip': "Tiếp tục không chờ",
+  'app.reload': "Tải lại",
+  'app.changeServer': "Đổi máy chủ",
 
   // ---- Deep research ----
   'research.turnOn': 'Bật nghiên cứu chuyên sâu',
@@ -19894,6 +19971,13 @@ const ar = {
   'profile.account': 'الحساب',
   'sync.holds': 'يحتفظ الحساب بـ {chats} محادثات · آخر تغيير {when}',
   'sync.upToDate': 'محدَّث بالفعل.',
+  'sync.initialTitle': "جارٍ مزامنة الحساب",
+  'sync.initialBody': "جارٍ نقل المحادثات والإعدادات إلى هذا الجهاز. سيفتح التطبيق عند الانتهاء.",
+  'sync.initialFailed': "فشلت المزامنة: {error}",
+  'sync.initialRetry': "إعادة المحاولة",
+  'sync.initialSkip': "المتابعة دون انتظار",
+  'app.reload': "إعادة التحميل",
+  'app.changeServer': "تغيير الخادم",
 
   // ---- Deep research ----
   'research.turnOn': 'تفعيل البحث المعمّق',

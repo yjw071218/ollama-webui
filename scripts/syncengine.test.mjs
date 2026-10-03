@@ -205,7 +205,19 @@ eq('an unchanged device sends nothing', result.sent, 0);
 
 on(phone);
 S.setActiveScope(SCOPE);
-result = await E.syncFully(SCOPE);
+check('a device that never synced needs the first sync', E.needsInitialSync(SCOPE) === true);
+check('a guest never waits for a first sync', E.needsInitialSync('guest') === false);
+E.markInitialSync(SCOPE, true);
+const progress = [];
+result = await E.syncFully(SCOPE, { onProgress: p => progress.push(p) });
+check('the first sync reports progress', progress.length > 0 && progress.at(-1).complete === true);
+eq('and ends at 100%', E.syncPercent(progress.at(-1).rev, progress.at(-1).rev, progress.at(-1).complete), 100);
+check('still pending until the app marks it done', E.needsInitialSync(SCOPE) === true);
+E.markInitialSync(SCOPE, false);
+check('then the device no longer waits', E.needsInitialSync(SCOPE) === false);
+eq('percent is the cursor over the target', E.syncPercent(250, 1000, false), 25);
+eq('an unfinished sync never shows 100%', E.syncPercent(1000, 1000, false), 99);
+eq('an unknown target shows 0%', E.syncPercent(5, 0, false), 0);
 eq('the phone downloads the account', result.applied.chats, 2);
 eq('and the settings with it', result.applied.settings, 1);
 

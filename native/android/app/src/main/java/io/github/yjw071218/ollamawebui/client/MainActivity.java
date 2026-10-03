@@ -74,8 +74,8 @@ public class MainActivity extends Activity {
         notificationAllowed = false;
         layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(dp(24), dp(40), dp(24), dp(24));
-        layout.setBackgroundColor(Color.rgb(17, 24, 39));
         setContentView(layout);
+        applyChrome(Color.rgb(17, 24, 39));
         layout.setOnApplyWindowInsetsListener((v, insets) -> {
             v.setPadding(dp(24), Math.max(dp(40), insets.getSystemWindowInsetTop()), dp(24), Math.max(dp(24), insets.getSystemWindowInsetBottom()));
             return insets;
@@ -158,19 +158,33 @@ public class MainActivity extends Activity {
         String host = uri.getHost().toLowerCase(Locale.ROOT);
         return host.equals("kauth.kakao.com") || host.equals("accounts.kakao.com") || host.equals("logins.kakao.com");
     }
+    /** Paint the system bars and the area behind them in the page's own background colour. */
+    private void applyChrome(int color) {
+        if (layout != null) layout.setBackgroundColor(color);
+        if (web != null) web.setBackgroundColor(color);
+        getWindow().setStatusBarColor(color); getWindow().setNavigationBarColor(color);
+        double luminance = (0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color)) / 255;
+        View decor = getWindow().getDecorView();
+        int flags = decor.getSystemUiVisibility() & ~(View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR);
+        if (luminance > 0.6) flags |= View.SYSTEM_UI_FLAG_LIGHT_STATUS_BAR | View.SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR;
+        decor.setSystemUiVisibility(flags);
+    }
+    private void confirmChangeServer(Runnable cancelled) {
+        new AlertDialog.Builder(this).setTitle("서버 변경").setMessage("현재 연결과 진행 중인 녹음·화면 캡처를 종료하고 서버 주소 화면으로 이동할까요?")
+            .setNegativeButton("취소", (d,w) -> { if (cancelled != null) cancelled.run(); })
+            .setOnCancelListener(d -> { if (cancelled != null) cancelled.run(); })
+            .setPositiveButton("변경", (d,w) -> { stopService(new Intent(this, CaptureService.class)); showSetup(); }).show();
+    }
     private void showWeb(String server) {
         layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
-        layout.setBackgroundColor(Color.rgb(17, 24, 39)); setContentView(layout);
+        setContentView(layout);
         layout.setOnApplyWindowInsetsListener((v, insets) -> {
             v.setPadding(0, insets.getSystemWindowInsetTop(), 0, insets.getSystemWindowInsetBottom()); return insets;
         });
-        LinearLayout toolbar = new LinearLayout(this);
-        Button change = new Button(this); change.setText("서버 변경"); toolbar.addView(change);
-        change.setOnClickListener(v -> new AlertDialog.Builder(this).setMessage("진행 중인 녹음·화면 캡처와 연결을 종료할까요?")
-            .setNegativeButton("취소", null).setPositiveButton("변경", (d,w) -> { stopService(new Intent(this, CaptureService.class)); showSetup(); }).show());
-        Button reload = new Button(this); reload.setText("새로고침"); toolbar.addView(reload); reload.setOnClickListener(v -> web.reload());
-        layout.addView(toolbar);
+        // No native button bar: reload and server change live in the page's own
+        // account menu (window.ollamaNative.changeServer), so the app has no frame.
         web = new WebView(this); layout.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
+        applyChrome(prefs.getInt("chrome", Color.rgb(26, 25, 22)));
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true);
         s.setAllowFileAccess(false); s.setAllowContentAccess(false);
@@ -209,7 +223,11 @@ public class MainActivity extends Activity {
                 return true;
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
-                if (request.isForMainFrame()) message("연결 실패: " + error.getDescription() + "\n상단에서 새로고침하거나 서버 주소를 변경하세요.");
+                if (!request.isForMainFrame() || isFinishing() || isDestroyed()) return;
+                new AlertDialog.Builder(MainActivity.this).setTitle("연결 실패").setMessage(server + "\n" + error.getDescription())
+                    .setCancelable(false)
+                    .setNegativeButton("서버 변경", (d,w) -> { stopService(new Intent(MainActivity.this, CaptureService.class)); showSetup(); })
+                    .setPositiveButton("다시 시도", (d,w) -> { if (web != null) web.reload(); }).show();
             }
             @Override public void onReceivedSslError(WebView view, android.webkit.SslErrorHandler handler, android.net.http.SslError error) {
                 handler.cancel(); message("서버 인증서를 확인할 수 없습니다. 인증서 검증을 우회하지 않습니다.");
@@ -338,6 +356,15 @@ public class MainActivity extends Activity {
                         .setContentText(request.optString("body")).setStyle(new Notification.BigTextStyle().bigText(request.optString("body")))
                         .setContentIntent(open).setAutoCancel(true).build());
                     reply(reply, id, true, null); break;
+                case "changeServer":
+                    confirmChangeServer(() -> reply(reply, requestId, false, null)); break;
+                case "chrome": {
+                    String value = request.optString("color");
+                    if (!value.matches("#[0-9a-fA-F]{6}")) throw new IllegalArgumentException("잘못된 색상입니다.");
+                    int color = Color.parseColor(value);
+                    prefs.edit().putInt("chrome", color).apply(); applyChrome(color);
+                    reply(reply, id, true, null); break;
+                }
                 default: throw new IllegalArgumentException("지원하지 않는 앱 요청입니다.");
             }
         } catch (Exception e) { reply(reply, id, null, e.getMessage()); }
@@ -403,7 +430,7 @@ public class MainActivity extends Activity {
     private void message(String text) { if (!isFinishing() && !isDestroyed()) new AlertDialog.Builder(this).setMessage(text).setPositiveButton("확인", null).show(); }
     @Override public void onBackPressed() {
         if (web != null && web.canGoBack()) web.goBack();
-        else if (web != null) showSetup(); else super.onBackPressed();
+        else if (web != null) confirmChangeServer(null); else super.onBackPressed();
     }
     @Override protected void onDestroy() {
         denyMedia();

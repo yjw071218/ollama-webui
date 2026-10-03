@@ -193,7 +193,7 @@ import {
 } from './shareLink.js';
 import ChatTimeline from './ChatTimeline.jsx';
 import { captureScreen, canCaptureScreen, canUseCamera } from './capture.js';
-import { Camera } from 'lucide-react';
+import { Camera, Server as ServerIcon } from 'lucide-react';
 import { turnMetrics } from './turnMetrics.js';
 import { traceOf, slowestLeg } from './turnTrace.js';
 import {
@@ -224,7 +224,7 @@ import { notify, notifyState, askToNotify, unattended, subscribeToPush, unsubscr
 import { recordRun, loadRuns, clearRuns, summarise, promptCostTrend } from './perf.js';
 import {
   syncFully, createSyncScheduler, accountStamp, resetSyncPosition, OwnerMismatch, withoutPictureBytes,
-  subscribeToAccount,
+  subscribeToAccount, needsInitialSync, markInitialSync, syncPercent,
 } from './syncEngine.js';
 import {
   useSession, deleteAccount as deleteServerAccount, signOutOtherDevices,
@@ -1494,6 +1494,12 @@ function App() {
    */
   const profileScope = deriveScope(user, 'ready');
   const accountId = ownerOfScope(profileScope);
+  /* The first sync of an account on this device. Until it finishes, the app
+     is covered by a progress screen: tabs opened over a half-downloaded
+     account show missing chats and default settings that are then swapped
+     out underneath whoever is already using them. */
+  const [initialSync, setInitialSync] = useState(() =>
+    (needsInitialSync(profileScope) ? { percent: 0, error: '' } : null));
 
   // Every setting read goes through the store, so it has to be told before the
   // render that reads them. The provider already did this; repeating it is a
@@ -6643,12 +6649,23 @@ ${data.text}` : data.text));
    */
   const reconcileWithAccount = async () => {
     if (!accountId) return;
+    const first = needsInitialSync(profileScope);
     try {
+      let target = 0;
+      if (first) {
+        markInitialSync(profileScope, true);
+        setInitialSync({ percent: 0, error: '' });
+        target = (await accountStamp())?.rev || 0;
+      }
       // One exchange, both directions: what this device has that the account
       // does not goes up, what the account has that this device does not comes
       // down. There is no "push or pull" decision to get wrong any more, and no
       // window in which one side's copy replaces the other's wholesale.
-      const result = await syncFully(profileScope);
+      const result = await syncFully(profileScope, first ? {
+        // A first download is paged at 500 records; keep going until it ends.
+        maxRounds: 10000,
+        onProgress: ({ rev, complete }) => setInitialSync({ percent: syncPercent(rev, target, complete), error: '' }),
+      } : {});
       syncStampRef.current = result.rev;
       setSyncInfo(await accountStamp());
       /* Anything the account would not take. Said rather than swallowed: a
@@ -6657,6 +6674,19 @@ ${data.text}` : data.text));
          sync has not run yet". See `applyChanges` on the server. */
       for (const item of result.refused || []) {
         addLog(`[sync] ${item.kind}:${item.id} was not stored — ${item.reason}`, 'warning');
+      }
+      if (first) {
+        markInitialSync(profileScope, false);
+        setInitialSync({ percent: 100, error: '' });
+        // Settings and lists are read into state at mount, so a first download
+        // that brought any shows the app only after it starts again from them.
+        if (result.applied.settings > 0 || result.applied.lists > 0) {
+          window.location.reload();
+          return;
+        }
+        await refreshChatsFromStorage();
+        setInitialSync(null);
+        return;
       }
 
       if (result.changedLocally > 0) {
@@ -6686,7 +6716,13 @@ ${data.text}` : data.text));
       }
       // Sync is a bonus; a failure here must not break being signed in.
       addLog(`[sync] could not reconcile with the account: ${e.message}`, 'info');
+      if (first) setInitialSync(s => (s ? { ...s, error: e.message || String(e) } : s));
     }
+  };
+
+  const retryInitialSync = () => {
+    setInitialSync({ percent: 0, error: '' });
+    reconcileWithAccount();
   };
 
   const reconciledRef = useRef('');
@@ -6755,6 +6791,23 @@ ${data.text}` : data.text));
     }
     return [...byAccount.values()];
   }, [authSession.accounts, user?.id]);
+
+  /* Inside the Android app the server address and the page reload belong to
+     the app, not the site -- but they are reached here, beside the account,
+     instead of from a native button bar stuck above the page. */
+  const nativeApp = typeof window !== 'undefined' && typeof window.ollamaNative?.changeServer === 'function'
+    ? window.ollamaNative : null;
+  const nativeAppItems = () => (nativeApp ? (
+    <>
+      <div className="profile-divider" role="separator" />
+      <button className="cmd-item" onClick={() => { setShowProfileMenu(false); window.location.reload(); }}>
+        <RefreshCcw size={15} /><span className="cmd-label">{t('app.reload')}</span>
+      </button>
+      <button className="cmd-item" onClick={() => { setShowProfileMenu(false); nativeApp.changeServer().catch(() => {}); }}>
+        <ServerIcon size={15} /><span className="cmd-label">{t('app.changeServer')}</span>
+      </button>
+    </>
+  ) : null);
 
   // Called rather than rendered as a component: a component defined inside a
   // render is a new type on every pass, and React throws the old one away each
@@ -13507,6 +13560,28 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       className={`claude-app ${activeArtifact && sidebarPlace === 'home' ? 'has-artifact' : ''} ${artifactMaximized && activeArtifact && sidebarPlace === 'home' ? 'artifact-maximized' : ''}`}
       style={{ '--artifact-width': `${artifactWidth}px`, '--sidebar-width': `${sidebarWidth}px` }}
     >
+      {initialSync && (
+        <div className="initial-sync" role="dialog" aria-modal="true" aria-labelledby="initial-sync-title">
+          <div className="initial-sync-card">
+            <Logo size={40} />
+            <h2 id="initial-sync-title">{t('sync.initialTitle')}</h2>
+            <p>{t('sync.initialBody')}</p>
+            <div className="initial-sync-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={initialSync.percent}>
+              <div style={{ width: `${initialSync.percent}%` }} />
+            </div>
+            <div className="initial-sync-percent">{initialSync.percent}%</div>
+            {initialSync.error && (
+              <>
+                <p className="initial-sync-error">{t('sync.initialFailed', { error: initialSync.error })}</p>
+                <div className="initial-sync-actions">
+                  <button type="button" onClick={retryInitialSync}>{t('sync.initialRetry')}</button>
+                  <button type="button" className="secondary" onClick={() => setInitialSync(null)}>{t('sync.initialSkip')}</button>
+                </div>
+              </>
+            )}
+          </div>
+        </div>
+      )}
       <NewbieGuide
         open={showGuide}
         onClose={() => setShowGuide(false)}
@@ -13825,6 +13900,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     <Settings size={15} /><span className="cmd-label">{t('sidebar.settings')}</span>
                   </button>
                   {otherAccountItems()}
+                  {nativeAppItems()}
                   <button className="cmd-item" onClick={() => { setShowProfileMenu(false); handleAddAccount(); }}>
                     <UserPlus size={15} /><span className="cmd-label">{t('auth.addAccount')}</span>
                   </button>
@@ -13848,6 +13924,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   <button className="cmd-item" onClick={() => { openSettings('general'); setShowProfileMenu(false); }}>
                     <Settings size={15} /><span className="cmd-label">{t('sidebar.settings')}</span>
                   </button>
+                  {nativeAppItems()}
                 </>
               )}
             </Popover>

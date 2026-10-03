@@ -9878,3 +9878,32 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 .sent-attachment.is-openable { cursor: pointer; }
 .sent-attachment.is-openable:hover { border-color: var(--primary); }
 .sent-attachment-name { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* First sync of an account on this device: the app waits behind this. */
+.initial-sync {
+  position: fixed; inset: 0; z-index: 10000;
+  display: flex; align-items: center; justify-content: center;
+  padding: max(24px, env(safe-area-inset-top)) 24px max(24px, env(safe-area-inset-bottom));
+  background: var(--bg-main);
+}
+.initial-sync-card {
+  width: min(380px, 100%); text-align: center; color: var(--text-primary);
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.initial-sync-card > svg { color: var(--primary); margin-bottom: 4px; }
+.initial-sync-card h2 { margin: 0; font-size: 1.2rem; font-weight: 600; }
+.initial-sync-card p { margin: 0; color: var(--text-secondary); font-size: .92rem; line-height: 1.5; }
+.initial-sync-bar {
+  width: 100%; height: 8px; margin-top: 12px; border-radius: 999px; overflow: hidden;
+  background: var(--bg-primary); border: 1px solid var(--border-color);
+}
+.initial-sync-bar > div { height: 100%; background: var(--primary); border-radius: inherit; transition: width .25s ease; }
+.initial-sync-percent { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 1.05rem; }
+.initial-sync-card .initial-sync-error { color: #d14343; }
+.initial-sync-actions { display: flex; gap: 8px; margin-top: 4px; }
+.initial-sync-actions button {
+  padding: 8px 16px; border-radius: 10px; border: 1px solid var(--primary);
+  background: var(--primary); color: #fff; font: inherit; cursor: pointer;
+}
+.initial-sync-actions button.secondary { background: transparent; color: var(--text-primary); border-color: var(--border-color); }
+.profile-divider { height: 1px; margin: 0.25rem 0.4rem; background: var(--border-color); }

@@ -616,10 +616,11 @@ export const syncOnce = async (scope, { full = false } = {}) => {
  * enough to be in step. The page cap is what keeps a slow connection from
  * having to hold one enormous request open.
  */
-export const syncFully = async (scope, { full = false, maxRounds = 20 } = {}) => {
+export const syncFully = async (scope, { full = false, maxRounds = 20, onProgress } = {}) => {
   let total = null;
   for (let round = 0; round < maxRounds; round++) {
     const result = await syncOnce(scope, { full: full && round === 0 });
+    onProgress?.({ rev: result.rev, complete: result.complete, received: result.received });
     total = total ? {
       ...result,
       applied: {
@@ -640,6 +641,36 @@ export const syncFully = async (scope, { full = false, maxRounds = 20 } = {}) =>
     if (result.complete) break;
   }
   return total;
+};
+
+/* --------------------------------------------------- first sync on a device */
+
+const firstSyncKey = (scope) => `initialSyncPending@${scope}`;
+
+/** Whether this device has never finished a sync with this account. */
+export const needsInitialSync = (scope) => {
+  if (!ownerOfScope(scope)) return false;
+  try { if (localStorage.getItem(firstSyncKey(scope)) === '1') return true; } catch (e) { /* private mode */ }
+  return readRev(scope) === 0;
+};
+
+export const markInitialSync = (scope, pending) => {
+  try {
+    if (pending) localStorage.setItem(firstSyncKey(scope), '1');
+    else localStorage.removeItem(firstSyncKey(scope));
+  } catch (e) { /* private mode */ }
+};
+
+/**
+ * Percent of the account this device has caught up with.
+ *
+ * Revisions are a cursor that only moves forward and ends at the account's
+ * current one, so where the cursor stands against that target is the progress.
+ */
+export const syncPercent = (rev, target, complete) => {
+  if (complete) return 100;
+  if (!(target > 0)) return 0;
+  return Math.max(0, Math.min(99, Math.floor((Number(rev) || 0) / target * 100)));
 };
 
 /* ------------------------------------------------------------ live changes */
