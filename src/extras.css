@@ -1396,7 +1396,20 @@ mark.chat-hit.current {
 }
 .auth-social-btn:hover:not(:disabled) { background: var(--hover-bg); border-color: var(--text-muted); }
 .auth-social-btn:disabled { opacity: 0.45; cursor: not-allowed; }
-.auth-social-btn.kakao { background: #FEE500; color: #191600; border-color: #FEE500; }
+.auth-social-btn.native-google {
+  position: relative;
+  height: 40px;
+  padding: 0 36px;
+  border: 1px solid #dadce0;
+  border-radius: 4px;
+  background: #fff;
+  color: #3c4043;
+  font: 500 14px Arial, sans-serif;
+}
+.auth-social-btn.native-google > svg { position: absolute; left: 12px; }
+.auth-social-btn.native-google:hover:not(:disabled) { background: #f8faff; border-color: #d2e3fc; }
+.auth-social-btn.native-google:focus-visible { outline: 2px solid #4285f4; outline-offset: 2px; }
+.auth-social-btn.kakao { min-height: 44px; background: #FEE500; color: #191600; border-color: #FEE500; }
 .auth-social-btn.kakao:hover:not(:disabled) { background: #f5dd00; border-color: #f5dd00; }
 
 .auth-hint { font-size: 0.72rem; color: var(--text-muted); text-align: center; line-height: 1.4; }

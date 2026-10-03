@@ -10,6 +10,7 @@ export function createGoogleHandoffs({ now = Date.now, ttl = 300000, limit = 100
     return item;
   };
   return {
+    assertPending(id) { const item = get(id); if (item.credential || item.busy) throw new Error('Login already submitted.'); },
     start() {
       for (const [id, item] of pending) if (item.expires <= now()) pending.delete(id);
       if (pending.size >= limit) throw new Error('Too many pending login requests.');

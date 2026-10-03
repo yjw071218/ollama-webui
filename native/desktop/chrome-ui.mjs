@@ -1,0 +1,1 @@
+document.querySelectorAll('[data-action]').forEach(button=>button.addEventListener('click',()=>window.appChrome.action(button.dataset.action)));

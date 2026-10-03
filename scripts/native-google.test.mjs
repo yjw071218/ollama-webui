@@ -34,7 +34,7 @@ test('page escapes client config and never puts credentials in URLs', () => {
   assert.ok(page.includes('nonce: id'));
   assert.ok(page.includes("history.replaceState"));
 });
-test('native login leaves origin policy to Google (registered HTTP nip.io origins work)', () => {
+test('legacy native page does not enforce origin policy locally (not a provider acceptance test)', () => {
   const script = nativeGooglePage('client').match(/<script>([\s\S]*?)<\/script>/)[1];
   for (const [protocol, hostname, hash, allowed] of [
     ['http:', '0.0.0.0.nip.io', '#' + 'a'.repeat(64), true], ['https:', 'example.com', '#' + 'a'.repeat(64), true],
@@ -72,6 +72,6 @@ test('native metadata requires gateway authentication', async () => {
   try {
     assert.equal((await fetch(gateway.origin + '/__native/info')).status, 403);
     const response = await fetch(gateway.origin + '/__native/info', {headers:{'X-Native-Gateway':gateway.token}});
-    assert.deepEqual(await response.json(), {nativeGoogle:true});
+    assert.deepEqual(await response.json(), {nativeGoogle:true,nativeKakao:true});
   } finally {await gateway.close();}
 });

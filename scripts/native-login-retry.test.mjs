@@ -25,7 +25,9 @@ test('closing a login browser leaves retry available and invalidates the old pol
   const first = button.onclick();
   for (let i = 0; i < 10; i++) await Promise.resolve();
   assert.equal(button.disabled, false);
-  assert.equal(button.textContent, 'Google로 계속');
+  assert.equal(button.className, 'auth-social-btn native-google');
+  assert.match(button.innerHTML, /Google 계정으로 계속하기/);
+  assert.match(button.innerHTML, /<svg/);
   const second = button.onclick();
   for (let i = 0; i < 10; i++) await Promise.resolve();
   assert.equal(urls.length, 2);

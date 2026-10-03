@@ -68,7 +68,7 @@ export const AuthScreen = ({ onSignedIn, onGuest, accounts = [], onUse }) => {
 
     renderGoogleButton(googleBtnRef.current, {
       locale: lang,
-      onError: (result) => { if (!cancelled) setError(t(result.error)); },
+      onError: (result) => { if (!cancelled) setError(result.detail ? `${t(result.error)} — ${result.detail}` : t(result.error)); },
       onCredential: async (credential) => {
         if (cancelled) return;
         setBusy('google');
@@ -157,7 +157,7 @@ export const AuthScreen = ({ onSignedIn, onGuest, accounts = [], onUse }) => {
     stopAutofill();
     setBusy('kakao');
     try {
-      const result = await signInWithKakao();
+      const result = await signInWithKakao({ onOpened: () => setBusy('') });
       if (result.error) {
         const base = t(result.error, { uri: result.detail || '' });
         const detail = typeof result.detail === 'string' ? result.detail : '';

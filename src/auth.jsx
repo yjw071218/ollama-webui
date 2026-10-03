@@ -116,7 +116,8 @@ export const renderGoogleButton = async (container, { onCredential, onError, loc
     container.replaceChildren();
     const button = document.createElement('button');
     button.type = 'button';
-    button.textContent = 'Google로 계속';
+    button.className = 'auth-social-btn native-google';
+    button.innerHTML = '<svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true"><path fill="#EA4335" d="M24 9.5c3.5 0 6.6 1.2 9 3.6l6.7-6.7C35.6 2.6 30.2 0 24 0 14.6 0 6.4 5.4 2.5 13.2l7.8 6.1C12.2 13.3 17.6 9.5 24 9.5z"/><path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.2-.4-4.7H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4 7.1-10 7.1-17.3z"/><path fill="#FBBC05" d="M10.3 28.7a14.6 14.6 0 010-9.4l-7.8-6.1a24 24 0 000 21.6l7.8-6.1z"/><path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.8 2.3-8.4 2.3-6.4 0-11.8-3.8-13.7-9.1l-7.8 6.1C6.4 42.6 14.6 48 24 48z"/></svg><span>Google 계정으로 계속하기</span>';
     container.appendChild(button);
     let attempt = 0;
     button.onclick = async () => {
@@ -133,8 +134,8 @@ export const renderGoogleButton = async (container, { onCredential, onError, loc
       };
       try {
         const { id, secret } = await post('start', {});
+        if (currentAttempt !== attempt || !button.isConnected) return;
         window.location.assign('/__native/auth#' + id);
-        button.textContent = 'Google로 계속';
         button.disabled = false; // Closing the browser must not lock out another attempt.
         const deadline = Date.now() + 300000;
         while (Date.now() < deadline && button.isConnected) {
@@ -146,7 +147,7 @@ export const renderGoogleButton = async (container, { onCredential, onError, loc
         }
         if (button.isConnected) throw new Error('로그인 시간이 만료되었습니다. 다시 시도하세요.');
       } catch (error) { if (currentAttempt === attempt) onError?.({ error: 'auth.googleFailed', detail: error.message }); }
-      finally { if (currentAttempt === attempt) { button.disabled = false; button.textContent = 'Google로 계속'; } }
+      finally { if (currentAttempt === attempt) { button.disabled = false; } }
     };
     return { rendered: true };
   }
@@ -213,7 +214,39 @@ export const kakaoRedirectUri = () => `${window.location.origin}/kakao/callback`
  * wants the REST API key. So the server starts it, the server exchanges the
  * code, and the browser comes back already holding a session.
  */
-export const signInWithKakao = async () => {
+let kakaoAttempt = 0;
+export const signInWithKakao = async ({ onOpened } = {}) => {
+  const attempt = ++kakaoAttempt;
+  try {
+    const info = await fetch('/__native/info', { cache: 'no-store' });
+    const native = info.ok && info.headers.get('content-type')?.includes('application/json')
+      && (await info.json()).nativeKakao === true;
+    if (native) {
+      const post = (action, body) => api('/api/auth/native/kakao/' + action, {
+        method: 'POST', body, signal: AbortSignal.timeout(15000),
+      });
+      const { id, secret } = await post('start', {});
+      if (attempt !== kakaoAttempt) return { superseded: true };
+      window.location.assign('/__native/auth#kakao:' + id);
+      onOpened?.(); // A closed browser must not lock the button for five minutes.
+      const deadline = Date.now() + 300000;
+      while (Date.now() < deadline && attempt === kakaoAttempt) {
+        await new Promise(resolve => setTimeout(resolve, 1500));
+        if (attempt !== kakaoAttempt) return { superseded: true };
+        const result = await post('poll', { id, secret });
+        if (attempt !== kakaoAttempt) return { superseded: true };
+        if (result.sessionId) {
+          window.location.assign('/?kakao=ok&sid=' + encodeURIComponent(result.sessionId));
+          return { redirecting: true };
+        }
+      }
+      if (attempt !== kakaoAttempt) return { superseded: true };
+      throw new Error('로그인 시간이 만료되었습니다. 다시 시도하세요.');
+    }
+  } catch (e) {
+    if (attempt !== kakaoAttempt) return { superseded: true };
+    return { error: 'auth.kakaoFailed', detail: e.message };
+  }
   const redirectUri = kakaoRedirectUri();
 
   // The state has to be issued by whoever will verify it — a value this page

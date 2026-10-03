@@ -2,7 +2,7 @@
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self';">
 <meta name="viewport" content="width=device-width,initial-scale=1"><title>Ollama WebUI 연결</title>
 <link rel="stylesheet" href="setup.css">
-<main><h1>Ollama WebUI</h1><p>사용할 서버 주소를 입력하세요.</p>
+<header class="app-titlebar">Ollama WebUI <span>서버 연결</span></header><main><h1>Ollama WebUI</h1><p>사용할 서버 주소를 입력하세요.</p>
 <form id="connect"><label for="url">서버 주소</label><input id="url" type="url" required placeholder="http://0.0.0.0:5173/" autocomplete="url">
 <p>0.0.0.0은 형식 예시입니다. 실제 서버의 주소로 바꿔 입력하세요.</p>
 <p class="warning">HTTP 연결은 대화·비밀번호·첨부 파일이 암호화되지 않습니다. 신뢰하는 서버에만 연결하세요. 가능하면 HTTPS를 사용하세요.</p>

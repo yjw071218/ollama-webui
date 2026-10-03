@@ -33,6 +33,7 @@ import {
 } from './webauthn.js';
 import { verifyGoogleIdToken } from './social.js';
 import { createGoogleHandoffs, nativeGooglePage } from './nativeGoogle.js';
+import { googleNativeRedirect, nativeGoogleDirectPage, nativeGoogleCallbackPage } from './nativeGoogleDirect.js';
 import {
   issueState, consumeState, authorizeUrl, exchangeCode, fetchProfile,
   validAccessToken, readTokens, writeTokens, clearTokens,
@@ -1129,6 +1130,50 @@ export const createApiRoutes = (env = {}, options = {}) => {
        server account. Otherwise there are two notions of "your account" and
        only the obscure one makes a history follow you anywhere. */
     const googleHandoffs = createGoogleHandoffs();
+    route('/api/auth/native/google/callback', (req, res) => {
+      if (req.method !== 'GET') return sendJson(res, { error: 'GET required.' }, 405);
+      res.setHeader('Content-Type', 'text/html; charset=utf-8');
+      res.setHeader('Cache-Control', 'no-store');
+      res.setHeader('Referrer-Policy', 'no-referrer');
+      res.setHeader('X-Frame-Options', 'DENY');
+      res.end(nativeGoogleCallbackPage());
+    });
+    // A separate store prevents a Kakao completion being redeemed as Google.
+    const kakaoHandoffs = createGoogleHandoffs();
+    for (const action of ['start', 'poll']) route('/api/auth/native/kakao/' + action, async (req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      if (req.method !== 'POST') return sendJson(res, { error: 'POST required.' }, 405);
+      if (!String(req.headers['content-type'] || '').startsWith('application/json'))
+        return sendJson(res, { error: 'JSON required.' }, 415);
+      try {
+        if (!kakaoCreds().restKey) return sendJson(res, { error: 'Kakao is not configured.' }, 501);
+        const body = await jsonBody(req);
+        if (action === 'start') return sendJson(res, kakaoHandoffs.start());
+        const result = kakaoHandoffs.poll(body.id, body.secret);
+        if (result.pending) return sendJson(res, result);
+        if (result.credential.error) return sendJson(res, { error: result.credential.error }, 400);
+        const user = result.credential.user;
+        const started = startSession(req, res, user);
+        sendJson(res, { success: true, sessionId: started.sessionId });
+      } catch (error) { sendError(res, error, 400); }
+    });
+    route('/api/auth/native/kakao', (req, res) => {
+      res.setHeader('Cache-Control', 'no-store');
+      if (req.method !== 'GET') return sendJson(res, { error: 'GET required.' }, 405);
+      try {
+        const id = new URL(req.url, 'http://localhost').searchParams.get('id');
+        if (!/^[a-f0-9]{64}$/.test(id || '')) throw new Error('Invalid login request.');
+        kakaoHandoffs.assertPending(id);
+        const { restKey } = kakaoCreds();
+        if (!restKey) throw new Error('Kakao is not configured.');
+        const redirectUri = kakaoCallbackUri(req, env);
+        const state = issueState({ redirectUri, nativeId: id });
+        res.setHeader('Set-Cookie', oauthStateCookie(state, isSecureRequest(req)));
+        res.setHeader('Referrer-Policy', 'no-referrer');
+        res.writeHead(302, { Location: authorizeUrl({ restKey, redirectUri, state }) });
+        res.end();
+      } catch (error) { sendError(res, error, 400); }
+    });
     route('/api/auth/native/page', (req, res) => {
       if (req.method !== 'GET') return sendJson(res, { error: 'GET required.' }, 405);
       const clientId = env.VITE_GOOGLE_CLIENT_ID || env.GOOGLE_CLIENT_ID || '';
@@ -1139,7 +1184,10 @@ export const createApiRoutes = (env = {}, options = {}) => {
       res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
       res.setHeader('Cross-Origin-Opener-Policy', 'same-origin-allow-popups');
       res.setHeader('X-Frame-Options', 'DENY');
-      res.end(nativeGooglePage(clientId));
+      try {
+        const redirectUri = googleNativeRedirect(env);
+        res.end(redirectUri ? nativeGoogleDirectPage(clientId, redirectUri) : nativeGooglePage(clientId));
+      } catch (error) { sendError(res, error, 503); }
     });
     for (const action of ['start', 'finish', 'poll']) route('/api/auth/native/' + action, async (req, res) => {
       res.setHeader('Cache-Control', 'no-store');
@@ -1858,14 +1906,24 @@ export const createApiRoutes = (env = {}, options = {}) => {
      */
     route('/kakao/callback', async (req, res) => {
       const url = new URL(req.url, 'http://localhost');
-      const back = (params) => {
+      let context;
+      const back = async (params) => {
+        if (context?.nativeId) {
+          try {
+            await kakaoHandoffs.finish(context.nativeId, { error: params.detail || '로그인이 취소되었습니다. 다시 시도하세요.' }, async () => {});
+          } catch {}
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store');
+          res.end('<!doctype html><meta charset="utf-8"><p>로그인이 취소되었거나 실패했습니다. 앱에서 다시 시도하세요.</p>');
+          return;
+        }
         res.writeHead(302, { Location: `/?${new URLSearchParams(params)}` });
         res.end();
       };
 
       const state = url.searchParams.get('state') || '';
       if (!matchingStateCookie(req, state)) return back({ kakao: 'error', detail: 'Sign-in browser could not be verified. Start again in the same browser.' });
-      const context = consumeState(state);
+      context = consumeState(state);
       res.setHeader('Set-Cookie', oauthStateCookie('', isSecureRequest(req), true));
       if (!context?.redirectUri) return back({ kakao: 'error', detail: 'That sign-in expired or was already used. Start it again.' });
       const error = url.searchParams.get('error');
@@ -1893,6 +1951,14 @@ export const createApiRoutes = (env = {}, options = {}) => {
         const user = findOrCreateSocialUser(identity);
 
         writeTokens(user.id, tokens);
+        if (context.nativeId) {
+          await kakaoHandoffs.finish(context.nativeId, { user }, async () => {});
+          res.setHeader('Content-Type', 'text/html; charset=utf-8');
+          res.setHeader('Cache-Control', 'no-store');
+          res.setHeader('Referrer-Policy', 'no-referrer');
+          res.end('<!doctype html><meta charset="utf-8"><p>로그인되었습니다. 이 탭을 닫고 앱으로 돌아가세요.</p><script>window.close()</script>');
+          return;
+        }
         // Arrives as a top-level redirect from Kakao, so this is the one
         // sign-in that cannot carry a CSRF header; the `state` parameter
         // checked above is what stands in for it.
