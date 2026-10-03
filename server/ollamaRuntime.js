@@ -2,6 +2,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { spawnDetachedHidden } from './hiddenSpawn.js';
 
 const root = fileURLToPath(new URL('../', import.meta.url));
 
@@ -32,13 +33,15 @@ export async function ensureManagedOllama(env = {}, { fetchImpl = fetch, spawnIm
   const log = fs.openSync(path.join(root, 'logs', 'ollama-managed.log'), 'a');
   let child;
   try {
-    child = spawnImpl(binary, ['serve'], {
-      cwd: root, windowsHide: true, detached: true, stdio: ['ignore', log, log],
+    // Through spawnDetachedHidden: a detached ollama.exe had no console, so
+    // every llama-server runner it started on a model load flashed a window.
+    child = spawnDetachedHidden(binary, ['serve'], {
+      cwd: root, stdio: ['ignore', log, log],
       env: { ...process.env, OLLAMA_HOST: url.host,
         OLLAMA_SCHED_SPREAD: 'true', OLLAMA_FLASH_ATTENTION: 'true',
         OLLAMA_KV_CACHE_TYPE: 'q8_0', OLLAMA_NUM_PARALLEL: '1',
         OLLAMA_MAX_LOADED_MODELS: '1', LLAMA_ARG_FIT_TARGET: fitTarget },
-    });
+    }, { spawnImpl });
   } finally { fs.closeSync(log); }
   let failure;
   child.once('error', error => { failure = error; });

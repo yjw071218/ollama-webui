@@ -26,6 +26,7 @@ import { api } from './session.jsx';
 import { stripAttachments } from './attachMarkers.js';
 import { canonicalToolTags } from './tools.js';
 import { variantsOf, variantIndexOf } from './variants.js';
+import { stripThinking } from './codeAware.js';
 
 /** Where a share is read. Relative, so it works on whatever address this is. */
 export const shareUrl = (token, origin = window.location.origin) =>
@@ -38,10 +39,9 @@ export const shareTokenFromPath = (pathname = window.location.pathname) => {
 };
 
 const stripScaffolding = (content) => stripAttachments(
-  canonicalToolTags(String(content || ''))
-    // The model's own reasoning, including a block left unterminated by a
-    // stopped stream.
-    .replace(/<think>[\s\S]*?(<\/think>|$)/gi, '')
+  // The model's own reasoning, including a block left unterminated by a
+  // stopped stream -- but not a tag quoted in code.
+  stripThinking(canonicalToolTags(String(content || '')))
     // Tool calls and everything they returned.
     .replace(/<TOOL_RESULT>[\s\S]*?(<\/TOOL_RESULT>|$)/gi, '')
     .replace(/<TOOL_[A-Z_]+(\s+[^>]*)?>[\s\S]*?(<\/TOOL_[A-Z_]+>|$)/gi, ''),

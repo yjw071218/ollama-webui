@@ -36,7 +36,8 @@ check('the settings tabs are one row on a desktop, and do not collapse to nothin
 check('  and the dialog keeps one height as tabs change', /\.settings-modal:has\(\.settings-tabs\) \{ height:/.test(css));
 check('the data tab is one grid of like buttons', /className="settings-actions data-actions"/.test(app)
   && (app.match(/className="data-action( danger)?"/g) || []).length === 6);
-check('  and deleting everything asks in the reader’s language', /window\.confirm\(t\('data\.confirmClearAll'\)\)/.test(app));
+check('  and deleting everything asks in the reader’s language, in the app’s own dialog',
+  /confirmDialog\(t\('data\.confirmClearAll'\), \{ danger: true/.test(app) && !/window\.confirm\(/.test(app));
 check('an import says whether it worked', /toast\(t\('data\.imported', \{ n: toAdd\.length \}\), 'success'\)/.test(app)
   && /toast\(t\('data\.importFailed'/.test(app));
 check('the server-setup instructions are folded away',

@@ -263,11 +263,28 @@ export const Veil = ({ verdict, level, revealKey, t, compact = false, className 
     node.style.setProperty('--ry', `${((event.clientY - box.top) / box.height) * 100}%`);
   };
 
+  /* Whether the rings run is decided here, not by `:hover`. On a phone a tap
+   * leaves the element "hovered" (and focused) until something else is
+   * touched, so rings driven by `:hover` kept spreading after the finger had
+   * left the glass. A class toggled from pointer events goes away the moment
+   * the finger lifts, whatever the browser thinks is hovered. */
+  const setRippling = (on) => frame.current?.classList.toggle('is-rippling', on);
+  const enter = (event) => { follow(event); setRippling(true); };
+  const leave = () => setRippling(false);
+  const lift = (event) => { if (event.pointerType !== 'mouse') setRippling(false); };
+
+  useEffect(() => { if (!veiled) setRippling(false); }, [veiled]);
+
   return (
     <div
       ref={frame}
       className={`safe-frame ${veiled ? 'is-veiled' : ''} ${className}`}
       onPointerMove={veiled ? follow : undefined}
+      onPointerEnter={veiled ? enter : undefined}
+      onPointerDown={veiled ? enter : undefined}
+      onPointerLeave={veiled ? leave : undefined}
+      onPointerUp={veiled ? lift : undefined}
+      onPointerCancel={veiled ? leave : undefined}
     >
       {children}
       {veiled && !compact && (

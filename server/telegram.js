@@ -29,6 +29,7 @@ import { applyChanges } from './records.js';
 import { publishRev } from './liveSync.js';
 import { runServerTurn } from './turns.js';
 import { accountContext, accountDefaultModel } from './accountContext.js';
+import { stripThinking } from '../src/codeAware.js';
 
 const API = 'https://api.telegram.org';
 const MAX_MESSAGE = 4000;         // Telegram's limit is 4096; leave room.
@@ -101,8 +102,7 @@ export const splitMessage = (text, max = MAX_MESSAGE) => {
 };
 
 /** What a model wrote, as text for a messenger: no reasoning, no tool tags. */
-export const forMessenger = (answer) => String(answer || '')
-  .replace(/<think>[\s\S]*?(<\/think>|$)/gi, '')
+export const forMessenger = (answer) => stripThinking(String(answer || ''))
   .replace(/<TOOL_[A-Z_]+(\s+[^>]*)?>[\s\S]*?(<\/TOOL_[A-Z_]+>|$)/gi, '')
   .trim();
 

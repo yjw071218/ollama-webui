@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import {
   Image as ImageIcon, Film, Sparkles, RefreshCcw, Download, Dices,
   TriangleAlert, Copy, Check, Trash2, Upload, X, Plus, ChevronDown,
@@ -279,14 +280,50 @@ const SearchPicker = ({ value, options, placeholder, emptyLabel, onChange, t }) 
   const [query, setQuery] = useState('');
   const [highlight, setHighlight] = useState(0);
   const box = useRef(null);
+  const panel = useRef(null);
+  const [place, setPlace] = useState(null);
 
   const hits = useMemo(() => searchNames(options || [], query), [options, query]);
 
   useEffect(() => {
     if (!open) return undefined;
-    const onDown = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
+    const onDown = (e) => {
+      if (box.current?.contains(e.target) || panel.current?.contains(e.target)) return;
+      setOpen(false);
+    };
     document.addEventListener('mousedown', onDown);
     return () => document.removeEventListener('mousedown', onDown);
+  }, [open]);
+
+  /* The panel is portalled to <body> with fixed coordinates. Inside the group it
+     was clipped by `::details-content { overflow: hidden }` and trapped under
+     the next group by the body's animation stacking context. It opens upward
+     when there is more room above, and follows the trigger on scroll/resize. */
+  useEffect(() => {
+    if (!open) { setPlace(null); return undefined; }
+    const update = () => {
+      const r = box.current?.getBoundingClientRect();
+      if (!r) return;
+      const vh = window.innerHeight;
+      const below = vh - r.bottom - 8;
+      const above = r.top - 8;
+      const up = below < 240 && above > below;
+      const maxHeight = Math.max(140, Math.min(360, (up ? above : below) - 4));
+      setPlace({
+        left: Math.max(8, Math.min(r.left, window.innerWidth - Math.max(r.width, 240) - 8)),
+        width: Math.max(r.width, 240),
+        top: up ? undefined : r.bottom + 4,
+        bottom: up ? vh - r.top + 4 : undefined,
+        maxHeight,
+      });
+    };
+    update();
+    window.addEventListener('resize', update);
+    window.addEventListener('scroll', update, true);
+    return () => {
+      window.removeEventListener('resize', update);
+      window.removeEventListener('scroll', update, true);
+    };
   }, [open]);
 
   useEffect(() => setHighlight(0), [query]);
@@ -305,8 +342,15 @@ const SearchPicker = ({ value, options, placeholder, emptyLabel, onChange, t }) 
         {value && loraFolder(value) && <em>{loraFolder(value)}</em>}
       </button>
 
-      {open && (
-        <div className="studio-search-panel">
+      {open && place && createPortal(
+        <div
+          ref={panel}
+          className="studio-search-panel is-floating"
+          style={{
+            left: place.left, width: place.width, top: place.top, bottom: place.bottom,
+            '--studio-search-max': `${place.maxHeight}px`,
+          }}
+        >
           <input
             autoFocus
             type="text"
@@ -344,7 +388,8 @@ const SearchPicker = ({ value, options, placeholder, emptyLabel, onChange, t }) 
               </button>
             ))}
           </div>
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

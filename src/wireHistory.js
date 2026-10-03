@@ -1,3 +1,4 @@
+import { stripThinking } from './codeAware.js';
 /**
  * What an earlier turn looks like when it is sent back to the model.
  *
@@ -76,8 +77,7 @@ export const forHistory = (content) => {
   // should cost nothing to pass through.
   if (!/<think>|<TOOL_RESULT>|---\s+\[/.test(text)) return text;
 
-  return text
-    .replace(THINK, '')
+  return stripThinking(text)
     .replace(TOOL_RESULT, '')
     .replace(INJECTED, '')
     // Whatever the removals left behind. Three blank lines where a knowledge

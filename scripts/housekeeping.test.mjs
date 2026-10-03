@@ -106,10 +106,8 @@ const twice = [
   chat(21, { updatedAt: ago(2), messages: [{ role: 'user', content: 'how do lifetimes work in rust exactly' }, { role: 'assistant', content: 'b' }] }),
 ];
 const dupes = H.suggestions(twice, { now: NOW }).filter(s => s.kind === 'duplicate');
-eq('asking the same thing twice is one suggestion, not two', dupes.length, 1);
-// The older one may have been continued; the newer is the accident.
-eq('and it is the newer copy that is offered', dupes[0].id, 21);
-eq('naming the one it duplicates', dupes[0].otherId, 20);
+// Duplicates are no longer suggested: same first question, different chats.
+eq('asking the same thing twice is not suggested as a duplicate', dupes.length, 0);
 
 // A fingerprint of "hi" would make every greeting a duplicate of every other.
 eq('two short openings are not duplicates', H.suggestions([

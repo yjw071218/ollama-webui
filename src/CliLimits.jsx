@@ -1,4 +1,5 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import { createPortal } from 'react-dom';
 import { Gauge } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
 import { notify, unattended } from './notify.js';
@@ -95,12 +96,14 @@ export const LimitBars = ({ limits, cli = '', now = Date.now() }) => {
         return (
           <div key={w.id}>
             <div style={{ display: 'flex', justifyContent: 'space-between', gap: '0.5rem', ...muted }}>
-              <span>
+              {/* The label and the share left stay on one line; only the reset
+                  text on the right may wrap, and then between words. */}
+              <span style={{ flex: 'none', whiteSpace: 'nowrap' }}>
                 <strong style={{ color: 'var(--text-primary)' }}>{windowLabel(t, w.id)}</strong>
                 {' · '}
                 {used === null ? '—' : t('cli.limit.left', { pct: Math.max(0, Math.round(100 - used)) })}
               </span>
-              <span title={w.resetsAt ? formatWhen(w.resetsAt, lang) : ''}>
+              <span style={{ minWidth: 0, textAlign: 'end' }} title={w.resetsAt ? formatWhen(w.resetsAt, lang) : ''}>
                 {w.reset
                   ? t('cli.limit.reset')
                   : w.resetsAt
@@ -192,7 +195,26 @@ export const placePanel = (trigger, viewportWidth, wanted = 300) => {
 };
 
 /**
- * The header's glance: the tightest window of the selected CLI model, as
+ * Which window the badge speaks for: the one that resets soonest. When the
+ * CLI is blocked, it is the exhausted window that decides when it comes
+ * back -- the latest-resetting of those, since all must reset first.
+ * Windows without a reset time (or already reset) go last; ties go to the
+ * more-used one.
+ */
+export const pickBadgeWindow = (windows, blocked = false, now = Date.now()) => {
+  const list = (windows || []).filter(w => Number.isFinite(w.usedPercent));
+  if (!list.length) return undefined;
+  const resetOf = (w) => (!w.reset && Number.isFinite(w.resetsAt) && w.resetsAt > now ? w.resetsAt : Infinity);
+  if (blocked) {
+    const full = list.filter(w => w.usedPercent >= 100 && resetOf(w) !== Infinity);
+    if (full.length) return full.sort((a, b) => resetOf(b) - resetOf(a))[0];
+  }
+  return list.slice().sort((a, b) => (resetOf(a) - resetOf(b)) || (b.usedPercent - a.usedPercent))[0];
+};
+
+/**
+ * The header's glance: the soonest-resetting window of the selected CLI model
+ * (see `pickBadgeWindow`), as
  * "5h 58% left · resets in 2 hr", with every window a click away.
  */
 export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
@@ -248,9 +270,8 @@ export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
 
   const limits = all[cli];
   const windows = (limits?.windows || []).filter(w => Number.isFinite(w.usedPercent));
-  // The window closest to running out decides what the badge says.
-  const tightest = windows.slice().sort((a, b) => b.usedPercent - a.usedPercent)[0];
   const blocked = limits?.status === 'rejected';
+  const tightest = pickBadgeWindow(windows, blocked, now);
   const color = blocked ? 'var(--danger)' : tightest ? colorOf(tightest.usedPercent) : 'var(--text-muted)';
 
   return (
@@ -282,7 +303,10 @@ export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
               )}
         </span>
       </button>
-      {open && place && (
+      {/* Portalled to <body>: `position: fixed` inside the chat column is still
+          trapped in that column's stacking context, so an open artifact panel
+          (a later sibling) was painted over it whatever its z-index. */}
+      {open && place && createPortal(
         <div
           ref={panelRef}
           className="dropdown-menu"
@@ -292,7 +316,7 @@ export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
             position: 'fixed', top: place.top, left: place.left, right: 'auto',
             width: place.width, minWidth: 0, maxWidth: 'none',
             maxHeight: `calc(100dvh - ${Math.round(place.top) + 12}px)`,
-            padding: '0.75rem', cursor: 'default', zIndex: 1000, boxSizing: 'border-box',
+            padding: '0.75rem', cursor: 'default', zIndex: 'var(--z-popover)', boxSizing: 'border-box',
           }}
         >
           <div style={{ fontWeight: 600, fontSize: '0.85rem', marginBottom: '0.5rem' }}>
@@ -300,7 +324,8 @@ export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
           </div>
           <LimitBars limits={limits} cli={cli} now={now} />
           <BudgetBar budget={budget} />
-        </div>
+        </div>,
+        document.body,
       )}
     </div>
   );

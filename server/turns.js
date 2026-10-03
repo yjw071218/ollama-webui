@@ -34,6 +34,7 @@ import { database } from './db.js';
 import { applyChanges } from './records.js';
 import { publishRev } from './liveSync.js';
 import { stripAttachments } from '../src/attachMarkers.js';
+import { stripThinking } from '../src/codeAware.js';
 
 /* How much history travels. A server turn has no context budgeting of its own
    -- the browser's lives in App.jsx -- so it takes a conservative slice rather
@@ -70,8 +71,7 @@ const readSetting = (owner, key) => {
 };
 
 /** What a message says to the model, without the scaffolding around it. */
-export const plainContent = (content) => stripAttachments(String(content || ''))
-  .replace(/<think>[\s\S]*?(<\/think>|$)/gi, '')
+export const plainContent = (content) => stripThinking(stripAttachments(String(content || '')))
   .replace(/<TOOL_RESULT>[\s\S]*?(<\/TOOL_RESULT>|$)/gi, '')
   .replace(/<TOOL_[A-Z_]+(\s+[^>]*)?>[\s\S]*?(<\/TOOL_[A-Z_]+>|$)/gi, '')
   .trim();

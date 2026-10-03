@@ -7,6 +7,7 @@
  * prompt included. Pure, so that is testable without rendering anything.
  */
 import { decodeByteFallback } from './byteFallback.js';
+import { insideCode } from './codeAware.js';
 import { DRAWING_TAGS, tagAttrs, TAG_ATTRS, canonicalToolTags } from './tools.js';
 
 /* A tool call, whatever attributes it carries and in whatever order.
@@ -20,6 +21,9 @@ const MESSAGE_PARTS = new RegExp(
   `(?:<think>([\\s\\S]*?)(?:<\\/think>|$))|(?:${TOOL_CALL})|(?:<TOOL_RESULT>([\\s\\S]*?)<\\/TOOL_RESULT>)`,
   'gi',
 );
+
+/* Whether a tag sits in code: see src/codeAware.js. */
+export { insideCode };
 
 /** One tool call as a block, from its name, attribute text and body. */
 const toolCallBlock = (tool, attrText, body = '', extra = {}) => {
@@ -55,6 +59,14 @@ export const parseAssistantMessage = (content, { streaming = false } = {}) => {
   let match;
 
   while ((match = regex.exec(currentText)) !== null) {
+    /* A tag quoted in code is text. A diff of this very file, or an answer
+       explaining <think>, used to open a thinking block mid-answer: the rest
+       of the reply -- the diff, the closing fence, every later change card --
+       vanished into the dropdown, and the caret froze inside a half code block. */
+    if (insideCode(currentText.slice(lastIndex, match.index))) {
+      regex.lastIndex = match.index + 1;
+      continue;
+    }
     if (match.index > lastIndex) {
       const beforeText = currentText.substring(lastIndex, match.index).trim();
       if (beforeText) blocks.push({ type: 'text', content: beforeText });

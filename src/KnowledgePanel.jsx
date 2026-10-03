@@ -6,6 +6,7 @@ import {
   removeDocument,
   saveLibrary,
   DEFAULT_EMBED_MODEL,
+  isEmbeddingModel,
 } from './rag.js';
 import { ingestDocument } from './ingest.js';
 
@@ -97,8 +98,12 @@ export const KnowledgePanel = ({ userId, models, embedModel, onEmbedModelChange,
     return found ? found.name : t('rag.scopeGoneFolder');
   };
 
-  const totalChunks = docs.reduce((sum, d) => sum + (d.chunks?.length || 0), 0);
-  const embedCandidates = models.filter(m => /embed|bge|gte|minilm|e5/i.test(m.name));
+  /* A file attached in a chat belongs to that chat: it is indexed and read
+     there automatically, and goes when the chat goes. It is not something to
+     manage here, so the list is the shared library (and folder documents). */
+  const shown = docs.filter(d => !d.chatId);
+  const totalChunks = shown.reduce((sum, d) => sum + (d.chunks?.length || 0), 0);
+  const embedCandidates = models.filter(isEmbeddingModel);
 
   return (
     <>
@@ -117,7 +122,7 @@ export const KnowledgePanel = ({ userId, models, embedModel, onEmbedModelChange,
       </div>
 
       <div className="settings-group">
-        <label>{t('rag.documents')} ({docs.length}{totalChunks ? ` · ${t('rag.chunks', { count: totalChunks })}` : ''})</label>
+        <label>{t('rag.documents')} ({shown.length}{totalChunks ? ` · ${t('rag.chunks', { count: totalChunks })}` : ''})</label>
 
         <input
           ref={fileRef}
@@ -152,10 +157,10 @@ export const KnowledgePanel = ({ userId, models, embedModel, onEmbedModelChange,
         )}
 
         <div className="rag-list">
-          {docs.length === 0 && !busy && (
+          {shown.length === 0 && !busy && (
             <div style={{ fontSize: '0.8rem', color: 'var(--text-muted)' }}>{t('rag.empty')}</div>
           )}
-          {docs.map(doc => (
+          {shown.map(doc => (
             <div className={`rag-item ${doc.enabled === false ? 'is-off' : ''}`} key={doc.id}>
               <FileText size={14} />
               <div className="rag-item-meta">

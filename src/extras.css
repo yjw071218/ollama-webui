@@ -123,7 +123,7 @@
   justify-content: center;
   align-items: flex-start;
   padding-top: 12vh;
-  z-index: 200;
+  z-index: calc(var(--z-modal) + 10);
 }
 
 .cmd-palette {
@@ -230,7 +230,7 @@
   border-radius: var(--radius-md);
   box-shadow: var(--shadow-lifted);
   padding: 0.35rem;
-  z-index: 30;
+  z-index: var(--z-dropdown);
 }
 
 .slash-item {
@@ -284,8 +284,14 @@
   justify-content: center;
   color: var(--primary);
   font-weight: 600;
-  z-index: 40;
+  z-index: calc(var(--z-dropdown) - 10);
   pointer-events: none;
+}
+/* Covers the whole chat, inset so the dashed edge reads as a target. */
+.dropzone-overlay.is-chat-wide {
+  inset: 0.75rem;
+  font-size: 1.05rem;
+  backdrop-filter: blur(2px);
 }
 
 /* ==== Settings: tabs, model manager, prompt library ==== */
@@ -434,7 +440,7 @@
   border-radius: var(--radius-sm);
   box-shadow: var(--shadow-lifted);
   padding: 0.25rem;
-  z-index: 50;
+  z-index: var(--z-dropdown);
 }
 
 /* ==== Small layout fixes for the extended sidebar/composer ==== */
@@ -518,7 +524,7 @@
   display: flex;
   flex-direction: column;
   gap: 0.5rem;
-  z-index: 300;
+  z-index: var(--z-toast);
   max-width: min(420px, 90vw);
   /* The stack is a column of fixed height that is mostly empty air, and at
      z-index 300 that air is over everything. Only the notices themselves take
@@ -1017,7 +1023,7 @@ mark.chat-hit.current {
 
 .resize-handle {
   position: absolute;
-  z-index: 60;
+  z-index: calc(var(--z-panel) + 10);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -1061,7 +1067,7 @@ mark.chat-hit.current {
 .resize-handle.dragging .resize-grip { background: var(--primary); }
 
 /* Swallows pointer events over the preview iframe while dragging. */
-.resize-overlay { position: fixed; inset: 0; z-index: 500; touch-action: none; }
+.resize-overlay { position: fixed; inset: 0; z-index: var(--z-drag); touch-action: none; }
 
 /* A finger is wider than 9px: a larger target, and a grip that can be seen. */
 @media (pointer: coarse) {
@@ -1223,7 +1229,7 @@ mark.chat-hit.current {
    * told. The one being used wins. This only lifts menus at the top level of
    * the document: one inside the settings overlay or the Studio is inside that
    * element's stacking context and cannot climb out of it. */
-  z-index: 310;
+  z-index: var(--z-popover);
 }
 
 .outline-wrap { position: relative; }
@@ -1272,7 +1278,7 @@ mark.chat-hit.current {
     inset: 0;
     width: 100% !important;
     max-width: none;
-    z-index: 120;
+    z-index: calc(var(--z-panel) + 20);
   }
   .artifact-panel > .resize-x { display: none; }
   .claude-app.has-artifact .claude-main { display: flex; }
@@ -1287,11 +1293,7 @@ mark.chat-hit.current {
   transform-origin: top left;
   margin: 0;
 }
-
-/* The settings, chat-info and shortcut modals share z-index 50 with the
-   artifact panel and come earlier in the DOM, so the panel used to cover
-   them. Lift the overlays above it. */
-.settings-overlay { z-index: 150; }
+/* Settings and other modals sit on --z-modal, above every panel (see index.css). */
 
 /* =========================================================
    Auth screen
@@ -1748,8 +1750,15 @@ img.user-avatar { object-fit: cover; padding: 0; }
   vertical-align: -0.15em;
   border-radius: 1px;
   background: var(--primary);
-  animation: caret-blink 1.05s steps(1, end) infinite;
+  /* The blink runs on .markdown-body (below), not here. The last child is
+     replaced on almost every token, and an animation on it restarted each
+     time in its "on" half -- a caret that never went out. */
 }
+/* Blinked by a timer in main.jsx that toggles html.caret-off, not by a CSS
+   animation: animations restart whenever the last child is replaced, so a CSS
+   blink never went out while tokens streamed in. A system caret still blinks
+   under reduced motion, so this one does too. */
+html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
 
 .stream-dots { display: flex; gap: 0.3rem; align-items: center; height: 1.4rem; }
 .stream-dots span {
@@ -1772,7 +1781,11 @@ img.user-avatar { object-fit: cover; padding: 0; }
   from { opacity: 0; transform: translateY(var(--motion-shift)); }
   to { opacity: 1; transform: none; }
 }
-.message-row { animation: message-in var(--dur-slow) var(--ease-out) both; }
+/* `backwards`, not `both`: a fill held after the animation keeps every message
+   its own stacking context for good, so a menu opened inside one slid under
+   the next message -- and on a phone each held layer is memory. */
+.message-row { animation: message-in var(--dur-slow) var(--ease-out) backwards; }
+
 .message-row .msg-hover-actions { transition: opacity var(--dur-fast) var(--ease-out); }
 
 /* Invisible means out of reach.
@@ -2040,23 +2053,46 @@ img.user-avatar { object-fit: cover; padding: 0; }
 /* =========================================================
    Per-word reveal while streaming
    ========================================================= */
+/* Opacity only. A `filter: blur()` per word made the browser repaint every
+   word still in its reveal on every frame -- dozens at once while a fast model
+   streams -- and the reveal stuttered. Opacity is composited and costs almost
+   nothing; the trailing words, each at a different point of its fade, still
+   give a soft writing head. `transform` does nothing on inline spans, so it
+   is gone too. */
 @keyframes token-in {
-  from { opacity: 0; filter: blur(var(--motion-blur)); transform: translateY(calc(var(--motion-shift) * 0.2)); }
-  to { opacity: 1; filter: blur(0px); transform: none; }
+  from { opacity: 0; }
+  to { opacity: 1; }
 }
 
 /* Only words that just mounted animate; settled text is left alone because
-   React reuses the DOM node for an unchanged position. */
+   React reuses the DOM node for an unchanged position. `backwards`, not
+   `both`: a held fill keeps every finished word an animated element. */
 .markdown-body .tok {
-  animation: token-in 520ms var(--ease-out) both;
+  animation: token-in 360ms cubic-bezier(0.25, 0.1, 0.25, 1) backwards;
   display: inline;
 }
+/* Inline code fades with the words, on the same curve, so it no longer lands
+   ahead of the text in front of it. */
+.markdown-body.is-streaming code.tok-code {
+  animation: token-in 360ms cubic-bezier(0.25, 0.1, 0.25, 1) backwards;
+}
 
-/* No block-level mask: it faded the bottom of the paragraph, which is not
-   where the model is writing. The gradient comes from the trailing words
-   instead — each one is at a different point in its own reveal, so the
-   softness sits exactly at the writing head and travels with it. */
-.markdown-body.is-streaming .tok:nth-last-child(-n+2) { --motion-blur: 6px; }
+/* Decoding reveal (src/decodeReveal.js): while a word carries data-scramble,
+   its real letters are transparent but keep their width, and the symbols are
+   drawn over them. Nothing reflows when the attribute goes. */
+.markdown-body .tok[data-scramble] {
+  position: relative;
+  color: transparent;
+}
+.markdown-body .tok[data-scramble]::before {
+  content: attr(data-scramble);
+  position: absolute;
+  inset: 0 auto auto 0;
+  white-space: pre;
+  color: var(--btn-active);
+  opacity: 0.85;
+  pointer-events: none;
+}
 
 /* =========================================================
    Enter / exit for anything that opens
@@ -3084,7 +3120,7 @@ img.user-avatar { object-fit: cover; padding: 0; }
 /* The menu is portalled to <body>, so it needs its own stacking and a ceiling
    on its height — a long folder list would otherwise run off the screen. */
 .anchored-menu {
-  z-index: 1200;
+  z-index: var(--z-popover);
   max-height: min(60vh, 420px);
   overflow-y: auto;
   box-shadow: 0 10px 30px rgba(0, 0, 0, 0.28);
@@ -3187,7 +3223,7 @@ img.user-avatar { object-fit: cover; padding: 0; }
     position: fixed;
     inset-block: 0;
     inset-inline-start: 0;
-    z-index: 60;
+    z-index: var(--z-panel);
     /* Wide enough to read a chat title, never the whole screen. */
     width: min(86vw, 340px);
     margin-left: 0;
@@ -3207,7 +3243,7 @@ img.user-avatar { object-fit: cover; padding: 0; }
   .sidebar-backdrop {
     position: fixed;
     inset: 0;
-    z-index: 55;
+    z-index: calc(var(--z-panel) - 5);
     background: rgba(0, 0, 0, 0.45);
     border: 0;
     padding: 0;
@@ -3248,7 +3284,7 @@ img.user-avatar { object-fit: cover; padding: 0; }
   .artifact-panel {
     position: fixed;
     inset: 0;
-    z-index: 70;
+    z-index: calc(var(--z-panel) + 10);
     width: 100% !important;
     max-width: none;
     border-radius: 0;
@@ -4298,7 +4334,7 @@ img.user-avatar { object-fit: cover; padding: 0; }
 .selection-bar {
   position: fixed;
   transform: translateX(-50%);
-  z-index: 60;
+  z-index: var(--z-panel);
   display: flex;
   align-items: center;
   gap: 0.1rem;
@@ -4398,7 +4434,7 @@ img.user-avatar { object-fit: cover; padding: 0; }
 .attachment-viewer {
   position: fixed;
   inset: 0;
-  z-index: 70;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -7320,7 +7356,7 @@ body, .claude-main { background: var(--surface-sunken); }
   top: calc(100% - 0.2rem);
   left: 0;
   right: 0;
-  z-index: 20;
+  z-index: var(--z-dropdown);
   margin: 0;
   padding: 0.25rem;
   list-style: none;
@@ -8046,7 +8082,7 @@ body, .claude-main { background: var(--surface-sunken); }
 .picture-tags-backdrop {
   position: fixed;
   inset: 0;
-  z-index: 60;
+  z-index: var(--z-modal);
   display: flex;
   align-items: center;
   justify-content: center;
@@ -9050,7 +9086,7 @@ body, .claude-main { background: var(--surface-sunken); }
   .canvas-panel {
     position: fixed;
     inset: 0;
-    z-index: 80;
+    z-index: calc(var(--z-panel) + 15);
     width: auto;
     border: none;
   }
@@ -9088,6 +9124,16 @@ body, .claude-main { background: var(--surface-sunken); }
   }
   .cli-limit-window { display: none; }
 }
+
+.header-model-menu { scrollbar-gutter: stable; }
+.header-model-menu > * { flex-shrink: 0; }
+.header-model-search {
+  position: sticky;
+  top: 0;
+  z-index: 1;
+  background: var(--surface-overlay);
+}
+.header-model-count { white-space: nowrap; font-size: 11px; color: var(--text-secondary); }
 
 /* Anchor the expanded model menu to the header, not its compressed trigger.
    The quota badge may share the row without shrinking the list itself. */
@@ -9392,7 +9438,7 @@ body, .claude-main { background: var(--surface-sunken); }
 }
 
 /* Every running command, from anywhere (bottom left; approvals are bottom right). */
-.commands-dock { position: fixed; left: 16px; bottom: 16px; z-index: 2900; display: grid; gap: 8px; justify-items: start; }
+.commands-dock { position: fixed; left: 16px; bottom: 16px; z-index: var(--z-dock); display: grid; gap: 8px; justify-items: start; }
 .commands-dock-pill {
   display: inline-flex; align-items: center; gap: 0.4rem; padding: 0.35rem 0.75rem;
   border-radius: 999px; border: 1px solid var(--warning, #d97706);
@@ -9675,6 +9721,21 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 .live-work-spark { color: var(--btn-active); animation: live-work-spin 2.4s linear infinite; display: inline-block; }
 @keyframes live-work-spin { to { transform: rotate(360deg); } }
 @media (prefers-reduced-motion: reduce) { .live-work-spark { animation: none; } }
+/* Nothing has arrived for a while: the spark slows and the note takes the
+   warning colour, so a stall does not read as work. */
+.live-work-status.is-stalled .live-work-spark { animation-duration: 7s; opacity: 0.6; }
+.live-work-idle { color: #C2410C; }
+/* Output going into the folded steps: one line, cut with an ellipsis. */
+.live-work-fold {
+  min-width: 0;
+  max-width: 42ch;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  color: var(--btn-active);
+}
+.live-work-status:has(.live-work-fold) { min-width: 0; max-width: 100%; }
+@media (prefers-color-scheme: dark) { .live-work-idle { color: #F0A070; } }
 
 /* mobile-perf: on a phone, blur behind overlays is redrawn every frame by a
    weak GPU, and purely decorative loops keep it busy while idle. */
@@ -9685,3 +9746,61 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 @media (prefers-reduced-motion: reduce) {
   .empty-logo svg, .studio-progress-waiting svg { animation: none; }
 }
+
+/* ---- confirm / alert dialog (ConfirmDialog.jsx), replaces window.confirm ---- */
+.confirm-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-modal) + 50);
+  display: grid;
+  place-items: center;
+  padding: max(16px, env(safe-area-inset-top)) 16px max(16px, env(safe-area-inset-bottom));
+  background: rgba(0, 0, 0, 0.45);
+  animation: confirm-fade 140ms ease-out;
+}
+.confirm-dialog {
+  width: min(420px, 100%);
+  max-height: calc(100dvh - 32px);
+  overflow-y: auto;
+  padding: 20px;
+  border-radius: var(--radius-lg);
+  background: var(--bg-main);
+  color: var(--text-primary);
+  border: 1px solid var(--border-color);
+  box-shadow: 0 24px 64px rgba(0, 0, 0, 0.28);
+  animation: confirm-rise 160ms ease-out;
+}
+.confirm-dialog-head { display: flex; align-items: flex-start; gap: 10px; }
+.confirm-dialog-head svg { flex: none; margin-top: 2px; color: #d64545; }
+.confirm-dialog h2 { margin: 0; font-size: 1rem; font-weight: 600; line-height: 1.45; white-space: pre-line; }
+.confirm-dialog p { margin: 10px 0 0; font-size: 0.875rem; line-height: 1.55; color: var(--text-secondary); white-space: pre-line; }
+.confirm-dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; flex-wrap: wrap; }
+.confirm-dialog-actions button {
+  min-height: 40px;
+  padding: 0 16px;
+  border-radius: var(--radius-sm);
+  font: inherit;
+  font-size: 0.875rem;
+  font-weight: 600;
+  cursor: pointer;
+  border: 1px solid transparent;
+}
+.confirm-dialog-actions .btn-secondary { background: transparent; color: var(--text-primary); border-color: var(--border-color); }
+.confirm-dialog-actions .btn-secondary:hover { background: var(--hover-bg); }
+.confirm-dialog-actions .btn-primary { background: var(--btn-active); color: var(--btn-active-text); }
+.confirm-dialog-actions .btn-danger { background: #c93c3c; color: #fff; }
+.confirm-dialog-actions .btn-danger:hover { background: #b13232; }
+.confirm-dialog-actions button:focus-visible { outline: 2px solid var(--btn-active); outline-offset: 2px; }
+@media (max-width: 520px) {
+  /* A bottom sheet with full-width buttons; Cancel is last, nearest the thumb. */
+  .confirm-overlay { place-items: end center; }
+  .confirm-dialog-actions { flex-direction: column-reverse; }
+  .confirm-dialog-actions button { width: 100%; min-height: 44px; }
+}
+@keyframes confirm-fade { from { opacity: 0; } }
+@keyframes confirm-rise { from { opacity: 0; transform: translateY(8px) scale(0.98); } }
+@media (prefers-reduced-motion: reduce) { .confirm-overlay, .confirm-dialog { animation: none; } }
+
+/* Shown for the moment a lazily loaded panel's code is arriving (lazyPanel.jsx).
+   A fixed height keeps the dialog from jumping when the panel appears. */
+.lazy-panel-loading { min-height: 120px; }

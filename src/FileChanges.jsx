@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { FilePen, ChevronDown, Undo2, Code2, Check } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
 import { diffLines } from './fileChanges.js';
+import { confirmDialog } from './ConfirmDialog.jsx';
 
 /**
  * What the tools changed on disk this turn, shown with the answer.
@@ -58,7 +59,7 @@ const FileChange = ({ change, canUndo }) => {
   const name = String(change.file).split(/[\\/]/).pop();
 
   const undo = async () => {
-    if (!window.confirm(t('changes.undoConfirm', { file: change.file }))) return;
+    if (!(await confirmDialog(t('changes.undoConfirm', { file: change.file }), { danger: true, confirmLabel: t('changes.undoShort') }))) return;
     setState('busy');
     try {
       const d = await fetch('/cli/workbench/revert', {

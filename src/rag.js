@@ -29,7 +29,20 @@ import { rerankHits } from './rerank.js';
 
 const store = localforage.createInstance({ name: 'ollama-webui', storeName: 'knowledge' });
 
-export const DEFAULT_EMBED_MODEL = 'nomic-embed-text';
+/* Qwen3-Embedding 0.6B: multilingual, and far stronger on Korean than
+ * nomic-embed-text, which was trained on English and ranked Korean passages
+ * little better than chance. Small enough to sit beside a chat model. */
+export const DEFAULT_EMBED_MODEL = 'qwen3-embedding:0.6b';
+/* What documents embedded before a model was recorded on them were made with. */
+export const LEGACY_EMBED_MODEL = 'nomic-embed-text';
+
+/** True for a model that only makes vectors and cannot be chatted with. */
+export const isEmbeddingModel = (m) => {
+  const name = String(m?.name || m?.model || m || '').toLowerCase();
+  const family = String(m?.details?.family || '').toLowerCase();
+  return /embed|(^|[/:-])bge|(^|[/:-])gte|minilm|(^|[/:-])e5[-:]|nomic-bert|bert$/.test(name)
+    || /bert|embed/.test(family);
+};
 
 /* =========================================================================
    Text extraction
@@ -526,6 +539,7 @@ const searchSetFor = (docs) => {
         page: chunk.page,
         text: chunk.text,
         vector: chunk.vector,
+        embedModel: doc.embedModel || LEGACY_EMBED_MODEL,
       });
     }
   }
@@ -560,12 +574,30 @@ export const retrieve = async (query, docs, {
   const searchSet = searchSetFor(active);
   const { candidates } = searchSet;
 
-  const [queryVector] = await embedTexts([query], model, signal);
-  const normalised = normalise(queryVector);
+  /* The query is embedded once per model the library was built with: a
+     document indexed by the previous embedder keeps working (vectors of two
+     models are not comparable, so each is scored against its own). A model
+     that is gone only loses its dense half; the lexical half still finds it. */
+  const queryVectors = new Map();
+  for (const name of new Set(candidates.map(c => c.embedModel || model))) {
+    try {
+      // Qwen3-Embedding is trained with an instruction on the query side
+      // (never the passage side); with it the answer pulls clearly ahead of
+      // passages that merely share the topic.
+      const text = /qwen3-embedding/i.test(name)
+        ? `Instruct: Given a question, retrieve passages that answer it\nQuery: ${query}`
+        : query;
+      const [raw] = await embedTexts([text], name, signal);
+      queryVectors.set(name, normalise(raw));
+    } catch (err) {
+      if (signal?.aborted) throw err;
+      if (name === model && !hybrid) throw err;
+    }
+  }
 
   const dense = candidates
-    .filter(c => c.vector)
-    .map(c => ({ candidate: c, score: dot(normalised, c.vector) }))
+    .filter(c => c.vector && queryVectors.has(c.embedModel || model))
+    .map(c => ({ candidate: c, score: dot(queryVectors.get(c.embedModel || model), c.vector) }))
     .filter(hit => hit.score >= minScore)
     .sort((a, b) => b.score - a.score);
 

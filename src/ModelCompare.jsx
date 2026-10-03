@@ -85,6 +85,19 @@ const Column = ({ run, onCopy, copied }) => {
 export const ModelCompare = ({ models, defaultPrompt, systemPrompt, options, language = '', onClose }) => {
   const { t } = useI18n();
   const [prompt, setPrompt] = useState(defaultPrompt || '');
+
+  // Esc closes it, like every other dialog in the app.
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key !== 'Escape' || e.defaultPrevented) return;
+      e.preventDefault();
+      closeRef.current?.();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, []);
   const [selected, setSelected] = useState(() => models.slice(0, 2).map(m => m.name));
   const [runs, setRuns] = useState([]);
   const [running, setRunning] = useState(false);
@@ -285,10 +298,16 @@ export const ModelCompare = ({ models, defaultPrompt, systemPrompt, options, lan
 
   return (
     <div className="settings-overlay" onClick={onClose}>
-      <div className="settings-modal compare-modal" onClick={e => e.stopPropagation()}>
+      <div
+        className="settings-modal compare-modal"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="compare-title"
+        onClick={e => e.stopPropagation()}
+      >
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '0.75rem' }}>
-          <h2 style={{ marginBottom: 0 }}>{t('compare.title')}</h2>
-          <button className="icon-btn" onClick={onClose}><X size={18} /></button>
+          <h2 id="compare-title" style={{ marginBottom: 0 }}>{t('compare.title')}</h2>
+          <button className="icon-btn" onClick={onClose} aria-label={t('common.close')} title={`${t('common.close')} (Esc)`}><X size={18} /></button>
         </div>
 
         <div className="settings-group">

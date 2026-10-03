@@ -51,7 +51,7 @@ const firewallPort = () => new Promise((resolve) => {
   execFile('powershell.exe', ['-NoProfile', '-Command',
     "(Get-NetFirewallRule -DisplayName 'Ollama WebUI' -ErrorAction SilentlyContinue | " +
     'Get-NetFirewallPortFilter).LocalPort'],
-  { timeout: 15000 }, (err, stdout) => resolve(err ? '' : String(stdout).trim()));
+  { timeout: 15000, windowsHide: true }, (err, stdout) => resolve(err ? '' : String(stdout).trim()));
 });
 
 console.log('');

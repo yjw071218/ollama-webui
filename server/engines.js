@@ -28,6 +28,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { spawn } from 'node:child_process';
+import { spawnDetachedHidden } from './hiddenSpawn.js';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -296,13 +297,13 @@ export const createEngines = (env = {}, { fetchImpl = fetch, spawnImpl = spawn, 
       let exited = null;
       let child;
       try {
-        child = spawnImpl(command, args, {
+        // Hidden console on Windows, so what the engine runs (ffmpeg,
+        // nvidia-smi, any subprocess) does not flash a window. See hiddenSpawn.js.
+        child = spawnDetachedHidden(command, args, {
           cwd,
           env: childEnv,
-          detached: true,
-          windowsHide: true,
           stdio: ['ignore', out, out],
-        });
+        }, { spawnImpl });
       } catch (e) {
         fs.closeSync(out);
         return { ok: false, error: `${resolved.label} could not be started: ${e.message}` };

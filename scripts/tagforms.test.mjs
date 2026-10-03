@@ -93,8 +93,8 @@ eq('a tool result is not a call', T.canonicalToolTags('<TOOL_RESULT>x</TOOL_RESU
   check('which the video pattern then matches', !!hit && T.tagAttrs(hit[1]).duration === '5' && /\[2s-5s\]/.test(hit[2]));
   check('the model is told the form in so many words', /not as a prompt="…" attribute and not in a self-closing/.test(app));
   check('speech and export read it the same way',
-    /const cleanForExport = \(content\) => canonicalToolTags\(content \|\| ''\)/.test(app)
-    && /const stripForSpeech = \(text\) => stripAttachments\(\s*\n\s*canonicalToolTags\(text \|\| ''\)/.test(app));
+    /const cleanForExport = \(content\) => stripThinking\(canonicalToolTags\(content \|\| ''\)\)/.test(app)
+    && /const stripForSpeech = \(text\) => stripAttachments\(\s*\n\s*stripThinking\(canonicalToolTags\(text \|\| ''\)/.test(app));
 }
 {
   const { sessionToMarkdown } = await load('src/htmlExport.js');

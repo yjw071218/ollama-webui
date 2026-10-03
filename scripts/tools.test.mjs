@@ -203,7 +203,7 @@ check('which reads the capability /api\\/show already reports',
 // Both protocols at once would give the model two ways to do one thing, and it
 // would sometimes do both.
 check('the tag instructions are dropped when native tools are in use',
-  /if \(mcpEnabled && !useNativeTools && mcpToolCallsInTurnForSystem === 0\)/.test(app));
+  /if \(mcpEnabled && !cliTurn && !useNativeTools && mcpToolCallsInTurnForSystem === 0\)/.test(app));
 
 check('structured calls are collected from the stream', /for \(const call of toolCallsIn\(parsed\)\) nativeCalls\.push\(call\)/.test(app));
 check('and routed into the one executor', /const toolSource = canonicalToolTags\(nativeText \|\| answerText\)/.test(app));
@@ -251,7 +251,8 @@ check('web results continue the document numbering',
 // A link in an answer used to replace the app, and a model is very often
 // still writing when somebody follows a source it just cited.
 check('a link in an answer opens a new tab',
-  /a: \(\{ node, \.\.\.props \}\) => \([\s\S]{0,120}?target="_blank" rel="noopener noreferrer"/.test(app));
+  /const AnswerLink = \(\{ node, \.\.\.props \}\) => <a \{\.\.\.props\} target="_blank" rel="noopener noreferrer"/.test(app)
+  && /a: AnswerLink/.test(app));
 // `[3]` when two passages came back is the model inventing a source, and
 // dressing that up as a link would be the worst outcome available.
 check('a number with no passage behind it stays plain text',

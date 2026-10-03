@@ -180,8 +180,16 @@
   opacity: 0;
   transition: opacity var(--dur) var(--ease-out);
 }
-.safe-frame.is-veiled:hover .safe-ripples,
-.safe-frame.is-veiled:focus-within .safe-ripples { opacity: 1; }
+/* `.is-rippling` is set from pointer events in `Veil`, not `:hover`: a phone
+   keeps an element "hovered" after the finger has lifted, and the rings went
+   on spreading under nothing. Keyboard focus still lights it, but only a
+   visible focus -- a tap focuses the reveal button too. */
+.safe-frame.is-veiled.is-rippling .safe-ripples,
+.safe-frame.is-veiled:has(:focus-visible) .safe-ripples { opacity: 1; }
+
+/* While hidden, the rings stop. Faded to nothing they were still animating --
+   three layers repainting forever under every veiled picture on the page. */
+.safe-frame:not(.is-rippling):not(:has(:focus-visible)) .safe-ring { animation-play-state: paused; }
 
 /* The light the pointer gathers. Follows on `--ease-glass`, which is nearly
    linear: anything slower lags behind the finger and reads as broken. */
@@ -226,10 +234,12 @@
   100% { transform: scale(14); opacity: 0; border-width: 0.5px; }
 }
 
-/* A phone has no pointer to follow, so the rings would either never run or run
-   for ever in the middle of the picture. They are a hover affordance; without
-   hover there is nothing to afford. */
-@media (hover: none) { .safe-ripples { display: none; } }
+/* On a phone the rings run only while a finger is on the glass and stop when
+   it lifts (see `.is-rippling` above). Fading out quicker than on a desktop:
+   the finger has already gone, and a slow fade reads as the rings lingering. */
+@media (hover: none) {
+  .safe-ripples { transition-duration: var(--dur-fast); }
+}
 
 @media (prefers-reduced-motion: reduce) {
   /* The light may stay -- it moves only where the finger already is -- but

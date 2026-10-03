@@ -7,6 +7,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { Copy, KeyRound, Send, Trash2 } from 'lucide-react';
 import { api } from './session.jsx';
+import { confirmDialog } from './ConfirmDialog.jsx';
 
 const when = (ms) => (ms ? new Date(ms).toLocaleDateString() : '—');
 
@@ -45,7 +46,7 @@ export default function IntegrationsPanel({ user, t, toast, copyText }) {
     } catch (e) { toast?.(e.message, 'error'); }
   };
   const revoke = async (id) => {
-    if (!window.confirm(t('integrations.revokeConfirm'))) return;
+    if (!(await confirmDialog(t('integrations.revokeConfirm'), { danger: true, confirmLabel: t('integrations.revoke') }))) return;
     try {
       const out = await api('/api/auth/apikeys', { method: 'POST', body: { revoke: id } });
       setKeys(out.keys || []);

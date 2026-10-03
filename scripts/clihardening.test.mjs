@@ -24,6 +24,26 @@ const ok = (cond, what) => {
   if (cond) pass++; else { fail++; console.error(`FAIL ${what}`); }
 };
 
+/* Absolute request targets from proxies must not bypass the CLI model list. */
+{
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async () => ({ ok: true, json: async () => ({ models: [{ name: 'local' }] }) });
+  try {
+    const middleware = C.cliInterceptor({
+      CLI_PROVIDERS: 'claude-code', CLAUDE_CLI_PATH: process.execPath,
+      CLI_CLAUDE_MODELS: 'opus',
+    });
+    for (const url of ['/api/tags', '/api/tags?refresh=1', 'http://example.test:5173/api/tags?refresh=1']) {
+      let body, passedThrough = false;
+      await middleware({ method: 'GET', url }, {
+        setHeader() {}, end(value) { body = JSON.parse(value); },
+      }, () => { passedThrough = true; });
+      ok(!passedThrough && body?.models.some(m => m.name === 'claude-code:opus')
+        && body.models.some(m => m.name === 'local'), `CLI models included for ${url}`);
+    }
+  } finally { globalThis.fetch = originalFetch; }
+}
+
 /* ---- limits: phrases, not single words */
 for (const s of ['You have hit your usage limit', 'Error: 429 Too Many Requests', 'status: 429', 'insufficient_quota',
   'You exceeded your current quota', 'RESOURCE_EXHAUSTED', 'rate limit exceeded', 'weekly limit reached', 'limit reached · resets at 5pm']) {

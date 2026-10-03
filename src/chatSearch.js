@@ -24,6 +24,7 @@
 import localforage from 'localforage';
 import { embedTexts, normalise, dot, DEFAULT_EMBED_MODEL } from './rag.js';
 import { conversationTime } from './sessionEdit.js';
+import { stripThinking } from './codeAware.js';
 
 const store = localforage.createInstance({ name: 'ollama-webui', storeName: 'chatIndex' });
 
@@ -70,8 +71,7 @@ export const indexablePieces = (sessions) => {
     session.messages.forEach((message, index) => {
       if (!message || (message.role !== 'user' && message.role !== 'assistant')) return;
       const content = typeof message.content === 'string' ? message.content : '';
-      const text = content
-        .replace(/<think>[\s\S]*?(<\/think>|$)/gi, '')
+      const text = stripThinking(content)
         .replace(/<TOOL_[A-Z_]*>[\s\S]*?(<\/TOOL_[A-Z_]*>|$)/gi, '')
         .trim();
       if (text.length < 20) return;

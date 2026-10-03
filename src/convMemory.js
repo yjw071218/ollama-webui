@@ -46,7 +46,7 @@
  *
  * ## Working without an embedding model
  *
- * `nomic-embed-text` may not be installed, and the whole thing has to degrade
+ * The embedding model (`DEFAULT_EMBED_MODEL` in rag.js) may not be installed, and the whole thing has to degrade
  * rather than fail. With no embedder, retrieval falls back to word overlap,
  * which is worse and is still much better than dropping the turns entirely.
  */
@@ -223,7 +223,7 @@ const WORD = /[\p{L}\p{N}]{2,}/gu;
  * Word overlap, weighted towards rarer words so that "the" and "이" do not
  * decide the ranking. Much worse than embeddings and much better than dropping
  * the turns — and it is the path that runs on a machine where nobody has
- * installed `nomic-embed-text`, which is most of them.
+ * installed an embedding model, which is most of them.
  */
 export const keywordRank = (query, turns) => {
   const asked = new Set((String(query || '').toLowerCase().match(WORD) || []));

@@ -1606,6 +1606,7 @@ export class AgyReader {
       if (step.thinking_delta) { this.sawThinking = true; return { ...started, thinking: String(step.thinking_delta) }; }
       if (step.step_type === 'agent_response' && step.text_delta) {
         this.sawText = true;
+        this.text = (this.text || '') + String(step.text_delta);
         return { ...started, content: step.text_delta };
       }
       return started.started ? started : null;
@@ -1625,6 +1626,13 @@ export class AgyReader {
       };
       if (result.status && result.status !== 'SUCCESS') out.error = String(result.error || result.status);
       else if (!this.sawText && result.response) out.content = String(result.response);
+      else if (result.response) {
+        /* agy now and then ends the stream without its last text_delta, while
+           the result still carries the whole answer -- the chat showed it cut
+           off mid-sentence. Whatever the stream missed is added here. */
+        const full = String(result.response), got = this.text || '';
+        if (full.length > got.length && full.startsWith(got)) out.content = full.slice(got.length);
+      }
       return out;
     }
     return null;
@@ -1935,7 +1943,7 @@ export const watchScratch = (dir, before, emit) => {
 const killTree = (child) => {
   if (!child || child.exitCode !== null) return;
   if (process.platform === 'win32') {
-    execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], () => {});
+    execFile('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }, () => {});
   } else {
     try { child.kill('SIGTERM'); } catch { /* already gone */ }
   }
@@ -2227,6 +2235,7 @@ export const cliTagEntries = async (env = {}, providers = availableProviders(env
   (await Promise.all(providers.map(async p => (await modelsOf(p, env)).map(m => toTagEntry(p, m))))).flat();
 
 const listTags = async (req, res, env, providers) => {
+  res.setHeader('Cache-Control', 'no-store');
   const [upstream, mine] = await Promise.all([
     upstreamTags(env).then(models => ({ models }), error => ({ error })),
     cliTagEntries(env, providers),
@@ -2708,7 +2717,9 @@ export const cliInterceptor = (env = {}) => {
   if (providers.length) watchResets();
   return async (req, res, next) => {
     if (!providers.length) return next();
-    const pathname = (req.url || '').split('?')[0];
+    // Proxies may send an absolute request target; use the same pathname as
+    // the outer server router so CLI requests cannot fall through to Ollama.
+    const pathname = new URL(req.url || '/', 'http://localhost').pathname;
 
     if (pathname === '/api/tags' && req.method === 'GET') {
       try { return await listTags(req, res, env, providers); } catch (e) { return sendJson(res, { error: String(e.message || e) }, 502); }

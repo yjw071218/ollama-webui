@@ -18,6 +18,9 @@ import { trackViewport } from './viewport.js'
 import { SharedChat } from './SharedChat.jsx'
 import { shareTokenFromPath } from './shareLink.js'
 import { I18nProvider } from './i18n.jsx'
+import { installDecodeReveal } from './decodeReveal.js'
+
+installDecodeReveal()
 
 // Started before React, and never stopped: the app is one screenful with a
 // composer pinned to its bottom edge, and where that edge is depends on
@@ -79,6 +82,18 @@ const ScopedApp = () => {
  * The i18n provider stays, because the page still has words in it.
  */
 const sharedToken = shareTokenFromPath()
+
+// The streaming caret's blink (see .markdown-body.is-streaming in extras.css):
+// one class on <html>, flipped every 530ms, so no element's re-render or the
+// reduced-motion rule can freeze it. Only flips while an answer is streaming.
+setInterval(() => {
+  const html = document.documentElement;
+  if (document.hidden || !document.querySelector('.markdown-body.is-streaming')) {
+    html.classList.remove('caret-off');
+    return;
+  }
+  html.classList.toggle('caret-off');
+}, 530);
 
 createRoot(document.getElementById('root')).render(
   <StrictMode>

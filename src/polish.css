@@ -79,13 +79,16 @@ html { scrollbar-width: thin; scrollbar-color: var(--border-color) transparent; 
 }
 
 /* ---- 4. motion ---- */
+/* Reduced motion is handled by the tokens in extras.css: travel goes to zero
+   and the fades stay. This used to cut every animation and transition in the
+   app to 0.01ms with !important -- which overrode that system wholesale, made
+   the in-app "full motion" choice do nothing, and turned every state change
+   into a hard cut. Only what loops on its own is stopped here. */
 @media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after {
-    animation-duration: 0.01ms !important; animation-iteration-count: 1 !important;
-    transition-duration: 0.01ms !important; scroll-behavior: auto !important;
-  }
-  .spin { animation: none !important; }
+  :root:not([data-motion="full"]) .spin { animation: none !important; }
+  :root:not([data-motion="full"]) * { scroll-behavior: auto !important; }
 }
+:root[data-motion="reduced"] .spin { animation: none !important; }
 
 /* ---- 5. changed-file card: roomier, and its buttons one shape ----
    VS Code and undo are the same square icon button; undo differs by colour only. */

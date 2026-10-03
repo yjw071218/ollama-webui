@@ -1,4 +1,7 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap');
+/* Inter is requested from index.html, not @imported here: an @import inside
+   the main stylesheet held the whole stylesheet -- and so the first paint --
+   until Google answered, and a phone on a LAN with no internet waited for that
+   request to time out before showing anything. */
 
 :root {
   /* Claude Light Theme */
@@ -26,6 +29,20 @@
   --radius-xs: 5px;    /* things under about 24px: ticks, badges, icon hits */
   --radius-pill: 999px;
   --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+
+  /* Layers. Every element that floats above the page takes one of these
+     (± a small offset when two on the same layer must be ordered), never a
+     raw number: raw numbers had grown to 26 values between 0 and 3000, and
+     each new popover guessed one and ended up under something.
+     Small values (1-10) inside one component stay local and need no token. */
+  --z-sticky: 20;     /* sticky headers, the desktop sidebar */
+  --z-dropdown: 50;   /* menus that open inside their own panel */
+  --z-panel: 100;     /* full-screen panels on mobile: drawer, artifact, canvas */
+  --z-modal: 200;     /* dialogs, settings, viewers, lightbox */
+  --z-toast: 300;     /* notices stay readable over a dialog */
+  --z-popover: 400;   /* portalled menus and popovers, above dialogs that open them */
+  --z-dock: 500;      /* the always-on command dock and agent window */
+  --z-drag: 600;      /* the invisible sheet that catches a panel resize drag */
 }
 
 @media (prefers-color-scheme: dark) {
@@ -61,6 +78,13 @@ body {
   -webkit-font-smoothing: antialiased;
 }
 
+/* Korean wraps between words, not inside one ("생성 / 중…", "초기 / 화").
+   A single word too long for its box still breaks rather than overflowing. */
+:root:lang(ko) body {
+  word-break: keep-all;
+  overflow-wrap: break-word;
+}
+
 #root {
   width: 100%;
   height: 100%;
@@ -85,7 +109,7 @@ body {
   display: flex;
   flex-direction: column;
   transition: transform 0.3s ease, margin-left 0.3s ease;
-  z-index: 20;
+  z-index: var(--z-sticky);
   border-right: 1px solid var(--border-color);
 }
 
@@ -294,6 +318,14 @@ body {
   outline: none;
 }
 .model-dropdown:hover { color: var(--text-primary); }
+/* `outline: none` above hides the browser ring; this puts one back for the
+   keyboard only, so Tab shows where it is without a ring on every click. */
+.model-dropdown:focus-visible {
+  color: var(--text-primary);
+  outline: 2px solid var(--btn-active);
+  outline-offset: 2px;
+  border-radius: var(--radius-xs);
+}
 .dropdown-icon {
   position: absolute;
   right: 0;
@@ -618,7 +650,7 @@ body {
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 50;
+  z-index: var(--z-modal);
   backdrop-filter: blur(4px);
 }
 
@@ -744,7 +776,7 @@ body {
   min-width: 240px;
   max-height: 300px;
   overflow-y: auto;
-  z-index: 100;
+  z-index: var(--z-dropdown);
   padding: 0.5rem;
   display: flex;
   flex-direction: column;
@@ -1103,7 +1135,7 @@ body {
   display: flex;
   flex-direction: column;
   height: 100vh;
-  z-index: 50;
+  z-index: var(--z-panel);
   transition: width 0.3s ease;
 }
 

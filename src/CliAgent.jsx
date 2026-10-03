@@ -3,6 +3,7 @@ import { ShieldQuestion, Undo2, Flag, Puzzle, History, Check, X, GitMerge, Trash
 import { useI18n } from './i18n.jsx';
 import { cliLabel } from './CliLimits.jsx';
 import { groupSessions } from './cliTurn.js';
+import { confirmDialog } from './ConfirmDialog.jsx';
 
 /**
  * The CLIs as coding agents (server/cliProject.js), in the browser:
@@ -54,7 +55,7 @@ export const CliApprovals = () => {
   if (!list.length) return null;
   return (
     <div className="cli-approvals" role="alertdialog" aria-label={t('cliAgent.approvalTitle')}
-      style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 3000, width: 'min(440px, calc(100vw - 32px))', display: 'grid', gap: 8 }}>
+      style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 'var(--z-dock)', width: 'min(440px, calc(100vw - 32px))', display: 'grid', gap: 8 }}>
       {list.map(a => (
         <div key={a.id} style={{ background: 'var(--bg-secondary, #1e1e1e)', border: '1px solid var(--warning, #d97706)', borderRadius: 10, padding: 12, boxShadow: '0 6px 24px rgba(0,0,0,.35)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: '0.85rem' }}>
@@ -265,7 +266,7 @@ export const CliAgentPanel = ({ providers = [], onImportChat, refreshKey = 0 }) 
   const when = (ms) => new Date(ms).toLocaleString(lang);
 
   const undo = async (id) => {
-    if (!window.confirm(t('cliAgent.undoConfirm'))) return;
+    if (!(await confirmDialog(t('cliAgent.undoConfirm'), { danger: true, confirmLabel: t('cliAgent.undo') }))) return;
     const d = await post('/cli/project-revert', { id }).catch(e => ({ error: e.message }));
     setMessage(d.success ? t('cliAgent.undone') : (d.error || 'failed'), !d.success);
     load();

@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react'
 import hljs from 'highlight.js/lib/common';
 import { copyText } from './clipboard.js';
 import { Play, RefreshCcw, Copy, Check, Trash2, TriangleAlert, Pencil, RotateCcw, TextWrap, Square } from 'lucide-react';
+import { stripThinking as stripCode } from './codeAware.js';
 
 /* =========================================================================
    Fence parsing
@@ -9,7 +10,7 @@ import { Play, RefreshCcw, Copy, Check, Trash2, TriangleAlert, Pencil, RotateCcw
 
 // Reasoning is not part of the answer, so code the model wrote while
 // thinking must never become an artifact.
-export const stripThinking = (text) => (text || '').replace(/<think>[\s\S]*?(<\/think>|$)/gi, '');
+export const stripThinking = (text) => stripCode(text || '');
 
 const OPEN_FENCE = /^[ \t]{0,3}(`{3,}|~{3,})[ \t]*([^\n]*)$/;
 const CLOSE_FENCE = /^[ \t]{0,3}(`{3,}|~{3,})[ \t]*$/;

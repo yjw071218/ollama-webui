@@ -1,4 +1,4 @@
-/* ============================================== the rest of how it moves
+﻿/* ============================================== the rest of how it moves
 
    The motion system lives in extras.css, under `Motion`, and it is older and
    better thought through than this file was when it arrived. It has what a
@@ -60,7 +60,9 @@
    removing it. Rising four pixels, not eight: twenty things each leaping into
    place is a list nobody can read while it settles. */
 
-@keyframes rise-in {
+/* Named apart from extras.css's `rise-in`: they shared the name, and since this
+   file loads later it silently replaced the empty state's longer rise. */
+@keyframes rise-in-soft {
   from {
     opacity: 0;
     transform: translateY(calc(var(--motion-shift, 10px) * 0.4)) scale(var(--motion-scale, 0.97));
@@ -68,13 +70,17 @@
   to { opacity: 1; transform: none; }
 }
 
+/* Used by the picture fades below and by the lightbox, and defined nowhere
+   until now -- so every one of those animations quietly did nothing. */
+@keyframes fade-in { from { opacity: 0; } to { opacity: 1; } }
+
 /* A thing that has just been made, as opposed to one that was already there. */
 @keyframes pop-in {
   from { opacity: 0; transform: scale(calc(1 - (1 - var(--motion-scale, 0.97)) * 2.5)); }
   to { opacity: 1; transform: none; }
 }
 
-.motion-rise { animation: rise-in var(--dur) var(--ease-out) both; }
+.motion-rise { animation: rise-in-soft var(--dur) var(--ease-out) both; }
 .motion-pop { animation: pop-in var(--dur) var(--ease-spring) both; }
 .motion-fade { animation: fade-in var(--dur-fast) var(--ease-out) both; }
 
@@ -128,3 +134,207 @@
   .picture-gallery-item:hover,
   .studio-job:hover { transform: translateY(calc(var(--motion-shift, 10px) * -0.2)); }
 }
+
+/* --------------------------------------------------------- menus that popped
+
+   Every other menu in the app opens on `menu-in` (extras.css). The studio's
+   job menu appeared in a single frame beside them; it now opens like the rest,
+   from the corner it hangs off. */
+.studio-job-menu {
+  transform-origin: top right;
+  animation: menu-in var(--dur-fast) var(--ease-out) both;
+}
+/* Menus that open upwards grow from the edge they are attached to. */
+.composer-menu { transform-origin: bottom left; }
+.composer-model-menu { transform-origin: bottom right; }
+
+/* Rows inside a menu: the highlight follows the pointer on the shared curve,
+   instead of index.css's flat 0.2s that trailed behind a quick sweep. */
+.dropdown-item,
+.composer-menu-item,
+.cmd-item {
+  transition:
+    background-color var(--dur-fast) var(--ease-out),
+    color var(--dur-fast) var(--ease-out);
+}
+
+/* ------------------------------------------------------------- the sidebar
+
+   It slid on `ease` over 0.3s -- the one panel in the app on a curve of its
+   own, and a curve that starts slow, so the panel seemed to hesitate before
+   answering the button. Same tokens as every other panel now. */
+.claude-sidebar {
+  transition:
+    transform var(--dur-slow) var(--ease-out),
+    margin-left var(--dur-slow) var(--ease-out);
+}
+/* Dragging the resize handle must track the finger, not ease after it. */
+html.is-panel-resizing .claude-sidebar { transition: none; }
+
+/* ----------------------------------------------------------- message tools
+
+   The toolbar under a message faded in place. A pixel or two of travel tells
+   the eye where it came from without moving anything the reader is reading. */
+/* Pointer screens only: on touch the toolbar is shown without hover, and an
+   offset there would just be a toolbar two pixels out of place. While shown
+   it carries no transform at all, so a menu opened from it is not trapped in
+   a transformed box. */
+@media (hover: hover) {
+  .message-row .msg-hover-actions {
+    transition:
+      opacity var(--dur-fast) var(--ease-out),
+      transform var(--dur) var(--ease-out);
+    transform: translateY(calc(var(--motion-shift, 10px) * -0.2));
+  }
+  .message-row:hover .msg-hover-actions,
+  .message-row.actions-open .msg-hover-actions,
+  .message-row:focus-within .msg-hover-actions { transform: none; }
+}
+
+/* A conversation in the sidebar gives a little when pressed, like a button. */
+.history-item { transition: background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+.history-item:active { transform: scale(calc(1 - (1 - var(--press-scale, 0.94)) * 0.3)); }
+
+/* ------------------------------------------------------------ touch screens
+
+   A phone keeps whatever was last tapped in `:hover` until something else is
+   tapped, so a card lifted by a tap stayed lifted. Lifts are a pointer
+   affordance; on touch the press feedback is enough. */
+@media (hover: none) {
+  .artifact-card:hover,
+  .starter-card:hover,
+  .charlab-card:hover,
+  .send-btn.active:hover { transform: none; }
+  .profile-avatar-btn:hover { transform: none; filter: none; }
+}
+
+/* ------------------------------------------------------- lists, staggered
+
+   The first few rows of a list arrive one after another, 30ms apart; the
+   rest come with the eighth. Capped so a long history never takes long to
+   settle -- past the fold nobody sees the cascade anyway. Runs only on mount,
+   so picking a conversation or scrolling does not replay it. */
+.history-item,
+.picture-gallery-item,
+.studio-job,
+.charlab-card {
+  /* `backwards`, not `both`: a held end frame would pin `transform: none`
+     and swallow the press and hover transforms these rows already have. */
+  animation: rise-in-soft var(--dur) var(--ease-out) backwards;
+  animation-delay: calc(min(var(--stagger-i, 8), 8) * 30ms);
+}
+:is(.history-item, .picture-gallery-item, .studio-job, .charlab-card):nth-child(1) { --stagger-i: 0; }
+:is(.history-item, .picture-gallery-item, .studio-job, .charlab-card):nth-child(2) { --stagger-i: 1; }
+:is(.history-item, .picture-gallery-item, .studio-job, .charlab-card):nth-child(3) { --stagger-i: 2; }
+:is(.history-item, .picture-gallery-item, .studio-job, .charlab-card):nth-child(4) { --stagger-i: 3; }
+:is(.history-item, .picture-gallery-item, .studio-job, .charlab-card):nth-child(5) { --stagger-i: 4; }
+:is(.history-item, .picture-gallery-item, .studio-job, .charlab-card):nth-child(6) { --stagger-i: 5; }
+:is(.history-item, .picture-gallery-item, .studio-job, .charlab-card):nth-child(7) { --stagger-i: 6; }
+/* A row being dragged keeps its own look, not the entrance's end frame. */
+.history-item.dragging { animation: none; }
+
+/* ------------------------------------------------------ moving between places
+
+   Chat, studio and the rest switch through document.startViewTransition (see
+   setSidebarPlace in App.jsx). A short cross-fade; the sidebar is lifted out
+   of the snapshot so it stays put while only the main area changes. */
+.claude-sidebar { view-transition-name: app-sidebar; }
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--dur-fast, 160ms);
+  animation-timing-function: var(--ease-out, ease-out);
+}
+::view-transition-group(app-sidebar) { animation: none; }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"])::view-transition-group(*),
+  :root:not([data-motion="full"])::view-transition-old(*),
+  :root:not([data-motion="full"])::view-transition-new(*) { animation: none; }
+}
+
+
+/* ------------------------------------------------------- small arrivals
+
+   Things that appeared in a single frame while everything around them moved. */
+
+/* The drop target: fades in under the dragged file instead of snapping on. */
+.dropzone-overlay { animation: fade-in var(--dur-fast) var(--ease-out) both; }
+
+/* The usage badge in the header: arrives with a fade once limits load, and
+   its colour eases between safe / warning / blocked instead of jumping. */
+.cli-limit-badge { animation: fade-in var(--dur) var(--ease-out) both; }
+.cli-limit-badge .dropdown-trigger { transition: color var(--dur) var(--ease-out), border-color var(--dur) var(--ease-out), background-color var(--dur-fast) var(--ease-out); }
+
+/* "Copied": the confirmation gives a small pop so the eye catches it. */
+.code-copy-btn { transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out); }
+.code-copy-btn.is-on { animation: pop-in var(--dur) var(--ease-spring) both; }
+
+/* The context meter filled on a flat 0.3s; same curve as everything else. */
+.ctx-meter-fill { transition: width var(--dur-slow) var(--ease-out), background-color var(--dur) var(--ease-out); }
+
+/* -------------------------------------------------------------- settings
+
+   Each tab's content is mounted fresh when the tab is picked, so an entrance
+   on the groups plays exactly on a tab switch and never while typing in one.
+   Same short cascade as the lists, capped at the sixth group. */
+.settings-tabs ~ .settings-group {
+  animation: rise-in-soft var(--dur) var(--ease-out) backwards;
+  animation-delay: calc(min(var(--stagger-i, 6), 6) * 25ms);
+}
+.settings-tabs ~ .settings-group:nth-child(2) { --stagger-i: 0; }
+.settings-tabs ~ .settings-group:nth-child(3) { --stagger-i: 1; }
+.settings-tabs ~ .settings-group:nth-child(4) { --stagger-i: 2; }
+.settings-tabs ~ .settings-group:nth-child(5) { --stagger-i: 3; }
+.settings-tabs ~ .settings-group:nth-child(6) { --stagger-i: 4; }
+.settings-tabs ~ .settings-group:nth-child(7) { --stagger-i: 5; }
+
+/* Scroll arrows on the settings tab strip (App.jsx). Sticky inside the
+   strip so they ride its edges; on a pointer screen the edge fade is dropped,
+   since it would fade the arrows themselves -- the arrow is the signal now. */
+.settings-tabs-arrow { display: none; }
+@media (hover: hover) and (pointer: fine) {
+  .settings-tabs { position: relative; }
+  .settings-tabs[data-overflow] { mask-image: none !important; }
+  .settings-tabs-arrow {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    flex: 0 0 auto;
+    position: sticky;
+    z-index: 1;
+    width: 2rem;
+    align-self: stretch;
+    border: none;
+    color: var(--text-muted);
+    cursor: pointer;
+    animation: fade-in var(--dur-fast) var(--ease-out) both;
+    transition: color var(--dur-fast) var(--ease-out);
+  }
+  .settings-tabs-arrow:hover { color: var(--text-primary, inherit); }
+  .settings-tabs-arrow:active svg { transform: scale(var(--press-scale, 0.94)); }
+  .settings-tabs-arrow.is-start {
+    inset-inline-start: 0;
+    background: linear-gradient(to right, var(--surface-raised, var(--bg-main)) 65%, transparent);
+  }
+  .settings-tabs-arrow.is-end {
+    inset-inline-end: 0;
+    margin-inline-start: auto;
+    background: linear-gradient(to left, var(--surface-raised, var(--bg-main)) 65%, transparent);
+  }
+  [dir='rtl'] .settings-tabs-arrow svg { transform: scaleX(-1); }
+}
+
+/* The tab underline and colour changed in one frame; they ease now. */
+.settings-tab {
+  transition:
+    color var(--dur-fast) var(--ease-out),
+    border-bottom-color var(--dur) var(--ease-out),
+    transform var(--dur-fast) var(--ease-out);
+}
+.settings-tab:active { transform: scale(calc(1 - (1 - var(--press-scale, 0.94)) * 0.5)); }
+
+/* A saved preset appears with the same pop as anything just made. */
+.preset-chip.saved { animation: pop-in var(--dur) var(--ease-spring) backwards; }
+
+/* The ✕ on an attachment: turns towards red instead of switching. */
+.attachment-remove { transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+.attachment-remove:active { transform: scale(var(--press-scale, 0.94)); }

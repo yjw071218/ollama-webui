@@ -88,9 +88,11 @@ check('  from the pointer, not the middle',
 check('  thinning as it travels, the way a wave loses height',
   /@keyframes safe-ripple[\s\S]*?border-width: 0\.5px/.test(safeguard));
 check('  only while a pointer is actually on it',
-  /\.safe-frame\.is-veiled:hover \.safe-ripples/.test(safeguard));
-check('  and not at all where there is no pointer to follow',
-  /@media \(hover: none\)[\s\S]*?\.safe-ripples\s*\{\s*display: none/.test(safeguard));
+  /\.safe-frame\.is-veiled\.is-rippling \.safe-ripples/.test(safeguard)
+  && !/\.safe-frame\.is-veiled:hover \.safe-ripples/.test(safeguard));
+check('  and on touch, gone the moment the finger lifts',
+  /onPointerUp=\{veiled \? lift/.test(read('src/SafeImage.jsx'))
+  && /\.safe-ring \{ animation-play-state: paused; \}/.test(safeguard));
 check('  nor when motion has been asked to stop',
   /prefers-reduced-motion[\s\S]*?\.safe-ring\s*\{\s*display: none/.test(safeguard));
 check('the ripple never touches the blur that covers the picture',

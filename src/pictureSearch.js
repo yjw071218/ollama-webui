@@ -92,7 +92,10 @@ export const buildIndex = async (scope, items, {
 } = {}) => {
   const pieces = indexablePictures(items);
   const previous = await loadIndex(scope);
-  const known = new Map((previous?.entries || []).map(entry => [entry.key, entry.vector]));
+  // Vectors from another embedder are not comparable (nor, usually, the same
+  // length): a model change starts the index over.
+  const reusable = previous && (previous.model || 'nomic-embed-text') === model ? previous.entries : [];
+  const known = new Map((reusable || []).map(entry => [entry.key, entry.vector]));
 
   const missing = pieces.filter(piece => !known.has(piece.key));
   onProgress({ done: 0, total: missing.length });

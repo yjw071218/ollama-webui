@@ -11,6 +11,7 @@
 import React, { useCallback, useEffect, useState } from 'react';
 import { History, RefreshCcw, RotateCcw } from 'lucide-react';
 import { api } from './session.jsx';
+import { confirmDialog } from './ConfirmDialog.jsx';
 
 export const listChatRevisions = async (id) =>
   (await api(`/api/auth/history?${new URLSearchParams({ kind: 'chat', id: String(id) })}`)).revisions || [];
@@ -54,7 +55,7 @@ export default function ChatTimeline({ chat, signedIn, t, onRestore, toast }) {
   useEffect(() => { if (open && revisions === null) load(); }, [open, revisions, load]);
 
   const restore = async (rev) => {
-    if (!window.confirm(t('timeline.confirm', { date: when(rev.updatedAt) }))) return;
+    if (!(await confirmDialog(t('timeline.confirm', { date: when(rev.updatedAt) }), { confirmLabel: t('timeline.restore') }))) return;
     setBusy(true);
     try {
       const old = await readChatRevision(chat.id, rev.rev);

@@ -322,7 +322,10 @@
 }
 
 .studio-group-body {
-  animation: studio-group-open var(--dur) var(--ease-out) both;
+  /* `backwards`, not `both`: a fill that outlives the animation keeps a
+     transform on the body forever, which makes every group its own stacking
+     context and buries any popover inside it under the next group. */
+  animation: studio-group-open var(--dur) var(--ease-out) backwards;
 }
 
 @supports (interpolate-size: allow-keywords) {
@@ -332,7 +335,14 @@
     overflow: hidden;
     transition: height var(--dur) var(--ease-out), content-visibility var(--dur) allow-discrete;
   }
-  .studio-group[open]::details-content { height: auto; }
+  /* Hidden only while the height animates; once open, a popover inside (tag
+     suggestions) may hang below the group instead of being cut off. */
+  .studio-group[open]::details-content {
+    height: auto;
+    overflow: visible;
+    transition: height var(--dur) var(--ease-out), content-visibility var(--dur) allow-discrete,
+      overflow 0s var(--dur) allow-discrete;
+  }
 }
 
 .studio-group-body {
@@ -489,7 +499,7 @@
 }
 .studio-search-panel {
   position: absolute;
-  z-index: 30;
+  z-index: var(--z-dropdown);
   top: calc(100% + 4px);
   left: 0;
   right: 0;
@@ -512,6 +522,18 @@
   font: inherit;
   font-size: var(--step-0);
 }
+/* Portalled to <body>: fixed to the viewport, above every panel and footer. */
+.studio-search-panel.is-floating {
+  position: fixed;
+  right: auto;
+  z-index: var(--z-popover);
+  display: flex;
+  flex-direction: column;
+  max-height: var(--studio-search-max, 320px);
+  box-sizing: border-box;
+}
+.studio-search-panel.is-floating .studio-search-input { flex: none; }
+.studio-search-panel.is-floating .studio-search-list { max-height: none; flex: 1 1 auto; min-height: 0; }
 .studio-search-list { display: flex; flex-direction: column; max-height: 260px; overflow-y: auto; }
 .studio-search-hit {
   display: flex;
@@ -830,7 +852,7 @@
   /* Over the toasts (300) and the command palette (200): a notice parked on
      the corner of the picture is exactly what the viewer is for getting away
      from. Under menus anchored to something (1200). */
-  z-index: 400;
+  z-index: var(--z-modal);
   display: grid;
   grid-template-rows: auto minmax(0, 1fr) auto;
   background: rgba(12, 12, 14, 0.95);
@@ -1307,7 +1329,9 @@
 }
 .studio-queue-item.is-running { border-color: color-mix(in srgb, var(--accent) 55%, transparent); }
 .studio-queue-item.is-running b { color: var(--accent); }
-.studio-queue-item b { font-weight: 600; font-variant-numeric: tabular-nums; }
+/* The state ("생성 중…") never wraps or shrinks; the prompt beside it is what
+   gives up room and ellipsizes. */
+.studio-queue-item b { flex: none; white-space: nowrap; font-weight: 600; font-variant-numeric: tabular-nums; }
 .studio-queue-what {
   min-width: 0;
   overflow: hidden;
@@ -1432,7 +1456,7 @@
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  z-index: 20;
+  z-index: var(--z-dropdown);
   min-width: 200px;
   display: flex;
   flex-direction: column;
@@ -1769,7 +1793,7 @@
   display: inline-flex;
   align-items: center;
   gap: 0.3rem;
-  animation: rise-in var(--dur) var(--ease-out) both;
+  animation: rise-in-soft var(--dur) var(--ease-out) both;
 }
 .studio-preset-naming input {
   width: 10rem;
@@ -1782,6 +1806,7 @@
   font-size: 0.72rem;
 }
 .studio-preset-naming input:focus { outline: none; }
+.studio-preset-naming input:focus-visible { outline: 2px solid rgba(var(--primary-rgb), 0.7); outline-offset: 1px; }
 
 /* --------------------------------------------------------------- a sweep */
 

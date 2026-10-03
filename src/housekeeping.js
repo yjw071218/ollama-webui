@@ -77,7 +77,7 @@ const opening = (session) => {
  * What to do about the sidebar.
  *
  * Ordered by how safe the suggestion is: empty and abandoned chats first —
- * losing one costs nothing — then duplicates, then stale, then the big ones,
+ * losing one costs nothing — then stale, then the big ones,
  * which are a suggestion to *read* rather than to remove.
  */
 export const suggestions = (sessions = [], { now = Date.now() } = {}) => {
@@ -116,25 +116,10 @@ export const suggestions = (sessions = [], { now = Date.now() } = {}) => {
   }
 
   /* ---------------------------------------------------------- duplicates */
-  // Asked the same thing twice, usually because the first attempt was not
-  // found. The older one is the one to keep -- it may have been continued.
-  const byOpening = new Map();
-  for (const session of live) {
-    const key = opening(session);
-    if (key.length < 20) continue;      // too short to be a fingerprint
-    if (!byOpening.has(key)) byOpening.set(key, []);
-    byOpening.get(key).push(session);
-  }
-  for (const group of byOpening.values()) {
-    if (group.length < 2) continue;
-    const sorted = group.slice().sort((a, b) => touchedAt(a) - touchedAt(b));
-    for (const session of sorted.slice(1)) {
-      claim(session, {
-        kind: 'duplicate', id: session.id, title: session.title || '',
-        action: 'delete', otherId: sorted[0].id, otherTitle: sorted[0].title || '',
-      });
-    }
-  }
+  // Not suggested. "Same first question" flagged chats that went somewhere
+  // different after it (regenerated, asked of another model, continued), so
+  // the rows were more often wrong than right. `opening` stays for callers.
+  void opening;
 
   /* --------------------------------------------------------------- stale */
   for (const session of live) {

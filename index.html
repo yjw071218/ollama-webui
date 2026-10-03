@@ -35,6 +35,13 @@
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <meta name="apple-mobile-web-app-title" content="Ollama" />
     <link rel="apple-touch-icon" href="/icon-maskable.svg" />
+    <!-- Inter, without blocking the first paint: media="print" makes the
+         browser fetch it at low priority and apply nothing; onload switches it
+         on. Until then (or offline, forever) the system font in --font-sans is
+         used, which is what display=swap would have shown anyway. -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&display=swap" media="print" onload="this.media='all'" />
     <title>ollama-webui</title>
   </head>
   <body>

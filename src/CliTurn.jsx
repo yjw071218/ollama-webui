@@ -4,6 +4,7 @@ import { useI18n } from './i18n.jsx';
 import { cliLabel, cliOf } from './CliLimits.jsx';
 import { runIdOf, clockText, clockState, nextEffort, nextOffState } from './cliTurn.js';
 import './cliTurn.css';
+import { confirmDialog } from './ConfirmDialog.jsx';
 
 /**
  * What a CLI turn shows in the chat, beyond its text:
@@ -64,7 +65,7 @@ export const CliRunCard = ({ runId }) => {
 
   const revert = async (files) => {
     const count = files ? files.length : left.length;
-    if (!window.confirm(t('cliTurn.undoConfirm', { count }))) return;
+    if (!(await confirmDialog(t('cliTurn.undoConfirm', { count }), { danger: true, confirmLabel: t('changes.undoShort') }))) return;
     setState('busy');
     try {
       const d = await post('/cli/project-revert', { id: run.id, ...(files ? { files } : {}) });

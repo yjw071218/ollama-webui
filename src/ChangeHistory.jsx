@@ -1,6 +1,7 @@
 ﻿import React, { useEffect, useMemo, useState } from 'react';
 import { Undo2, Code2, Check, RefreshCcw, FilePlus2, FilePen, Search } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
+import { confirmDialog } from './ConfirmDialog.jsx';
 
 /**
  * Every file the workbench changed recently (server/workbenchState.js keeps
@@ -34,7 +35,7 @@ export const ChangeHistory = () => {
   }, [items, query]);
 
   const undo = async (file) => {
-    if (!window.confirm(t('changes.undoConfirm', { file }))) return;
+    if (!(await confirmDialog(t('changes.undoConfirm', { file }), { danger: true, confirmLabel: t('changes.undoShort') }))) return;
     setBusy(file); setError('');
     try {
       const d = await fetch('/cli/workbench/revert', {

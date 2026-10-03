@@ -38,6 +38,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
+import { stripThinking } from '../src/codeAware.js';
 
 const RESUMABLE = ['claude-code', 'codex', 'agy'];
 const MAX_ENTRIES = 500;
@@ -61,8 +62,7 @@ const textOf = (content) => {
 
 /* The text as it matters: the app strips reasoning and tidies whitespace on
    the way out, and a hash that broke on a trailing newline would never hit. */
-const normal = (content) => textOf(content)
-  .replace(/<think>[\s\S]*?(<\/think>|$)/gi, '')
+const normal = (content) => stripThinking(textOf(content))
   .replace(/\s+/g, ' ')
   .trim();
 

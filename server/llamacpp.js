@@ -583,10 +583,55 @@ export const listModels = async (base) => {
   return data.data || data.models || [];
 };
 
+/** Ollama's keep_alive as milliseconds: null = forever, 0 = now.
+    A bare number is seconds; "30s" / "5m" / "1h" / "1h30m" are durations. */
+export const keepAliveMs = (value, fallback = 5 * 60 * 1000) => {
+  if (value === undefined || value === null || value === '') return fallback;
+  if (typeof value === 'number' || /^-?\d+(\.\d+)?$/.test(String(value))) {
+    const n = Number(value);
+    return n < 0 ? null : n * 1000;
+  }
+  const s = String(value).trim();
+  if (s.startsWith('-')) return null;
+  let total = 0; let matched = false;
+  for (const [, n, unit] of s.matchAll(/(\d+(?:\.\d+)?)(ms|h|m|s)/g)) {
+    matched = true;
+    total += Number(n) * ({ ms: 1, s: 1000, m: 60000, h: 3600000 })[unit];
+  }
+  return matched ? total : fallback;
+};
+
 export const createLlamaRoutes = (env = {}) => {
   const base = (env.LLAMACPP_URL || 'http://127.0.0.1:8080').replace(/\/$/, '');
   const routes = [];
   const route = (path, handler) => routes.push({ path, handler });
+
+  /* keep_alive. llama-server never unloads a model on its own, and the chat
+     route used to drop the field, so a model stayed in memory after every
+     answer for good. Each model now gets an idle timer, started when its last
+     running request ends and cancelled by the next one. */
+  const idle = new Map(); // model -> { active, timer }
+  const slot = (model) => {
+    if (!idle.has(model)) idle.set(model, { active: 0, timer: null });
+    return idle.get(model);
+  };
+  const unloadNow = (model) => callServer(base, '/models/unload', {
+    method: 'POST', body: { model }, timeout: 30000,
+  }).catch(() => {});
+  const beginUse = (model) => {
+    if (!model) return () => {};
+    const s = slot(model);
+    clearTimeout(s.timer); s.timer = null;
+    s.active += 1;
+    return (keepAlive) => {
+      s.active = Math.max(0, s.active - 1);
+      if (s.active) return;
+      const ms = keepAliveMs(keepAlive);
+      if (ms === null) return;
+      s.timer = setTimeout(() => { s.timer = null; if (!s.active) unloadNow(model); }, ms);
+      s.timer.unref?.();
+    };
+  };
 
   route('/api/chat/replay', (req, res) => {
     const id = new URL(req.url, 'http://localhost').searchParams.get('id');
@@ -621,7 +666,17 @@ export const createLlamaRoutes = (env = {}) => {
   route('/api/chat', async (req, res) => {
     let body;
     try { body = await readBody(req); } catch (e) { return fail(res, e, 400); }
+    const endUse = beginUse(body.model);
+    // Not on res 'close': a reload drops the response while the generation
+    // goes on, and the model must not be timed out under it.
+    try {
+      await chatBody(req, res, body);
+    } finally {
+      endUse(body.keep_alive);
+    }
+  });
 
+  const chatBody = async (req, res, body) => {
     // A browser reload closes this response, but it must not cancel the model
     // request. The generation is the durable work; the NDJSON response is only
     // one subscriber to it. Cancelling here made a refresh look like a stopped
@@ -705,7 +760,7 @@ export const createLlamaRoutes = (env = {}) => {
       reader.releaseLock();
       if (!res.destroyed) res.end();
     }
-  });
+  };
 
   /* ------------------------------------------------------------ generate
 
@@ -727,6 +782,7 @@ export const createLlamaRoutes = (env = {}) => {
     }
 
     const asChat = { ...body, messages: [{ role: 'user', content: body.prompt || '' }] };
+    const endUse = beginUse(body.model);
     try {
       const data = await jsonOf(await callServer(base, '/v1/chat/completions', {
         method: 'POST',
@@ -745,6 +801,8 @@ export const createLlamaRoutes = (env = {}) => {
       });
     } catch (e) {
       fail(res, e);
+    } finally {
+      endUse(body.keep_alive);
     }
   });
 

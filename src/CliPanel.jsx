@@ -3,6 +3,7 @@ import { RefreshCcw, TerminalSquare, CircleCheck, CircleAlert, CircleSlash } fro
 import { useI18n } from './i18n.jsx';
 import { LimitBars, formatUsd, formatDuration, cliLabel } from './CliLimits.jsx';
 import { CliAgentPanel } from './CliAgent.jsx';
+import { confirmDialog } from './ConfirmDialog.jsx';
 
 /**
  * Claude Code, Codex and Antigravity, as the server sees them.
@@ -76,7 +77,7 @@ const Doctor = () => {
   const [busy, setBusy] = useState('');
   const run = async (live) => {
     if (busy) return;
-    if (live && !window.confirm(t('cliDoctor.liveConfirm'))) return;
+    if (live && !(await confirmDialog(t('cliDoctor.liveConfirm')))) return;
     setBusy(live ? 'live' : 'quick');
     try {
       const d = await fetch('/cli/doctor', live

@@ -248,7 +248,7 @@ const sleep = (ms) => new Promise(r => setTimeout(r, ms));
 
 const killTree = (child) => {
   if (!child?.pid || child.exitCode !== null) return;
-  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore' });
+  if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(child.pid), '/T', '/F'], { stdio: 'ignore', windowsHide: true });
   else { try { child.kill('SIGTERM'); } catch { /* gone */ } }
 };
 

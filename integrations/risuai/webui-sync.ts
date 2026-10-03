@@ -91,8 +91,33 @@ export function startWebUISync(isImporting: () => boolean) {
       selectedCharID.set(selected ? DBState.db.characters.findIndex(x => x.chaId === selected) : -1);
     };
   };
+  /* "(동시 수정 사본)" clones left in this device's own database by older
+     builds. They used to be filtered only from a finished merge, and a merge
+     that waits -- a reply generating, an import, an edit landing mid-commit --
+     never installs, so the copies stayed on screen for as long as sync was
+     "pending". Remove them from the live database directly, before any of
+     that can wait. The one being chatted with is left until the reply ends. */
+  const isCopy = (item: any) => /\(동시 수정 사본\)/.test(item?.name || '');
+  const purgeCopies = () => {
+    const db: any = DBState.db;
+    if (!db) return;
+    const current = db.characters?.[get(selectedCharID)];
+    const keep = (item: any) => !isCopy(item) || (item === current && get(doingChat));
+    let changed = false;
+    for (const field of fields) {
+      const list = db[field];
+      if (!Array.isArray(list) || !list.some((item: any) => !keep(item))) continue;
+      db[field] = list.filter(keep);
+      changed = true;
+    }
+    if (!changed) return;
+    checkCharOrder();
+    const id = current?.chaId;
+    selectedCharID.set(id && !isCopy(current) ? db.characters.findIndex((x: any) => x.chaId === id) : -1);
+  };
   const cycle = async () => {
     if (running || stopped) return;
+    try { purgeCopies(); } catch { /* cleanup only; never block sync */ }
     if (blocked()) { announce('pending', '응답 생성·가져오기를 마치면 자동 동기화합니다.'); return; }
     if (!(window as any).__WEBUI_SESSION__?.id) { announce('guest', '로그인하면 PC·모바일 대화를 동기화할 수 있습니다.'); return; }
     running = true;
@@ -134,7 +159,6 @@ export function startWebUISync(isImporting: () => boolean) {
          own storage and came back as "new on this device" every sync. The
          server drops them; so does every device, from its merge result, which
          then installs without them. */
-      const isCopy = (item: any) => /\(동시 수정 사본\)/.test(item?.name || '');
       // A merge may hand back localData itself; filter a copy so the
       // comparison below still sees that this device must change.
       merged = { ...merged, assets: { ...(merged.assets || {}) } };

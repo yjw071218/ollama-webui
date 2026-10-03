@@ -60,21 +60,16 @@ import {
 } from './pictureTools.js';
 import { normalizeTimeline, durationFromTimeline, clampSeconds, VIDEO_SECONDS, H3_GUIDE, asksForVideo, namesLength, videoArea, segmentPlan, frameBudgetArea, splitCaptions, segmentSecondsForTempo } from './videoPrompt.js';
 import { designCue, asksForPicture } from './characterDesign.js';
-import { UsagePanel } from './UsagePanel.jsx';
 import {
   cleanTag, tagsOf, addTag, removeTag, allTags, suggest as suggestTags,
   filterByTags, parseTagQuery, suggestForChat, MAX_PER_CHAT,
 } from './tags.js';
-import { KnowledgePanel } from './KnowledgePanel.jsx';
-import { McpPanel, WorkbenchPolicy } from './McpPanel.jsx';
-import { ChangeHistory } from './ChangeHistory.jsx';
 import './settingsTools.css';
 import {
   Server as TabServer, ShieldCheck as TabShield, History as TabHistory, SquareTerminal as TabTerminal, FlaskConical as TabFlask,
   SlidersHorizontal as TabGeneral, Sparkles as TabGeneration, Boxes as TabModels, ScrollText as TabPrompts,
   BookOpen as TabKnowledge, Wrench as TabTools, Brain as TabMemory, Mic as TabVoice, UserRound as TabAccount, Database as TabData,
 } from 'lucide-react';
-import { CliPanel } from './CliPanel.jsx';
 import { CliApprovals } from './CliAgent.jsx';
 import { CliLimitBadge, formatUsd, cliOf } from './CliLimits.jsx';
 import { CliTurnExtras, CliChips } from './CliTurn.jsx';
@@ -84,12 +79,20 @@ import { cliHeadersOf } from './cliTurn.js';
 const compactFormat = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 const compactCount = n => (Number.isFinite(n) ? compactFormat.format(n) : String(n ?? ''));
 
+/* The part of a reply that is drawn open: its content without the <think>
+   sections, which sit in the folded steps. */
+const textBlocksOfGroup = (group) => group
+  .map(m => (typeof m.content === 'string' ? m.content : ''))
+  .map(c => parseAssistantMessage(c, { streaming: true })
+    .filter(b => b.type === 'text').map(b => b.content).join('\n'))
+  .join('');
+
 /* While an answer is arriving: elapsed time and output tokens so far, like
    Claude Code's "✻ 12s · ↓ 340 tokens". Ollama only reports eval_count at the
    end, so the live figure is estimated from the text received (marked "~");
    the exact one replaces it in the metrics row when the answer finishes.
    It keeps its own clock, so only this line re-renders every tick. */
-function LiveWorkStatus({ text, startedAt }) {
+function LiveWorkStatus({ text, answer = '', startedAt }) {
   /* The generation's own start, saved in localStorage, so a page reload keeps
      counting from where it was instead of starting again at 0. */
   const [start] = useState(() => {
@@ -101,17 +104,53 @@ function LiveWorkStatus({ text, startedAt }) {
     const timer = setInterval(() => setNow(Date.now()), 250);
     return () => clearInterval(timer);
   }, []);
+  const { lang } = useI18n();
   const secs = Math.max(0, (now - start) / 1000);
   const elapsed = secs < 60 ? `${secs.toFixed(secs < 10 ? 1 : 0)}s` : `${Math.floor(secs / 60)}m ${Math.floor(secs % 60)}s`;
   const tokens = estimateTokens(text);
-  const rate = secs > 1 && tokens > 0 ? Math.round(tokens / secs) : null;
+
+  /* The average since the start kept showing "~21 tok/s" through a stall, so a
+     frozen answer looked busy. The rate is now over the last few seconds, and
+     when nothing has arrived for a while the line says so. */
+  const samples = useRef([]);
+  const lastGrowth = useRef(start);
+  const prevTokens = useRef(tokens);
+  if (tokens !== prevTokens.current) { prevTokens.current = tokens; lastGrowth.current = Date.now(); }
+  const list = samples.current;
+  if (!list.length || now - list[list.length - 1].at >= 1000) list.push({ at: now, tokens });
+  while (list.length > 2 && now - list[1].at > 6000) list.shift();
+  const first = list[0];
+  const span = (now - first.at) / 1000;
+  const recent = span >= 2 ? Math.max(0, Math.round((tokens - first.tokens) / span)) : null;
+  const rate = recent ?? (secs > 1 && tokens > 0 ? Math.round(tokens / secs) : null);
+  const idle = Math.floor((now - lastGrowth.current) / 1000);
+  const stalled = idle >= 8;
+
+  /* Output still arriving, but only into the folded steps (a CLI's tool calls
+     and thinking): the open answer stands still and looked frozen. Say so, and
+     show the newest line of what is arriving. */
+  const lastAnswerGrowth = useRef(start);
+  const prevAnswer = useRef(answer.length);
+  if (answer.length !== prevAnswer.current) { prevAnswer.current = answer.length; lastAnswerGrowth.current = Date.now(); }
+  const behindFold = !stalled && now - lastAnswerGrowth.current >= 3000 && now - lastGrowth.current < 3000;
+  const latestLine = behindFold
+    ? (text.replace(/<\/?think>/g, '').trimEnd().split('\n').pop() || '').trim().slice(0, 90)
+    : '';
+
   return (
-    <div className="live-work-status" aria-live="off">
+    <div className={`live-work-status${stalled ? ' is-stalled' : ''}`} aria-live="off">
       <span className="live-work-spark" aria-hidden="true">✻</span>
       <span className="live-work-time">{elapsed}</span>
       <span className="dot">•</span>
       <span className="live-work-tokens" title="Estimated while streaming; exact count appears when the answer finishes">↓ ~{compactCount(tokens)} tok</span>
+      {/* No "no output for Ns" note: it misfired on answers that were still
+          arriving. During a real pause the rate simply falls toward 0. */}
       {rate != null && (<><span className="dot">•</span><span className="live-work-rate">~{rate} tok/s</span></>)}
+      {behindFold && (
+        <><span className="dot">•</span><span className="live-work-fold" title={latestLine}>
+          {lang === 'ko' ? '작업 단계 진행 중' : 'working in steps'}{latestLine ? `: ${latestLine}` : ''}
+        </span></>
+      )}
     </div>
   );
 }
@@ -120,13 +159,11 @@ import { fileChangesIn, answerPartsOf } from './fileChanges.js';
 import { AgentActivity, LiveCommands, CommandsDock } from './AgentActivity.jsx';
 import { hasActivity } from './agentActivity.js';
 import { CanvasPanel } from './CanvasPanel.jsx';
-import { EvalPanel } from './EvalPanel.jsx';
 import { FitNote } from './FitNote.jsx';
 import { WatchedFolders } from './WatchedFolders.jsx';
 import { isAudioFile, formatDuration } from './audio.js';
 import { looksLikeDocument } from './canvas.js';
-import { ModelCompare } from './ModelCompare.jsx';
-import { loadLibrary, retrieve, formatContext, visibleDocuments, removeDocument, DEFAULT_EMBED_MODEL, extractDocument, renderPdfPages, embedTexts, normalise } from './rag.js';
+import { loadLibrary, saveLibrary, retrieve, formatContext, visibleDocuments, removeDocument, DEFAULT_EMBED_MODEL, isEmbeddingModel, extractDocument, renderPdfPages, embedTexts, normalise } from './rag.js';
 import { buildIndex, searchIndex, loadIndex, clearIndex, indexBytes, MAX_INDEXED } from './chatSearch.js';
 import {
   loadMemories, saveMemories, addMemories, removeMemory,
@@ -148,16 +185,12 @@ import { forHistory, isToolResult, turnStart, wireText } from './wireHistory.js'
 import { isDraft, newDraft, promoted, withoutStaleDrafts, persistable, nextSessionId } from './draftChat.js';
 import { Logo } from './Logo.jsx';
 import { Chart } from './Chart.jsx';
-import { RisuPanel } from './RisuPanel.jsx';
 import { parseChart } from './chart.js';
 import {
   buildSnapshot, createShare, listShares, revokeShare,
   loadShareUrls, rememberShareUrl, forgetShareUrl, picturePayload,
 } from './shareLink.js';
 import ChatTimeline from './ChatTimeline.jsx';
-import CameraCapture from './CameraCapture.jsx';
-import SpeculativePanel from './SpeculativePanel.jsx';
-import IntegrationsPanel from './IntegrationsPanel.jsx';
 import { captureScreen, canCaptureScreen, canUseCamera } from './capture.js';
 import { Camera } from 'lucide-react';
 import { turnMetrics } from './turnMetrics.js';
@@ -196,6 +229,8 @@ import {
   useSession, deleteAccount as deleteServerAccount, signOutOtherDevices,
   leaveHandoff, takeHandoff, fetchServerConfig, api,
 } from './session.jsx';
+import { confirmDialog, alertDialog, ConfirmDialogHost } from './ConfirmDialog.jsx';
+import { lazyPanel, preloadWhenIdle } from './lazyPanel.jsx';
 import {
   findLegacyData, wasOffered, markOffered, importLegacyBucket, alreadyImported,
   purgeLegacyCredentials,
@@ -243,6 +278,22 @@ import {
   socialDefaults,
   kakaoRedirectUri,
 } from './auth.jsx';
+import { stripThinking } from './codeAware.js';
+
+// Panels nobody sees on first paint: fetched when first opened. See src/lazyPanel.jsx.
+const UsagePanel = lazyPanel(() => import('./UsagePanel.jsx'), 'UsagePanel');
+const KnowledgePanel = lazyPanel(() => import('./KnowledgePanel.jsx'), 'KnowledgePanel');
+const loadMcpPanel = () => import('./McpPanel.jsx');
+const McpPanel = lazyPanel(loadMcpPanel, 'McpPanel');
+const WorkbenchPolicy = lazyPanel(loadMcpPanel, 'WorkbenchPolicy');
+const ChangeHistory = lazyPanel(() => import('./ChangeHistory.jsx'), 'ChangeHistory');
+const CliPanel = lazyPanel(() => import('./CliPanel.jsx'), 'CliPanel');
+const EvalPanel = lazyPanel(() => import('./EvalPanel.jsx'), 'EvalPanel');
+const ModelCompare = lazyPanel(() => import('./ModelCompare.jsx'), 'ModelCompare');
+const RisuPanel = lazyPanel(() => import('./RisuPanel.jsx'), 'RisuPanel');
+const CameraCapture = lazyPanel(() => import('./CameraCapture.jsx'));
+const SpeculativePanel = lazyPanel(() => import('./SpeculativePanel.jsx'));
+const IntegrationsPanel = lazyPanel(() => import('./IntegrationsPanel.jsx'));
 
 // Read once, at load, so restoring it later cannot restore a decorated copy
 // of itself.
@@ -502,8 +553,7 @@ const slugify = (text) => (text || 'chat')
   .substring(0, 60) || 'chat';
 
 // Strips the tool/think scaffolding so exported Markdown reads like a transcript.
-const cleanForExport = (content) => canonicalToolTags(content || '')
-  .replace(/<think>[\s\S]*?(<\/think>|$)/gi, '')
+const cleanForExport = (content) => stripThinking(canonicalToolTags(content || ''))
   .replace(/<TOOL_RESULT>[\s\S]*?<\/TOOL_RESULT>/gi, '')
   .replace(/<TOOL_[A-Z_]+(\s+[^>]*)?>[\s\S]*?<\/TOOL_[A-Z_]+>/gi, '')
   .trim();
@@ -511,9 +561,8 @@ const cleanForExport = (content) => canonicalToolTags(content || '')
 // What actually gets sent to the TTS engine. The old version only stripped
 // the <think> *tags*, so the whole reasoning trace was read out loud.
 const stripForSpeech = (text) => stripAttachments(
-  canonicalToolTags(text || '')
-    // reasoning and tool scaffolding, including a block left unterminated
-    .replace(/<think>[\s\S]*?(<\/think>|$)/gi, ' ')
+  stripThinking(canonicalToolTags(text || ''), ' ')
+    // tool scaffolding, including a block left unterminated
     .replace(/<TOOL_RESULT>[\s\S]*?(<\/TOOL_RESULT>|$)/gi, ' ')
     .replace(/<TOOL_[A-Z_]+(\s+[^>]*)?>[\s\S]*?(<\/TOOL_[A-Z_]+>|$)/gi, ' '),
   // Every injected block, from the one place that knows them all, so a marker
@@ -570,11 +619,19 @@ const STARTER_PROMPTS = [
 // unchanged, so only genuinely new words animate — the settled text stays put.
 // Applied to the streaming message only; long transcripts never carry it.
 const rehypeAnimateTokens = () => (tree) => {
-  const SKIP = new Set(['code', 'pre', 'style', 'script', 'math']);
+  const SKIP = new Set(['pre', 'style', 'script', 'math']);
 
   const walk = (node) => {
     if (!node || !Array.isArray(node.children)) return;
     if (node.tagName && SKIP.has(node.tagName)) return;
+    /* Inline code (`/api/tags`) fades in as one piece with the words around
+       it. It used to be skipped, so it popped in at full strength while the
+       words before it were still fading -- and read as arriving first. */
+    if (node.tagName === 'code') {
+      const cls = node.properties?.className;
+      node.properties = { ...(node.properties || {}), className: [...(Array.isArray(cls) ? cls : cls ? [cls] : []), 'tok-code'] };
+      return;
+    }
 
     const next = [];
     let changed = false;
@@ -1012,7 +1069,19 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
     if (previewable || isLong) {
       const openAs = previewable ? 'preview' : runnable ? 'run' : 'code';
       return (
-        <div className="artifact-card" onClick={() => onOpenArtifact(codeContent, openAs, language)}>
+        <div
+          className="artifact-card"
+          role="button"
+          tabIndex={0}
+          aria-label={`${language || t('artifact.code')}, ${t('attach.lines', { count: lineCount })}`}
+          onClick={() => onOpenArtifact(codeContent, openAs, language)}
+          onKeyDown={(e) => {
+            // Only the card itself: Enter on one of its own buttons is that button's.
+            if (e.target !== e.currentTarget || (e.key !== 'Enter' && e.key !== ' ')) return;
+            e.preventDefault();
+            onOpenArtifact(codeContent, openAs, language);
+          }}
+        >
           <div className="artifact-icon"><Code size={20} /></div>
           <div className="artifact-info">
             <span className="artifact-lang">{language || t('artifact.code')}</span>
@@ -1085,6 +1154,81 @@ const AnswerMarkdown = memo(({ text, basePlugins, citations, onOpenArtifact }) =
 }, (a, b) => a.text === b.text && a.basePlugins === b.basePlugins
   && (a.citations?.length || 0) === (b.citations?.length || 0));
 
+/* Typewriter for the answer being streamed. A model sends text in bursts --
+ * several words in one chunk -- so the text shown is let out from the front,
+ * a character at a time, at a pace that follows the backlog: ~45 chars/s when
+ * it keeps up, faster when it falls behind, so it never trails the model by
+ * much more than half a second. When the stream ends it catches up quickly
+ * instead of jumping. Reduced motion shows everything at once. */
+const motionReduced = () => {
+  const m = document.documentElement.dataset.motion;
+  if (m === 'reduced') return true;
+  if (m === 'full') return false;
+  return !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
+};
+const useTypewriter = (text, live) => {
+  const [shown, setShown] = useState(() => (live && !motionReduced() ? 0 : text.length));
+  const pos = useRef(shown);
+  const textRef = useRef(text);
+  textRef.current = text;
+  const liveRef = useRef(live);
+  liveRef.current = live;
+  useEffect(() => {
+    if (pos.current > text.length) { pos.current = text.length; setShown(text.length); }
+    if (pos.current >= text.length) return undefined;
+    if (motionReduced()) { pos.current = text.length; setShown(text.length); return undefined; }
+    let raf = 0;
+    let last = performance.now();
+    let carry = 0;
+    let painted = last;
+    const step = (now) => {
+      const target = textRef.current.length;
+      const backlog = target - pos.current;
+      if (backlog <= 0) return;
+      const dt = Math.min(0.1, (now - last) / 1000);
+      last = now;
+      const rate = Math.max(45, backlog * (liveRef.current ? 2 : 8));
+      carry += dt * rate;
+      const n = Math.floor(carry);
+      if (n > 0) {
+        carry -= n;
+        let next = Math.min(target, pos.current + n);
+        // Never split a surrogate pair (emoji) in half.
+        const code = textRef.current.charCodeAt(next - 1);
+        if (code >= 0xd800 && code <= 0xdbff && next < target) next += 1;
+        pos.current = next;
+        // Re-parsing markdown every frame is wasted work; ~30 fps is smooth.
+        if (now - painted >= 30 || next >= target) { painted = now; setShown(next); }
+      }
+      raf = requestAnimationFrame(step);
+    };
+    raf = requestAnimationFrame(step);
+    return () => cancelAnimationFrame(raf);
+  }, [text, live]);
+  return shown >= text.length ? text : text.slice(0, shown);
+};
+
+/* A half-typed `code` or **bold** would show its raw marks until closed, then
+ * snap into shape. Closing them provisionally keeps them styled from their
+ * first letter. Fenced blocks are left alone: they already render open. */
+const closeOpenMarks = (s) => {
+  const fences = (s.match(/^\s*```/gm) || []).length;
+  if (fences % 2) return s;
+  const line = s.slice(s.lastIndexOf('\n') + 1);
+  let out = s;
+  const ticks = (line.match(/`/g) || []).length;
+  if (ticks % 2 && !/`$/.test(line)) out += '`';
+  const bare = line.replace(/`[^`]*`?/g, '');
+  if ((bare.match(/\*\*/g) || []).length % 2 && !/\*\*$/.test(line)) out += '**';
+  return out;
+};
+
+const LiveAnswerMarkdown = ({ text, live, ...rest }) => {
+  const typed = useTypewriter(text, live);
+  const shownText = typed.length < text.length ? closeOpenMarks(typed) : typed;
+  return <AnswerMarkdown text={shownText} {...rest} />;
+};
+
 // Decided before React renders anything, because the useState initialisers
 // below read settings and must read the right profile's. A tab that has none of
 // its own inherits the last profile used in this browser, then stops following
@@ -1111,7 +1255,12 @@ const fetchJsonQuietly = (url, init) => fetch(url, init)
   .then((text) => { try { return JSON.parse(text); } catch (e) { return null; } });
 
 function App() {
-  const [models, setModels] = useState([]);
+  /* Everything Ollama has installed, and the part of it that can be chatted
+     with. Embedding models only make vectors -- picking one for a chat is an
+     error -- so every model picker reads `models`, and only the knowledge
+     settings and the disk view see `installedModels`. */
+  const [installedModels, setModels] = useState([]);
+  const models = useMemo(() => installedModels.filter(m => !isEmbeddingModel(m)), [installedModels]);
   const [selectedModel, setSelectedModel] = useState('');
   /* The last model the reader chose themselves, as opposed to one the app put
      back -- a conversation's last model, routing, the first model on the list.
@@ -1166,7 +1315,30 @@ function App() {
   /* Which half of the app you are in. The sidebar's two places: the
    * conversations, or the studio. Kept here rather than in the sidebar because
    * the main area is what actually changes. */
-  const [sidebarPlace, setSidebarPlace] = useState('home');
+  const [sidebarPlace, setSidebarPlaceNow] = useState('home');
+  /* Moving between places cross-fades through the View Transitions API where
+   * the browser has it; elsewhere, and under reduced motion, it just switches.
+   * flushSync makes React paint the new place inside the transition's
+   * callback, which is what the browser snapshots as the "after" frame. */
+  const setSidebarPlace = useCallback((next) => {
+    const reduced = document.documentElement.dataset.motion === 'reduced'
+      || (document.documentElement.dataset.motion !== 'full'
+        && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+    if (!document.startViewTransition || reduced || document.hidden) {
+      setSidebarPlaceNow(next);
+      return;
+    }
+    const target = typeof next === 'function' ? next(sidebarPlaceRef.current) : next;
+    if (target === sidebarPlaceRef.current) return;
+    try {
+      document.startViewTransition(() => { flushSync(() => setSidebarPlaceNow(target)); });
+    } catch {
+      setSidebarPlaceNow(target);
+    }
+  }, []);
+  // Read by effects that must not re-run when the place changes (artifact auto-open).
+  const sidebarPlaceRef = useRef(sidebarPlace);
+  sidebarPlaceRef.current = sidebarPlace;
   /* Whether the Studio has ever been opened in this tab. It stays mounted once
      it has been, so a generation keeps being tracked while you are reading a
      chat -- see where it is rendered. */
@@ -1426,7 +1598,7 @@ function App() {
   const [thinkMode, setThinkMode] = useState(() => readThinkMode(getSetting('thinkMode')));
   // One tool call per turn made `search -> open the page -> answer` impossible,
   // so answers stayed at snippet depth. A small budget allows a real chain.
-  const [toolBudget, setToolBudget] = useState(() => readNum('toolBudget', 5));
+  const [toolBudget, setToolBudget] = useState(() => readNum('toolBudget2', 50));
   /* Questions that could not be sent. Loaded from storage on purpose: the
      failures that matter most are the ones where you give up and refresh. */
   const [sendQueue, setSendQueue] = useState([]);
@@ -1475,7 +1647,12 @@ function App() {
   // --- Knowledge (retrieval over attached documents) ---
   const [knowledge, setKnowledge] = useState([]);
   const [ragEnabled, setRagEnabled] = useState(() => getSetting('ragEnabled') !== 'false');
-  const [embedModel, setEmbedModel] = useState(() => getSetting('embedModel') || DEFAULT_EMBED_MODEL);
+  /* The old default was saved as if chosen (every change writes it back), so
+     it is upgraded here; a model somebody actually picked is left alone. */
+  const [embedModel, setEmbedModel] = useState(() => {
+    const saved = getSetting('embedModel');
+    return !saved || /^nomic-embed-text(:latest)?$/.test(saved) ? DEFAULT_EMBED_MODEL : saved;
+  });
   const [ragTopK, setRagTopK] = useState(() => readNum('ragTopK', 5));
   /* On by default: it costs arithmetic over text already in memory, and it is
      what makes an exact string -- an error code, a model number, a Korean word
@@ -1774,7 +1951,7 @@ function App() {
     setSetting('presencePenalty', String(presencePenalty));
     setSetting('frequencyPenalty', String(frequencyPenalty));
     setSetting('keepAlive', keepAlive);
-    setSetting('toolBudget', String(toolBudget));
+    setSetting('toolBudget2', String(toolBudget)); // new key: the old default of 5 is not carried over
     setSetting('autoGround', String(autoGround));
     setSetting('researchDepth', researchDepth);
     setSetting('routingEnabled', String(routingEnabled));
@@ -1816,6 +1993,12 @@ function App() {
      somebody deliberately set 4096 back, which would be the app overruling
      them rather than fixing a default. */
   useEffect(() => { setSetting(MIGRATION_KEY, 'true'); }, []);
+
+  // The settings tabs are a tap away on most visits; fetch them once the first
+  // chat is on screen, so opening settings does not wait on the network.
+  useEffect(() => {
+    preloadWhenIdle([UsagePanel, KnowledgePanel, McpPanel, CliPanel, ChangeHistory, IntegrationsPanel]);
+  }, []);
 
   // --- Toasts (replaces the blocking alert() calls) ---
   const [toasts, setToasts] = useState([]);
@@ -2297,6 +2480,26 @@ function App() {
     loadLibrary(profileScope).then(list => { if (!cancelled) setKnowledge(list); });
     return () => { cancelled = true; };
   }, [profileScope]);
+
+  /* A document attached in a chat lives and dies with that chat. Once a chat
+   * is gone -- and stays gone past the undo toast -- its indexed attachments
+   * are removed rather than left in the library as "deleted chat" entries.
+   * Only after storage has loaded: before that `sessions` is a placeholder
+   * and every attachment would look orphaned. */
+  useEffect(() => {
+    if (!isStorageLoaded) return undefined;
+    const timer = setTimeout(async () => {
+      const live = new Set(sessionsRef.current.map(s => String(s.id)));
+      if (live.size === 0) return;
+      const docs = await loadLibrary(profileScope);
+      const kept = docs.filter(d => !d.chatId || live.has(String(d.chatId)));
+      if (kept.length === docs.length) return;
+      await saveLibrary(profileScope, kept);
+      setKnowledge(kept);
+      addLog(`[knowledge] removed ${docs.length - kept.length} attachment(s) of deleted chats`, 'info');
+    }, 15000);
+    return () => clearTimeout(timer);
+  }, [isStorageLoaded, sessions.length, profileScope]);
 
   useEffect(() => {
     let cancelled = false;
@@ -4070,7 +4273,7 @@ function App() {
 ${data.text}` : data.text));
       setShowSettings(false);
     } catch (e) {
-      alert(`${server} / ${name}: ${e.message}`);
+      alertDialog(e.message, { title: `${server} / ${name}` });
     }
   }, []);
 
@@ -4345,6 +4548,10 @@ ${data.text}` : data.text));
        diffs above all) would take the screen away mid-read. It opens there
        only when asked for, from the code block's own button. */
     if (window.matchMedia?.('(max-width: 860px)').matches) return;
+    /* A queued chat can finish while the studio (or gallery, Risu) is on
+       screen. The artifact is marked seen above, so it does not pop open
+       later either; the code block's own button still opens it. */
+    if (sidebarPlaceRef.current !== 'home') return;
     setActiveArtifact({
       id: latest.id,
       type: latest.previewable ? 'preview' : latest.runnable ? 'run' : 'code',
@@ -4831,12 +5038,22 @@ ${data.text}` : data.text));
     await syncRef.current?.flush();
   };
 
-  // No confirm dialog: the toast offers an Undo instead, which is both
-  // faster for the common case and safer for a misclick.
-  const deleteSession = (id, e) => {
+  // Asks first (a sidebar row is easy to misclick), and the toast still
+  // offers Undo afterwards.
+  const deleteSession = async (id, e) => {
     e?.stopPropagation();
-    const victim = sessions.find(s => s.id === id);
+    const asked = sessionsRef.current.find(s => s.id === id);
+    if (!asked) return;
+    const title = asked.title || 'New Chat';
+    const ok = await confirmDialog(
+      lang === 'ko' ? `"${title}" 대화를 삭제할까요?` : `Delete "${title}"?`,
+      { danger: true, confirmLabel: t('sidebar.delete') },
+    );
+    if (!ok) return;
+    // Re-read: the list may have changed while the dialog was open.
+    const victim = sessionsRef.current.find(s => s.id === id);
     if (!victim) return;
+    const sessions = sessionsRef.current;
     haptic('warn');
     const position = sessions.findIndex(s => s.id === id);
 
@@ -6576,7 +6793,7 @@ ${data.text}` : data.text));
      * "carry on" continues it.
      */
     if (isGeneratingRef.current) {
-      if (!window.confirm(t('auth.signOutWhileGenerating'))) return;
+      if (!(await confirmDialog(t('auth.signOutWhileGenerating'), { danger: true, confirmLabel: t('auth.signOut') }))) return;
       abortControllerRef.current?.abort();
       setIsGenerating(false);
       setGeneratingSessionId(null);
@@ -6629,7 +6846,7 @@ ${data.text}` : data.text));
 
   const handleDeleteAccount = async () => {
     if (!user) return;
-    if (!window.confirm(`${t('auth.deleteAccount')}\n\n${t('auth.deleteWarning')}`)) return;
+    if (!(await confirmDialog(t('auth.deleteWarning'), { title: t('auth.deleteAccount'), danger: true, confirmLabel: t('auth.deleteAccount') }))) return;
 
     const leaving = profileScope;
     syncRef.current?.cancel();
@@ -6891,7 +7108,7 @@ ${data.text}` : data.text));
 
       const summary = describeBackup(data);
       const question = mode === 'replace' ? t('backup.confirmReplace', summary) : t('backup.confirmMerge', summary);
-      if (!window.confirm(question)) return;
+      if (!(await confirmDialog(question, { danger: mode === 'replace' }))) return;
 
       const restored = await restoreBackup(data, { mode });
       addLog(`[backup] restored ${restored.chats} chats, ${restored.settings} settings.`, 'success');
@@ -7543,7 +7760,7 @@ ${data.text}` : data.text));
   };
 
   const deleteModel = async (name) => {
-    if (!window.confirm(t('models.deleteConfirm', { name }))) return;
+    if (!(await confirmDialog(t('models.deleteConfirm', { name }), { danger: true }))) return;
     addLog(`Deleting model: ${name}`, 'info');
     try {
       const res = await fetch('/api/delete', {
@@ -7750,17 +7967,18 @@ ${data.text}` : data.text));
   const fetchModels = async () => {
     addLog('Fetching available models...', 'info');
     try {
-      const res = await fetch('/api/tags');
+      const res = await fetch('/api/tags', { cache: 'no-store' });
       if (!res.ok) throw new Error('Ollama server is unreachable.');
       const data = await res.json();
       setModels(data.models || []);
-      if (data.models && data.models.length > 0) {
-        if (!selectedModel) setSelectedModel(data.models[0].name);
+      const chatable = (data.models || []).filter(m => !isEmbeddingModel(m));
+      if (chatable.length > 0) {
+        if (!selectedModel || isEmbeddingModel(selectedModel)) setSelectedModel(chatable[0].name);
         // Try to auto-select a vision model if available
-        if (!selectedVisionModel) {
-          const visionModel = data.models.find(m => m.name.toLowerCase().includes('llava') || m.name.toLowerCase().includes('minicpm'));
+        if (!selectedVisionModel || isEmbeddingModel(selectedVisionModel)) {
+          const visionModel = chatable.find(m => m.name.toLowerCase().includes('llava') || m.name.toLowerCase().includes('minicpm'));
           if (visionModel) setSelectedVisionModel(visionModel.name);
-          else setSelectedVisionModel(data.models[0].name);
+          else setSelectedVisionModel(chatable[0].name);
         }
         addLog(`Found ${data.models.length} models.`, 'success');
         // Capabilities decide whether images can go straight to the model.
@@ -8365,6 +8583,42 @@ ${data.text}` : data.text));
       addFiles(files);
       addLog(`Attached ${files.length} dropped file(s).`, 'success');
     }
+  };
+
+  /* Files dropped anywhere on the chat attach -- the transcript, the header,
+   * the empty state -- not only on the composer. The two side panels (the
+   * conversation list and the artifact panel) keep their own drops, and the
+   * Studio laid over this area has its own, so those are left alone. Only
+   * real files count: dragging a chat between folders, or selected text,
+   * must not light the overlay. dragenter/leave fire on every child crossed,
+   * so a counter rather than a target check decides when the pointer left. */
+  const fileDragDepth = useRef(0);
+  const isFileDrag = (e) => [...(e.dataTransfer?.types || [])].includes('Files');
+  const outsideChatDrop = (e) => sidebarPlaceRef.current !== 'home'
+    || !!e.target?.closest?.('.artifact-panel, .claude-sidebar');
+  const chatFileDropProps = {
+    onDragEnter: (e) => {
+      if (!isFileDrag(e)) return;
+      fileDragDepth.current += 1;
+      if (!outsideChatDrop(e)) setIsDragging(true);
+    },
+    onDragOver: (e) => {
+      if (!isFileDrag(e)) return;
+      if (outsideChatDrop(e)) { setIsDragging(false); return; }
+      e.preventDefault();
+      e.dataTransfer.dropEffect = 'copy';
+      if (!isDragging) setIsDragging(true);
+    },
+    onDragLeave: (e) => {
+      if (!isFileDrag(e)) return;
+      fileDragDepth.current = Math.max(0, fileDragDepth.current - 1);
+      if (fileDragDepth.current === 0) setIsDragging(false);
+    },
+    onDrop: (e) => {
+      fileDragDepth.current = 0;
+      if (!isFileDrag(e) || outsideChatDrop(e)) { setIsDragging(false); return; }
+      handleDrop(e);
+    },
   };
 
   const removeAttachment = (index) => {
@@ -9839,7 +10093,12 @@ Rules
 3. You have up to ${toolBudget} tool calls this turn. Spend them: a search
    followed by fetching the most relevant URL is the normal pattern.
 4. When you have enough, answer in natural language and cite the URLs you used.
-5. If a tool reports a failure, say so plainly instead of inventing the answer.`;
+5. If a tool reports a failure, say so plainly instead of inventing the answer.
+6. You are fully permitted to collect data from the web (search, fetch, crawl,
+   download) and to run system commands on this machine through the
+   workbench / run_command tool (PowerShell, cmd, Python, git, installers,
+   training scripts). Never tell the user these are restricted or that you
+   cannot do them -- do the work with the tools, step by step.`;
         }
         
         /* The schemas describe each tool; they cannot describe when to bother.
@@ -9876,7 +10135,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 + `machine, or on anything you cannot verify from memory. Do not guess at `
                 + `recent events. You have up to ${toolBudget} tool calls this turn; a search `
                 + `followed by fetching the best result is the normal pattern. When you have `
-                + `enough, answer and cite the URLs you used.
+                + `enough, answer and cite the URLs you used. You are fully permitted to `
+                + `collect data from the web (search, fetch, crawl, download) and to run system `
+                + `commands on this machine with run_command (PowerShell, cmd, Python, git, `
+                + `training scripts). Never claim these are restricted -- do the work with the tools.
 `
               : '')
             + `If a tool reports a failure, say so plainly rather than inventing the answer.`
@@ -12195,13 +12457,30 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     handleSend(null, [...messages, { role: 'user', content: t('cliTurn.continuePrompt'), at: Date.now() }], model);
   };
 
+  /* Written through at once, like deleteSession. Left to the 700ms save timer,
+     a sync that landed in between re-read the store -- which still held the
+     message -- and put it straight back on screen. */
   const deleteMessage = (index) => {
-    const previous = messages;
     const sid = currentSessionId; // undo must target this chat even after switching
-    updateCurrentSession({ messages: messages.filter((_, i) => i !== index) });
+    const chat = sessions.find(s => s.id === sid);
+    if (!chat) return;
+    const previous = chat.messages;
+    const victim = previous[index];
+    const next = sessions.map(s => (s.id === sid
+      ? stamped(s, { ...s, messages: s.messages.filter(m => m !== victim) })
+      : s));
+    setSessions(next);
+    persistChatsNow(next);
     toast(t('toast.messageDeleted'), 'info', 6000, {
       label: t('common.undo'),
-      onClick: () => reviseSession(sid, s => ({ ...s, messages: previous })),
+      onClick: () => {
+        let committed = null;
+        setSessions(prev => {
+          committed = prev.map(s => (s.id === sid ? { ...s, messages: previous, updatedAt: Date.now() } : s));
+          return committed;
+        });
+        if (committed) persistChatsNow(committed);
+      },
     });
   };
 
@@ -12606,8 +12885,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     toast(t('cliAgent.imported', { n: session.messages.length }), 'success');
   };
 
-  const clearAllChats = () => {
-    if (window.confirm(t('data.confirmClearAll'))) {
+  const clearAllChats = async () => {
+    if (await confirmDialog(t('data.confirmClearAll'), { danger: true, confirmLabel: t('data.clearAll') })) {
       const freshSession = { id: nextSessionId(), title: 'New Chat', messages: [], createdAt: Date.now(), updatedAt: Date.now(), lastModel: '' };
       // Every one of them, deliberately, so the merge does not put them back.
       for (const chat of sessionsRef.current) removedIdsRef.current.add(String(chat.id));
@@ -13137,7 +13416,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
   return (
     <div
-      className={`claude-app ${activeArtifact ? 'has-artifact' : ''} ${artifactMaximized ? 'artifact-maximized' : ''}`}
+      className={`claude-app ${activeArtifact && sidebarPlace === 'home' ? 'has-artifact' : ''} ${artifactMaximized && activeArtifact && sidebarPlace === 'home' ? 'artifact-maximized' : ''}`}
       style={{ '--artifact-width': `${artifactWidth}px`, '--sidebar-width': `${sidebarWidth}px` }}
     >
       {/* Tapping the conversation behind an open drawer closes it, which is
@@ -13497,7 +13776,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       </div>
 
       {/* Main Chat Area */}
-      <div className={`claude-main${messages.length === 0 ? ' is-blank' : ''}`}>
+      <div
+        className={`claude-main${messages.length === 0 ? ' is-blank' : ''}`}
+        {...chatFileDropProps}
+      >
+        {isDragging && sidebarPlace === 'home' && (
+          <div className="dropzone-overlay is-chat-wide">{t('composer.dropFiles')}</div>
+        )}
         {/* Top Navigation */}
         <div className="main-header" ref={measureHeader}>
           <button
@@ -13635,14 +13920,20 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 the studio, gallery and roleplay tabs have no composer -- hidden
                 here, a phone had no way to change the model on those tabs. */}
             <div className="model-selector-container" ref={dropdownRef}>
-              <button className="dropdown-trigger" onClick={() => setIsModelDropdownOpen(!isModelDropdownOpen)}>
+              <button className="dropdown-trigger" onClick={() => { if (!isModelDropdownOpen) fetchModels(); setModelQuery(''); setIsModelDropdownOpen(!isModelDropdownOpen); }}>
                 <span className="model-name">{selectedModel || t('header.selectModel')}</span>
                 <ChevronDown size={14} />
               </button>
               {isModelDropdownOpen && (
-                <div className="dropdown-menu">
+                <div className="dropdown-menu header-model-menu">
+                  <label className="model-find header-model-search">
+                    <Search size={13} aria-hidden="true" />
+                    <input type="search" value={modelQuery} onChange={e => setModelQuery(e.target.value)} placeholder={t('composer.modelFind')} aria-label={t('composer.modelFind')} />
+                    <span className="header-model-count" aria-live="polite">{shownModels.length} / {models.length}</span>
+                  </label>
                   {models.length === 0 && <div className="dropdown-item" style={{opacity: 0.5}}>{t('header.noModels')}</div>}
-                  {models.map(m => (
+                  {shownModels.length === 0 && models.length > 0 && <div className="dropdown-item">{t('composer.modelNoMatch')}</div>}
+                  {shownModels.map(m => (
                     <button 
                       key={m.name} 
                       className={`dropdown-item ${selectedModel === m.name ? 'selected' : ''}`} 
@@ -14696,9 +14987,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                   /* Memoized (AnswerMarkdown): parsed again only
                                      when this paragraph's text changes. Citations
                                      are per message, so the linker is built there. */
-                                  <AnswerMarkdown
+                                  <LiveAnswerMarkdown
                                     key={`md-${pn}`}
                                     text={part.text}
+                                    live={isStreamingRow && idx === textBlocks.length - 1}
                                     basePlugins={isStreamingRow && idx === textBlocks.length - 1 ? streamingRehypePlugins : markdownRehypePlugins}
                                     citations={msg.citations}
                                     onOpenArtifact={handleOpenArtifact}
@@ -15220,6 +15512,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           } catch (e) { return undefined; }
                         })()}
                         text={group.map(m => `${m.thinking || ''}${typeof m.content === 'string' ? m.content : ''}`).join('')}
+                        answer={textBlocksOfGroup(group)}
                       />
                     )}
                   </div>
@@ -15371,9 +15664,6 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         <div
           className="input-area-wrapper"
           ref={measureComposer}
-          onDragOver={e => { e.preventDefault(); if (!isDragging) setIsDragging(true); }}
-          onDragLeave={e => { if (e.currentTarget === e.target) setIsDragging(false); }}
-          onDrop={handleDrop}
         >
           {/* One centred row rather than two absolutely positioned buttons:
               either can be showing without the other, and a button that
@@ -15396,10 +15686,6 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           )}
 
           <form className="input-container composer-stack" onSubmit={e => { e.preventDefault(); if(input.trim() || attachments.length > 0) handleSend(e); }}>
-
-            {isDragging && (
-              <div className="dropzone-overlay">{t('composer.dropFiles')}</div>
-            )}
 
             <Transition open={slashMatches.length > 0} duration={150} className="slash-menu">
               <>
@@ -15720,7 +16006,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   className={`composer-model-trigger ${showModelMenu ? 'is-open' : ''}`}
                   aria-expanded={showModelMenu}
                   title={t('composer.modelTitle')}
-                  onClick={() => { setShowModelMenu(v => !v); setShowAddMenu(false); setModelQuery(''); }}
+                  onClick={() => { if (!showModelMenu) fetchModels(); setShowModelMenu(v => !v); setShowAddMenu(false); setModelQuery(''); }}
                 >
                   <span className="composer-model-name">{selectedModel || t('header.selectModel')}</span>
                   {thinkMode !== 'auto' && (
@@ -16092,6 +16378,21 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 // rule meant for a strip that actually has more behind it.
                 data-overflow={tabOverflow || undefined}
               >
+                {/* Arrows for a mouse: a wheel scrolls vertically and the strip
+                    has no scrollbar, so on a PC the hidden tabs were reachable
+                    only by middle-click dragging. They live inside the strip,
+                    sticky at its edges, so the siblings after it (which the
+                    settings entrance in motion.css counts) are unchanged.
+                    Shown only on the side that has more; hidden on touch. */}
+                {(tabOverflow === 'start' || tabOverflow === 'both') && (
+                  <button type="button" className="settings-tabs-arrow is-start" tabIndex={-1}
+                    aria-label="◀" onClick={() => {
+                      const rtl = getComputedStyle(tabStrip).direction === 'rtl';
+                      tabStrip?.scrollBy({ left: (rtl ? 1 : -1) * tabStrip.clientWidth * 0.7, behavior: 'smooth' });
+                    }}>
+                    <ChevronLeft size={16} />
+                  </button>
+                )}
                 {[
                   { id: 'general', icon: TabGeneral, label: t('settings.general') },
                   { id: 'generation', icon: TabGeneration, label: t('settings.generation') },
@@ -16121,6 +16422,15 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     {tab.label}
                   </button>
                 ))}
+                {(tabOverflow === 'end' || tabOverflow === 'both') && (
+                  <button type="button" className="settings-tabs-arrow is-end" tabIndex={-1}
+                    aria-label="▶" onClick={() => {
+                      const rtl = getComputedStyle(tabStrip).direction === 'rtl';
+                      tabStrip?.scrollBy({ left: (rtl ? -1 : 1) * tabStrip.clientWidth * 0.7, behavior: 'smooth' });
+                    }}>
+                    <ChevronRight size={16} />
+                  </button>
+                )}
               </div>
 
               {settingsTab === 'general' && (
@@ -16955,7 +17265,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     <label id="set-label-20">{t('tools.budget')}: {toolBudget}</label>
                     <input aria-labelledby="set-label-20"
                       type="range"
-                      min="1" max="10" step="1"
+                      min="1" max="200" step="1"
                       value={toolBudget}
                       onChange={e => setToolBudget(parseInt(e.target.value) || 1)}
                       style={{ width: '100%', accentColor: 'var(--accent)' }}
@@ -17429,7 +17739,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                        never synced. It worked for the guest -- both spell
                        `knowledge:guest` -- which is why it went unnoticed. */
                     userId={profileScope}
-                    models={models}
+                    models={installedModels}
                     embedModel={embedModel}
                     onEmbedModelChange={setEmbedModel}
                     onLibraryChange={setKnowledge}
@@ -17934,12 +18244,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                             className="icon-btn bordered"
                             style={{ color: 'var(--danger)' }}
                             disabled={!!syncBusy}
-                            onClick={() => {
+                            onClick={async () => {
                               // The recovery path when a device's local copy is
                               // wrong: the account is authoritative, so throw
                               // the local one away rather than merging the mess
                               // back in.
-                              if (window.confirm(t('sync.confirmReplace'))) syncPull('replace');
+                              if (await confirmDialog(t('sync.confirmReplace'), { danger: true, confirmLabel: t('sync.pullReplace') })) syncPull('replace');
                             }}
                           >
                             <TriangleAlert size={14} /> {t('sync.pullReplace')}
@@ -18100,7 +18410,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       </div>
 
         {/* Artifact Panel */}
-        {activeArtifact && activeArtifactData && (() => {
+        {/* The code panel belongs to the chat: hidden on every other place. */}
+        {sidebarPlace === 'home' && activeArtifact && activeArtifactData && (() => {
           const errorCount = consoleEntries.filter(c => c.level === 'error').length;
           const tabs = [
             activeArtifactData.previewable && { id: 'preview', label: t('artifact.preview'), icon: <Play size={13} /> },
@@ -18698,7 +19009,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 currentModel={selectedModel}
                 /* The installed list, for the disk block: the panel should not
                    fetch what the app already has on screen. */
-                models={models}
+                models={installedModels}
                 numCtx={numCtx}
               />
             )}
@@ -19214,6 +19525,9 @@ export default function AppWithErrorBoundary() {
     <ErrorBoundary>
       <I18nProvider>
         <App />
+        {/* Outside <App/> so a question asked from the sign-in screen, or
+            while App is between renders, still has somewhere to appear. */}
+        <ConfirmDialogHost />
       </I18nProvider>
     </ErrorBoundary>
   );
