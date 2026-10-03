@@ -169,7 +169,8 @@ check('the tag path is told how to draw', /TOOL_GENERATE_IMAGE style="photo\|ani
 check('and told that describing it is not an answer',
   /Do not describe the picture in words instead/.test(app));
 check('which it is told even with the switch off',
-  /if \(!mcpEnabled && !useNativeTools[\s\S]{0,400}\$\{drawPrompt\}/.test(app));
+  // A CLI turn takes the same tag path as the switch being off.
+  /if \(\(!mcpEnabled \|\| cliTurn\) && !useNativeTools[\s\S]{0,800}\$\{drawPrompt\}/.test(app));
 
 /* And the executor has to be able to run them. The registry was built inside
    `if (mcpEnabled)`, so with the switch off the tag matched nothing even if

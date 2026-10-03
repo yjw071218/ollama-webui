@@ -125,7 +125,8 @@ check('icon-only buttons in settings are named',
   const dockJs = read('src/AgentActivity.jsx');
   const live = read('server/liveCommands.js');
   check('dock: a command whose process died is dropped, not kept as "lost" for hours',
-    /entry\.status === 'running' && !alive\(entry\.pid\)\) \{\s*fs\.rm\(file/.test(live));
+    // A pid-less entry is judged by the workbench that spooled it (`owner`).
+    /entry\.status === 'running' && !alive\(entry\.pid(?: \|\| owner)?\)\) \{\s*fs\.rm\(file/.test(live));
   check('  the list never scrolls sideways',
     /\.commands-dock-list \{\s*grid-template-columns: minmax\(0, 1fr\);\s*overflow-x: hidden;/.test(css));
   check('  it stays out of the code panel and the sidebar',
@@ -159,7 +160,8 @@ check('the new-folder button is big enough to hit', /\.folder-add \{\s*min-width
 check('a streaming answer shows live elapsed time and output tokens',
   /function LiveWorkStatus\(/.test(app) && /<LiveWorkStatus\s/.test(app) && /\.live-work-status \{/.test(css));
 check('  under the answer, inside its column, not beside it',
-  /<LiveWorkStatus[\s\S]{0,400}?\/>\s*\)\}\s*<\/div>\s*\{\/\* An answer's time/.test(app));
+  // The props now include a startedAt lookup, so the element runs longer.
+  /<LiveWorkStatus[\s\S]{0,1200}?\/>\s*\)\}\s*<\/div>\s*\{\/\* An answer's time/.test(app));
 
 check('the composer placeholder does not repeat the raw model tag',
   /placeholder=\{t\('composer\.placeholderShort'\)\}/.test(app) && !/t\('composer\.placeholder', \{ model:/.test(app));

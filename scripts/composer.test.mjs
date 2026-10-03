@@ -359,8 +359,10 @@ check('and the menu is taken down with it',
 // Both entries in that menu are modes that outlive the message that armed
 // them. Folding them behind a button folds away the only thing that said so,
 // so the button says it instead.
-check('nothing is armed to begin with',
-  (await evaluate(`document.querySelector('.composer-plus').classList.contains('is-armed')`)) === false);
+// Web/tools (mcpEnabled) is on by default now (App.jsx), so a fresh composer
+// starts armed; the + has to say so from the first frame, not after a click.
+check('a mode that is on by default marks the + from the start',
+  (await evaluate(`document.querySelector('.composer-plus').classList.contains('is-armed')`)) === true);
 
 await click('.composer-plus');
 await sleep(400);
@@ -568,7 +570,10 @@ const covered = await json(`(() => {
   return {
     open: true,
     onMenu: !!hit && !!menu.contains(hit),
-    hit: hit ? hit.tagName.toLowerCase() + '.' + (hit.className || '').toString().split(' ')[0] : null,
+    // getAttribute, not className: on an <svg> that is an object, and the
+    // report read "svg.[object". The nearest classed ancestor says whose it is.
+    hit: hit ? [hit, ...(function* () { for (let n = hit.parentElement; n; n = n.parentElement) yield n; })()]
+      .slice(0, 4).map(n => n.tagName.toLowerCase() + '.' + (n.getAttribute('class') || '').split(' ')[0]).join(' < ') : null,
   };
 })()`);
 check('a notice does not cover the top of the open menu', covered.open && covered.onMenu, JSON.stringify(covered));

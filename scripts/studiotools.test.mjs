@@ -196,7 +196,7 @@ check('and a film card has a way into it', /className="studio-job-expand" onClic
     /\{canCompare && \(\s*\n\s*<button type="button" className=\{`studio-lightbox-btn \$\{showCompare \? 'is-on' : ''\}`\}/.test(lightbox)
     && /\(event\.key === 'c' \|\| event\.key === 'C'\) && canCompare/.test(lightbox));
   check('  never through the glass', /const showCompare = comparing && canCompare && !veiled;/.test(lightbox));
-  check('  Escape takes the bar down before it closes the viewer', /if \(full\) setFull\(false\); else if \(showCompare\) setComparing\(false\); else onClose\(\);/.test(lightbox));
+  check('  Escape takes the bar down before it closes the viewer', /if \(full\) setFull\(false\);\s*else if \(showCompare\) setComparing\(false\);\s*else onClose\(\);/.test(lightbox));
   check('  a drag across it is not a swipe to the next picture', /if \(!start \|\| item\.video \|\| showCompare\) return;/.test(lightbox));
   check('  and the arrows on its handle move the bar, not the picture',
     /if \(onBar && \['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown', 'Home', 'End'\]\.includes\(event\.key\)\) return;/.test(lightbox));
