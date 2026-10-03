@@ -1160,14 +1160,36 @@ export const allLimits = (env = {}) => {
     const estimate = agyEstimate(readUsage({ since: Date.now() - 5 * 3600 * 1000 }), env, { learned: store.agy?.learnedCapacity || null });
     if (estimate) store.agy = { ...store.agy, ...estimate };
   }
-  /* A window whose reset has passed is empty again, whatever was last said. */
   const now = Date.now();
-  for (const [id, entry] of Object.entries(store)) {
-    const windows = (entry.windows || []).map(w => (w.resetsAt && w.resetsAt < now ? { ...w, usedPercent: 0, reset: true } : w));
-    const allReset = windows.length && windows.every(w => w.reset);
-    store[id] = { ...entry, windows, ...(entry.status === 'rejected' && allReset ? { status: 'allowed' } : {}) };
-  }
+  for (const [id, entry] of Object.entries(store)) store[id] = settleResets(entry, now);
   return store;
+};
+
+/**
+ * A window whose reset has passed is empty again, whatever was last said.
+ *
+ * And a refusal ends with it: once a window has reset since the refusal was
+ * heard and no window is still full, the CLI is usable again. Waiting for
+ * *every* window to reset kept "limit reached" on screen for days after the
+ * 5-hour window came back, because the weekly one (not full) had not reset.
+ * A refusal heard only as an error, with no window to show for it, waits for
+ * an actual reset rather than being dropped at once.
+ */
+export const settleResets = (entry = {}, now = Date.now()) => {
+  const windows = (entry.windows || []).map(w => (
+    Number.isFinite(w.resetsAt) && w.resetsAt <= now ? { ...w, usedPercent: 0, reset: true, forecast: undefined } : w));
+  if (entry.status !== 'rejected') return { ...entry, windows };
+  const heard = Number(entry.updatedAt) || 0;
+  // A full window that has reset is what the refusal was about; any other
+  // window counts only if it reset after the refusal was heard.
+  const resetSince = windows.some((w, i) => w.reset
+    && ((entry.windows[i]?.usedPercent >= 100) || w.resetsAt > heard))
+    || (Number.isFinite(entry.resetsAt) && entry.resetsAt <= now && entry.resetsAt > heard);
+  const stillFull = windows.some(w => !w.reset && w.usedPercent >= 100)
+    || (Number.isFinite(entry.resetsAt) && entry.resetsAt > now);
+  if (!resetSince || stillFull) return { ...entry, windows };
+  const warning = windows.some(w => !w.reset && w.usedPercent >= 80);
+  return { ...entry, windows, status: warning ? 'allowed_warning' : 'allowed' };
 };
 
 /* ------------------------------------------------------ reading the output
