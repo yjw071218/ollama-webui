@@ -57,7 +57,7 @@ export const CliApprovals = () => {
     <div className="cli-approvals" role="alertdialog" aria-label={t('cliAgent.approvalTitle')}
       style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 'var(--z-dock)', width: 'min(440px, calc(100vw - 32px))', display: 'grid', gap: 8 }}>
       {list.map(a => (
-        <div key={a.id} style={{ background: 'var(--bg-secondary, #1e1e1e)', border: '1px solid var(--warning, #d97706)', borderRadius: 10, padding: 12, boxShadow: '0 6px 24px rgba(0,0,0,.35)' }}>
+        <div key={a.id} style={{ /* --bg-secondary is not a token here: it fell back to near-black on the light theme */ background: 'var(--surface-raised, var(--bg-main))', color: 'var(--text-primary)', border: '1px solid var(--warning, #d97706)', borderRadius: 10, padding: 12, boxShadow: '0 6px 24px rgba(0,0,0,.35)' }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: '0.85rem' }}>
             <ShieldQuestion size={15} style={{ color: 'var(--warning, #d97706)' }} />
             {t('cliAgent.approvalAsks', { cli: cliLabel(a.provider) })}

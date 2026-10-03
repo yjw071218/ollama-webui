@@ -1253,7 +1253,7 @@ const en = {
   'msg.regenerateWith': 'Regenerate with another model', 'msg.edit': 'Edit message',
   'msg.saveSubmit': 'Save & submit', 'msg.deleted': 'Message deleted.',
 
-  'settings.title': 'Settings', 'settings.general': 'General', 'settings.generation': 'Generation',
+  'settings.title': 'Settings', 'settings.general': 'General', 'settings.showGuide': 'Show the beginner guide', 'settings.generation': 'Generation',
   'settings.models': 'Models', 'settings.prompts': 'Prompts', 'settings.voice': 'Voice', 'settings.data': 'Data & Logs',
   'settings.account': 'Account', 'settings.appearance': 'Appearance', 'settings.light': 'Light', 'settings.dark': 'Dark',
   'settings.system': 'System', 'settings.textSize': 'Text size', 'settings.small': 'Small', 'settings.medium': 'Medium',
@@ -2938,7 +2938,7 @@ const ko = {
   'msg.regenerateWith': '다른 모델로 다시 생성', 'msg.edit': '메시지 편집',
   'msg.saveSubmit': '저장 후 전송', 'msg.deleted': '메시지를 삭제했습니다.',
 
-  'settings.title': '설정', 'settings.general': '일반', 'settings.generation': '생성',
+  'settings.title': '설정', 'settings.general': '일반', 'settings.showGuide': '초보자 가이드 다시 보기', 'settings.generation': '생성',
   'settings.models': '모델', 'settings.prompts': '프롬프트', 'settings.voice': '음성', 'settings.data': '데이터 및 로그',
   'settings.account': '계정', 'settings.appearance': '모양', 'settings.light': '밝게', 'settings.dark': '어둡게',
   'settings.system': '시스템', 'settings.textSize': '글자 크기', 'settings.small': '작게', 'settings.medium': '보통',
@@ -4637,7 +4637,7 @@ const ja = {
   'msg.regenerateWith': '別のモデルで再生成', 'msg.edit': 'メッセージを編集',
   'msg.saveSubmit': '保存して送信', 'msg.deleted': 'メッセージを削除しました。',
 
-  'settings.title': '設定', 'settings.general': '一般', 'settings.generation': '生成',
+  'settings.title': '設定', 'settings.general': '一般', 'settings.showGuide': '初心者ガイドをもう一度見る', 'settings.generation': '生成',
   'settings.models': 'モデル', 'settings.prompts': 'プロンプト', 'settings.voice': '音声', 'settings.data': 'データとログ',
   'settings.account': 'アカウント', 'settings.appearance': '外観', 'settings.light': 'ライト', 'settings.dark': 'ダーク',
   'settings.system': 'システム', 'settings.textSize': '文字サイズ', 'settings.small': '小', 'settings.medium': '中',
@@ -6323,7 +6323,7 @@ const zhHans = {
   'msg.regenerateWith': '换个模型重新生成', 'msg.edit': '编辑消息',
   'msg.saveSubmit': '保存并发送', 'msg.deleted': '消息已删除。',
 
-  'settings.title': '设置', 'settings.general': '通用', 'settings.generation': '生成',
+  'settings.title': '设置', 'settings.general': '通用', 'settings.showGuide': '再次查看新手指南', 'settings.generation': '生成',
   'settings.models': '模型', 'settings.prompts': '提示词', 'settings.voice': '语音', 'settings.data': '数据与日志',
   'settings.account': '账户', 'settings.appearance': '外观', 'settings.light': '浅色', 'settings.dark': '深色',
   'settings.system': '跟随系统', 'settings.textSize': '字号', 'settings.small': '小', 'settings.medium': '中',
@@ -8009,7 +8009,7 @@ const zhHant = {
   'msg.regenerateWith': '換個模型重新產生', 'msg.edit': '編輯訊息',
   'msg.saveSubmit': '儲存並傳送', 'msg.deleted': '訊息已刪除。',
 
-  'settings.title': '設定', 'settings.general': '一般', 'settings.generation': '產生',
+  'settings.title': '設定', 'settings.general': '一般', 'settings.showGuide': '再次查看新手指南', 'settings.generation': '產生',
   'settings.models': '模型', 'settings.prompts': '提示詞', 'settings.voice': '語音', 'settings.data': '資料與紀錄',
   'settings.account': '帳戶', 'settings.appearance': '外觀', 'settings.light': '淺色', 'settings.dark': '深色',
   'settings.system': '跟隨系統', 'settings.textSize': '字級', 'settings.small': '小', 'settings.medium': '中',
@@ -9695,7 +9695,7 @@ const es = {
   'msg.regenerateWith': 'Regenerar con otro modelo', 'msg.edit': 'Editar el mensaje',
   'msg.saveSubmit': 'Guardar y enviar', 'msg.deleted': 'Mensaje eliminado.',
 
-  'settings.title': 'Ajustes', 'settings.general': 'General', 'settings.generation': 'Generación',
+  'settings.title': 'Ajustes', 'settings.general': 'General', 'settings.showGuide': 'Ver la guía de inicio', 'settings.generation': 'Generación',
   'settings.models': 'Modelos', 'settings.prompts': 'Prompts', 'settings.voice': 'Voz', 'settings.data': 'Datos y registros',
   'settings.account': 'Cuenta', 'settings.appearance': 'Apariencia', 'settings.light': 'Claro', 'settings.dark': 'Oscuro',
   'settings.system': 'Sistema', 'settings.textSize': 'Tamaño del texto', 'settings.small': 'Pequeño', 'settings.medium': 'Medio',
@@ -11381,7 +11381,7 @@ const fr = {
   'msg.regenerateWith': 'Regénérer avec un autre modèle', 'msg.edit': 'Modifier le message',
   'msg.saveSubmit': 'Enregistrer et envoyer', 'msg.deleted': 'Message supprimé.',
 
-  'settings.title': 'Paramètres', 'settings.general': 'Général', 'settings.generation': 'Génération',
+  'settings.title': 'Paramètres', 'settings.general': 'Général', 'settings.showGuide': 'Revoir le guide de démarrage', 'settings.generation': 'Génération',
   'settings.models': 'Modèles', 'settings.prompts': 'Prompts', 'settings.voice': 'Voix', 'settings.data': 'Données et journaux',
   'settings.account': 'Compte', 'settings.appearance': 'Apparence', 'settings.light': 'Clair', 'settings.dark': 'Sombre',
   'settings.system': 'Système', 'settings.textSize': 'Taille du texte', 'settings.small': 'Petite', 'settings.medium': 'Moyenne',
@@ -13067,7 +13067,7 @@ const de = {
   'msg.regenerateWith': 'Mit anderem Modell neu erzeugen', 'msg.edit': 'Nachricht bearbeiten',
   'msg.saveSubmit': 'Speichern und senden', 'msg.deleted': 'Nachricht gelöscht.',
 
-  'settings.title': 'Einstellungen', 'settings.general': 'Allgemein', 'settings.generation': 'Generierung',
+  'settings.title': 'Einstellungen', 'settings.general': 'Allgemein', 'settings.showGuide': 'Einsteigerleitfaden erneut anzeigen', 'settings.generation': 'Generierung',
   'settings.models': 'Modelle', 'settings.prompts': 'Prompts', 'settings.voice': 'Sprache', 'settings.data': 'Daten und Protokolle',
   'settings.account': 'Konto', 'settings.appearance': 'Darstellung', 'settings.light': 'Hell', 'settings.dark': 'Dunkel',
   'settings.system': 'System', 'settings.textSize': 'Textgröße', 'settings.small': 'Klein', 'settings.medium': 'Mittel',
@@ -14753,7 +14753,7 @@ const pt = {
   'msg.regenerateWith': 'Gerar de novo com outro modelo', 'msg.edit': 'Editar a mensagem',
   'msg.saveSubmit': 'Salvar e enviar', 'msg.deleted': 'Mensagem excluída.',
 
-  'settings.title': 'Configurações', 'settings.general': 'Geral', 'settings.generation': 'Geração',
+  'settings.title': 'Configurações', 'settings.general': 'Geral', 'settings.showGuide': 'Ver o guia para iniciantes', 'settings.generation': 'Geração',
   'settings.models': 'Modelos', 'settings.prompts': 'Prompts', 'settings.voice': 'Voz', 'settings.data': 'Dados e registros',
   'settings.account': 'Conta', 'settings.appearance': 'Aparência', 'settings.light': 'Claro', 'settings.dark': 'Escuro',
   'settings.system': 'Sistema', 'settings.textSize': 'Tamanho do texto', 'settings.small': 'Pequeno', 'settings.medium': 'Médio',
@@ -16439,7 +16439,7 @@ const ru = {
   'msg.regenerateWith': 'Сгенерировать другой моделью', 'msg.edit': 'Изменить сообщение',
   'msg.saveSubmit': 'Сохранить и отправить', 'msg.deleted': 'Сообщение удалено.',
 
-  'settings.title': 'Настройки', 'settings.general': 'Общие', 'settings.generation': 'Генерация',
+  'settings.title': 'Настройки', 'settings.general': 'Общие', 'settings.showGuide': 'Показать руководство для новичков', 'settings.generation': 'Генерация',
   'settings.models': 'Модели', 'settings.prompts': 'Промпты', 'settings.voice': 'Голос', 'settings.data': 'Данные и журнал',
   'settings.account': 'Аккаунт', 'settings.appearance': 'Оформление', 'settings.light': 'Светлая', 'settings.dark': 'Тёмная',
   'settings.system': 'Системная', 'settings.textSize': 'Размер текста', 'settings.small': 'Мелкий', 'settings.medium': 'Средний',
@@ -18125,7 +18125,7 @@ const vi = {
   'msg.regenerateWith': 'Tạo lại bằng mô hình khác', 'msg.edit': 'Sửa tin nhắn',
   'msg.saveSubmit': 'Lưu và gửi', 'msg.deleted': 'Đã xóa tin nhắn.',
 
-  'settings.title': 'Cài đặt', 'settings.general': 'Chung', 'settings.generation': 'Tạo sinh',
+  'settings.title': 'Cài đặt', 'settings.general': 'Chung', 'settings.showGuide': 'Xem lại hướng dẫn cho người mới', 'settings.generation': 'Tạo sinh',
   'settings.models': 'Mô hình', 'settings.prompts': 'Prompt', 'settings.voice': 'Giọng nói', 'settings.data': 'Dữ liệu và nhật ký',
   'settings.account': 'Tài khoản', 'settings.appearance': 'Giao diện', 'settings.light': 'Sáng', 'settings.dark': 'Tối',
   'settings.system': 'Theo hệ thống', 'settings.textSize': 'Cỡ chữ', 'settings.small': 'Nhỏ', 'settings.medium': 'Vừa',
@@ -19811,7 +19811,7 @@ const ar = {
   'msg.regenerateWith': 'إعادة التوليد بنموذج آخر', 'msg.edit': 'تعديل الرسالة',
   'msg.saveSubmit': 'حفظ وإرسال', 'msg.deleted': 'تم حذف الرسالة.',
 
-  'settings.title': 'الإعدادات', 'settings.general': 'عام', 'settings.generation': 'التوليد',
+  'settings.title': 'الإعدادات', 'settings.general': 'عام', 'settings.showGuide': 'عرض دليل المبتدئين مرة أخرى', 'settings.generation': 'التوليد',
   'settings.models': 'النماذج', 'settings.prompts': 'المطالبات', 'settings.voice': 'الصوت', 'settings.data': 'البيانات والسجلات',
   'settings.account': 'الحساب', 'settings.appearance': 'المظهر', 'settings.light': 'فاتح', 'settings.dark': 'داكن',
   'settings.system': 'حسب النظام', 'settings.textSize': 'حجم النص', 'settings.small': 'صغير', 'settings.medium': 'متوسط',

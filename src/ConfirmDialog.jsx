@@ -1,4 +1,4 @@
-import React, { useEffect, useRef, useState } from 'react';
+﻿import React, { useEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { TriangleAlert } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
@@ -24,12 +24,16 @@ const ask = (req) => new Promise((resolve) => {
 
 export const confirmDialog = (message, opts = {}) => ask({ kind: 'confirm', message, ...opts });
 export const alertDialog = (message, opts = {}) => ask({ kind: 'alert', message, ...opts });
+/* window.prompt(): resolves to the text, or null when cancelled. */
+export const promptDialog = (message, opts = {}) => ask({ kind: 'prompt', message, ...opts });
 
 export function ConfirmDialogHost() {
   const { t } = useI18n();
   const [queue, setQueue] = useState([]);
   const okRef = useRef(null);
   const cancelRef = useRef(null);
+  const inputRef = useRef(null);
+  const [value, setValue] = useState('');
 
   useEffect(() => {
     push = (item) => setQueue(q => [...q, item]);
@@ -38,20 +42,22 @@ export function ConfirmDialogHost() {
   }, []);
 
   const current = queue[0];
-  const done = (value) => {
-    current?.resolve(value);
+  const done = (ok) => {
+    current?.resolve(current?.kind === 'prompt' ? (ok ? value : null) : ok);
     setQueue(q => q.slice(1));
   };
 
   useEffect(() => {
     if (!current) return undefined;
     const back = document.activeElement;
-    // A destructive question starts on "Cancel", so a stray Enter does nothing.
-    (current.danger ? cancelRef.current : okRef.current)?.focus();
+    setValue(current.defaultValue || '');
+    // A destructive question starts on "Cancel", so a stray Enter does nothing;
+    // a question that wants text starts in its field.
+    (current.kind === 'prompt' ? inputRef.current : current.danger ? cancelRef.current : okRef.current)?.focus();
     const onKey = (e) => {
       if (e.key === 'Escape') { e.preventDefault(); e.stopImmediatePropagation(); done(current.kind === 'alert'); }
       if (e.key === 'Tab') {
-        const order = [cancelRef.current, okRef.current].filter(Boolean);
+        const order = [inputRef.current, cancelRef.current, okRef.current].filter(Boolean);
         const i = order.indexOf(document.activeElement);
         e.preventDefault();
         order[(i + (e.shiftKey ? -1 : 1) + order.length) % order.length]?.focus();
@@ -85,8 +91,18 @@ export function ConfirmDialogHost() {
           <h2 id="confirm-dialog-title">{heading}</h2>
         </div>
         {body && <p id="confirm-dialog-body">{body}</p>}
+        {current.kind === 'prompt' && (
+          <input
+            ref={inputRef}
+            className="settings-input confirm-dialog-input"
+            value={value}
+            placeholder={current.placeholder || ''}
+            onChange={(e) => setValue(e.target.value)}
+            onKeyDown={(e) => { if (e.key === 'Enter' && !e.nativeEvent.isComposing) { e.preventDefault(); done(true); } }}
+          />
+        )}
         <div className="confirm-dialog-actions">
-          {current.kind === 'confirm' && (
+          {current.kind !== 'alert' && (
             <button ref={cancelRef} type="button" className="btn-secondary" onClick={() => done(false)}>
               {current.cancelLabel || t('common.cancel')}
             </button>

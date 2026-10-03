@@ -214,7 +214,7 @@ body {
   display: flex;
 }
 .history-item:hover .history-delete { opacity: 1; }
-.history-delete:hover { color: #EF4444; }
+.history-delete:hover { color: var(--danger, #EF4444); }
 
 .sidebar-footer {
   padding: 1rem;
@@ -727,8 +727,8 @@ body {
   overflow-y: auto;
 }
 .log-item { margin-bottom: 0.25rem; }
-.log-error { color: #EF4444; }
-.log-success { color: #10B981; }
+.log-error { color: var(--danger, #EF4444); }
+.log-success { color: var(--success, #10B981); }
 .log-info { color: var(--text-secondary); }
 
 @media (max-width: 768px) {
@@ -971,9 +971,9 @@ body {
 }
 
 .attachment-remove:hover {
-  background: #EF4444;
+  background: var(--danger, #EF4444);
   color: white;
-  border-color: #EF4444;
+  border-color: var(--danger, #EF4444);
 }
 
 /* MCP Toggle */
@@ -1048,7 +1048,7 @@ body {
   color: var(--primary);
 }
 .tool-icon.success {
-  color: #10B981;
+  color: var(--success, #10B981);
 }
 
 .tool-result-block {

@@ -3035,7 +3035,94 @@ const runInFolder = (env, owner) => async ({ model: name, dir, mode, prompt }) =
   }
 };
 
+/* Where on this PC a file or folder the browser handed over lives.
+ *
+ * A browser never says a dropped file's path -- only its name, size and
+ * modification time. The server runs on the same PC, so it looks for an entry
+ * with that name (and, for a file, that size and time; for a folder, the
+ * children that were dropped with it) under the usual places: the user's
+ * folders, the project, and LOCATE_ROOTS from .env (";"-separated). Bounded in
+ * depth, entries and time, so a miss costs a second, not a disk scan. Only
+ * unambiguous answers come back; two equal candidates are no answer. */
+const SKIP_DIRS = new Set(['node_modules', '.git', '$Recycle.Bin', 'AppData', 'Windows', 'Program Files', 'Program Files (x86)', '.cache', 'site-packages', '__pycache__']);
+const locateRoots = (env) => {
+  const home = os.homedir();
+  const extra = String(env.LOCATE_ROOTS || process.env.LOCATE_ROOTS || '').split(';').map(s => s.trim()).filter(Boolean);
+  const named = ['Desktop', 'Downloads', 'Documents', 'Pictures', 'Videos', 'Music', 'OneDrive', 'OneDrive/Desktop', 'OneDrive/Documents', '바탕 화면', '문서', '다운로드']
+    .map(d => path.join(home, d));
+  const project = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
+  // Drive roots last: breadth-first, their top folders (C:\작업) cost little.
+  const drives = process.platform === 'win32' ? 'CDEFGH'.split('').map(l => `${l}:\\`) : [];
+  return [...new Set([...extra, project, ...named, home, ...drives])].filter(d => { try { return fs.statSync(d).isDirectory(); } catch { return false; } });
+};
+const locateEntries = async (env, wanted) => {
+  const found = wanted.map(() => []);
+  const deadline = Date.now() + 2500;
+  let budget = 60000;
+  const seen = new Set();
+  /* Breadth-first over every root at once. Depth-first spent the whole entry
+     budget inside Desktop/Downloads before it ever reached the drive-level
+     folders (C:\Artificial_Intelligence\ollama-webui came back as nothing):
+     shallow places are where dropped things usually live, so they go first. */
+  let level = locateRoots(env).map(dir => ({ dir, depth: 0 }));
+  const visit = async ({ dir, depth }, next) => {
+    if (depth > 6 || budget <= 0 || Date.now() > deadline || seen.has(dir)) return;
+    seen.add(dir);
+    let list;
+    try { list = await fs.promises.readdir(dir, { withFileTypes: true }); } catch { return; }
+    budget -= list.length;
+    for (const ent of list) {
+      const full = path.join(dir, ent.name);
+      for (let i = 0; i < wanted.length; i++) {
+        const w = wanted[i];
+        if (w.name !== ent.name || found[i].includes(full)) continue;
+        if (w.kind === 'folder' && ent.isDirectory()) {
+          const kids = (w.children || []).slice(0, 5);
+          if (kids.every(k => fs.existsSync(path.join(full, k)))) found[i].push(full);
+        } else if (w.kind !== 'folder' && ent.isFile()) {
+          try {
+            const st = await fs.promises.stat(full);
+            if ((!Number.isFinite(w.size) || st.size === w.size)
+              && (!Number.isFinite(w.lastModified) || Math.abs(st.mtimeMs - w.lastModified) < 2000)) found[i].push(full);
+          } catch { /* gone */ }
+        }
+      }
+    }
+    for (const ent of list) {
+      if (ent.isDirectory() && !ent.name.startsWith('.') && !SKIP_DIRS.has(ent.name)) next.push({ dir: path.join(dir, ent.name), depth: depth + 1 });
+    }
+  };
+  while (level.length && budget > 0 && Date.now() <= deadline) {
+    const next = [];
+    for (const item of level) await visit(item, next);
+    // Something found at this depth: deeper namesakes are not looked for.
+    if (found.every(f => f.length)) break;
+    level = next;
+  }
+  return found.map(f => (f.length === 1 ? f[0] : null));
+};
+
 export const createCliRoutes = (env = {}) => [
+  /* Paths of dropped files and folders (see locateEntries). */
+  {
+    // Not under /localfs: api.js drops those whenever HOST is not loopback
+    // (ALLOW_LOCAL_FS off), which is how the installed app runs -- so every
+    // lookup came back 403 and only the name was written. This reads no file
+    // and writes nothing; it answers "where is X" behind the access token.
+    path: '/cli/locate',
+    handler: guarded(async (req, res) => {
+      postOnly(req);
+      const body = await jsonBody(req);
+      const wanted = (Array.isArray(body.items) ? body.items : []).slice(0, 50).map(it => ({
+        kind: it?.kind === 'folder' ? 'folder' : 'file',
+        name: path.basename(String(it?.name || '')),
+        size: Number(it?.size),
+        lastModified: Number(it?.lastModified),
+        children: (Array.isArray(it?.children) ? it.children : []).map(c => path.basename(String(c))).filter(Boolean),
+      })).filter(w => w.name);
+      sendJson(res, { success: true, paths: wanted.length ? await locateEntries(env, wanted) : [] });
+    }),
+  },
   /* Just the limits: cheap enough for the header to ask every minute, since
      it reads files and runs nothing. With a forecast of when each window
      runs out at the rate it is being used. */

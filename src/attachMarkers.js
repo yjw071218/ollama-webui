@@ -1,4 +1,4 @@
-/**
+﻿/**
  * The blocks a turn injects into the user's message, written and read in one
  * place.
  *
@@ -46,6 +46,13 @@ export const indexedMarker = ({ name, pages }) =>
   `\n\n[Attached document: ${name}${pages ? `, ${pages} pages` : ''}`
   + '. Its full text has been indexed; the relevant passages are supplied below.]';
 
+/**
+ * Where an attached file is on the PC (found by /cli/locate), for the
+ * model to cite and for a CLI agent to open. Hidden from the transcript like
+ * the other markers -- the chip already says which file it was.
+ */
+export const pathMarker = (name, where) => `\n[Attached file path: ${name} -> ${where}]`;
+
 /* ------------------------------------------------------------- the reading */
 
 // Anchored on the fixed tail rather than on the name, so a filename with a
@@ -63,7 +70,8 @@ const IMAGE_NOTE = /---\s+Image Analysis by.*?\n[\s\S]*?-------------------\n?/g
 const CONTEXT = /---\s+\[(Knowledge|Grounding)\][\s\S]*?-------------------/g;
 
 /** Every marker, for callers that only want them gone. */
-const ALL = [INDEXED, FILE, URL_FETCH, IMAGE_NOTE, CONTEXT];
+const PATH = /\n?\[Attached file path: [^\]\n]*\]/g;
+const ALL = [INDEXED, FILE, URL_FETCH, IMAGE_NOTE, CONTEXT, PATH];
 
 /**
  * The chips to draw above a message, and the message with the blocks removed.

@@ -31,7 +31,7 @@
   :root { --warning: #F59E0B; --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35); --shadow-lg: 0 12px 44px rgba(0, 0, 0, 0.5); }
 }
 :root[data-theme='dark'] { --warning: #F59E0B; --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35); --shadow-lg: 0 12px 44px rgba(0, 0, 0, 0.5); }
-:root[data-theme='light'] { --warning: #D97706; --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 6px 20px rgba(0, 0, 0, 0.08); --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.18); }
+:root[data-theme='light'] { --warning: var(--warning, #D97706); --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 6px 20px rgba(0, 0, 0, 0.08); --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.18); }
 
 /* ---- 2. focus, selection, hover ---- */
 ::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
@@ -211,4 +211,29 @@ html { scrollbar-width: thin; scrollbar-color: var(--border-color) transparent; 
   .user-text { padding: 0.7rem 1rem; }
   .markdown-body pre { font-size: 0.82em; padding: 0.8rem; }
   .markdown-body h1 { font-size: 1.3rem; } .markdown-body h2 { font-size: 1.15rem; }
+}
+
+/* ---- 6. keyboard focus that came back ----
+   index.css draws one focus ring for everything, inside `:where()` so any
+   component can restyle it -- which also let ~25 component rules with a plain
+   `outline: none` (studio.css, extras.css, index.css, settingsTools.css) erase
+   it, and Tab landed on controls with no sign of where it was.
+   Controls that are not text fields get the ring back for the keyboard only
+   (`:focus-visible` does not fire on a click), above every component rule. */
+:is(button, a[href], select, summary, [tabindex]:not([tabindex='-1']):not([role='dialog']):not(.studio-lightbox):not(.markdown-body),
+    input:is([type='checkbox'], [type='radio'], [type='range'], [type='button'], [type='submit'])):focus-visible {
+  outline: 2px solid var(--btn-active, var(--primary)) !important;
+  outline-offset: 2px !important;
+}
+/* A text field drawn borderless inside its own box is ringed on the box, where
+   the eye looks -- a ring around the bare field inside would sit in the middle
+   of the box. Fields with a border of their own get the ring on themselves. */
+:is(.cmd-input-row, .picture-gallery-search, .chg-search, .studio-find, .studio-preset-naming,
+    .history-search, .sidebar-search-inner, .term-bar):has(input:focus-visible) {
+  box-shadow: var(--focus-ring);
+  border-radius: var(--radius-sm, 8px);
+}
+:is(.studio-form .settings-input, .settings-modal input, .settings-modal textarea,
+    .studio-prompt-tag-input, .rename-input):focus-visible {
+  box-shadow: var(--focus-ring);
 }

@@ -1,4 +1,4 @@
-/* =========================================================
+﻿/* =========================================================
    Design tokens that were referenced but never defined
    (--text-muted / --primary / --accent / --primary-rgb),
    plus an explicit light/dark override driven by data-theme.
@@ -917,8 +917,8 @@ mark.chat-hit.current {
 }
 .console-error pre { color: var(--danger); }
 .console-error .console-level { color: var(--danger); }
-.console-warn pre { color: #D97706; }
-.console-warn .console-level { color: #D97706; }
+.console-warn pre { color: var(--warning, #D97706); }
+.console-warn .console-level { color: var(--warning, #D97706); }
 .console-system pre { color: var(--text-muted); font-style: italic; }
 
 /* ---- Python runner ---- */
@@ -977,7 +977,7 @@ mark.chat-hit.current {
   font-size: 0.85rem;
   line-height: 1.5;
 }
-.artifact-unsupported svg { color: #D97706; }
+.artifact-unsupported svg { color: var(--warning, #D97706); }
 .artifact-unsupported strong { color: var(--text-primary); }
 
 /* --bg-secondary is referenced by .artifact-panel-header but was never defined */
@@ -2336,7 +2336,7 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
   color: var(--text-muted);
   font-size: 0.85rem;
 }
-.sysmon-empty svg { color: #D97706; }
+.sysmon-empty svg { color: var(--warning, #D97706); }
 .sysmon-empty code {
   font-size: 0.72rem;
   background: var(--bg-primary);
@@ -3862,48 +3862,40 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
   margin-inline-end: 0.1rem;
 }
 
-/* Under the composer of every *other* chat. Without it the send button is
-   simply dead and there is nothing on screen explaining why. */
+/* Beside the microphone in the composer toolbar, while the answer is landing
+   in another chat. Without it the send button is simply dead with nothing on
+   screen saying why. A chip as wide as its words; the whole chip opens that
+   chat. It shrinks (ellipsis) before it pushes the model picker off the row. */
 .busy-elsewhere {
-  display: flex;
+  display: inline-flex;
   align-items: center;
-  gap: 0.45rem;
-  align-self: center;
-  width: 100%;
-  max-width: var(--content-width, 768px);
-  margin-bottom: 0.5rem;
-  padding: 0.4rem 0.7rem;
-  border: 1px solid var(--border-color);
-  border-left: 3px solid var(--primary);
-  border-radius: var(--radius-sm);
-  background: var(--bg-primary);
-  color: var(--text-muted);
-  font-size: 0.78rem;
-}
-.busy-elsewhere svg { color: var(--primary); flex-shrink: 0; }
-.busy-elsewhere span {
-  flex: 1;
+  gap: 0.3rem;
+  flex: 0 1 auto;
   min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.busy-elsewhere button {
-  flex: 0 0 auto;
-  background: transparent;
+  max-width: 16rem;
+  height: 1.7rem;
+  margin-inline-start: 0.15rem;
+  padding: 0 0.6rem;
   border: none;
-  padding: 0.15rem 0.25rem;
-  color: var(--primary);
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--primary) 10%, transparent);
+  color: var(--text-muted);
   font: inherit;
+  font-size: 0.75rem;
+  line-height: 1;
   cursor: pointer;
+  animation: fade-in var(--dur-fast, 150ms) var(--ease-out, ease-out) both;
+  transition: background-color var(--dur-fast, 150ms) var(--ease-out, ease-out), color var(--dur-fast, 150ms) var(--ease-out, ease-out), transform var(--dur-fast, 150ms) var(--ease-out, ease-out);
 }
-.busy-elsewhere button:hover { text-decoration: underline; }
-
-@media (max-width: 860px) {
-  /* A finger needs the whole strip to be a target, and the row has no width
-     to spare for a label that ellipsises to three words. */
-  .busy-elsewhere { padding: 0.5rem 0.6rem; font-size: 0.75rem; }
-  .busy-elsewhere button { min-height: 32px; padding-inline: 0.4rem; }
+.busy-elsewhere:hover { background: color-mix(in srgb, var(--primary) 18%, transparent); color: var(--text-primary); }
+.busy-elsewhere:active { transform: scale(var(--press-scale, 0.94)); }
+.busy-elsewhere svg { color: var(--primary); flex-shrink: 0; }
+.busy-elsewhere span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+@media (max-width: 480px) {
+  /* No room for words beside the model picker on a narrow phone: the spinner
+     alone, and the title/aria text still says what it is. */
+  .busy-elsewhere { padding: 0; width: 1.7rem; justify-content: center; }
+  .busy-elsewhere span { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
 }
 
 /* =========================================================
@@ -5074,7 +5066,7 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
   color: var(--text-muted);
 }
 .research-step.is-running .research-step-icon { border-color: var(--primary); color: var(--primary); }
-.research-step.is-failed .research-step-icon { border-color: #EF4444; color: #EF4444; }
+.research-step.is-failed .research-step-icon { border-color: var(--danger, #EF4444); color: var(--danger, #EF4444); }
 .research-step-label {
   min-width: 0;
   overflow: hidden;
@@ -5085,7 +5077,7 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
 .research-step-label a:hover { text-decoration: underline; }
 .research-step-count,
 .research-step-error { flex: 0 0 auto; font-size: 0.75rem; color: var(--text-muted); }
-.research-step-error { color: #EF4444; }
+.research-step-error { color: var(--danger, #EF4444); }
 
 /* The queries are the interesting half of the plan step -- they are what
    turned one question into several -- so they get their own line rather than
@@ -5717,7 +5709,7 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
   color: var(--text-muted);
   border-left-color: var(--border-color);
 }
-.verify-panel.is-failed { border-left-color: #EF4444; color: #EF4444; }
+.verify-panel.is-failed { border-left-color: var(--danger, #EF4444); color: var(--danger, #EF4444); }
 
 .verify-head {
   display: flex;
@@ -5855,7 +5847,7 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
 }
 .chain-step.is-done .chain-step-n { border-color: var(--primary); color: var(--primary); }
 .chain-step.is-running .chain-step-n { border-color: var(--primary); }
-.chain-step.is-failed .chain-step-n { border-color: #EF4444; color: #EF4444; }
+.chain-step.is-failed .chain-step-n { border-color: var(--danger, #EF4444); color: var(--danger, #EF4444); }
 .chain-step-title {
   flex: 1;
   min-width: 0;
@@ -5865,7 +5857,7 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
 }
 .chain-step-count,
 .chain-step-error { flex: 0 0 auto; font-size: 0.73rem; color: var(--text-muted); }
-.chain-step-error { color: #EF4444; }
+.chain-step-error { color: var(--danger, #EF4444); }
 
 .chain-step-body { padding: 0.25rem 0 0.4rem 1.4rem; }
 .chain-step-label {
@@ -5991,7 +5983,7 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.variant-btn.danger { color: #EF4444; }
+.variant-btn.danger { color: var(--danger, #EF4444); }
 
 /* ==== About you, and long-conversation memory ==== */
 
@@ -7275,7 +7267,7 @@ body, .claude-main { background: var(--surface-sunken); }
 }
 .studio-progress-stop:hover { opacity: 1; background: rgba(217, 119, 87, 0.9); }
 
-.studio-progress.is-failed .studio-progress-phase { color: #D97757; white-space: normal; }
+.studio-progress.is-failed .studio-progress-phase { color: var(--primary, #D97757); white-space: normal; }
 
 /* The card inside a conversation is at the end of this section -- see "in a
    conversation, the picture is the point". */
@@ -7438,7 +7430,7 @@ body, .claude-main { background: var(--surface-sunken); }
 }
 .tag-prompt-hint { opacity: 0.62; }
 .tag-prompt:focus-within .tag-prompt-hint { opacity: 1; }
-.tag-prompt-link.is-error { color: #D97757; cursor: pointer; line-height: 1.45; }
+.tag-prompt-link.is-error { color: var(--primary, #D97757); cursor: pointer; line-height: 1.45; }
 
 /* ==================================== the generation card, with more to say
 
@@ -7492,7 +7484,7 @@ body, .claude-main { background: var(--surface-sunken); }
 .studio-phase.is-now svg { color: var(--accent); }
 /* Where it stopped, in the colour the failure is already said in. */
 .studio-phase.is-failed { opacity: 1; background: rgba(217, 119, 87, 0.18); }
-.studio-phase.is-failed svg { color: #D97757; }
+.studio-phase.is-failed svg { color: var(--primary, #D97757); }
 
 /* ---- memory, while it runs ---- */
 
@@ -7506,8 +7498,8 @@ body, .claude-main { background: var(--surface-sunken); }
 }
 .studio-progress-memory svg { flex: none; margin-top: 0.12em; }
 .studio-progress.is-compact .studio-progress-memory { color: var(--text-muted); opacity: 1; }
-.studio-progress-memory.is-warning { color: #D97757; opacity: 1; }
-.studio-progress.is-compact .studio-progress-memory.is-warning { color: #D97757; }
+.studio-progress-memory.is-warning { color: var(--primary, #D97757); opacity: 1; }
+.studio-progress.is-compact .studio-progress-memory.is-warning { color: var(--primary, #D97757); }
 
 /* ---- a failure, said so it can be acted on ---- */
 
@@ -7519,7 +7511,7 @@ body, .claude-main { background: var(--surface-sunken); }
   font-size: var(--label);
   line-height: 1.45;
 }
-.studio-failure-line { display: flex; align-items: flex-start; gap: 0.4rem; color: #D97757; }
+.studio-failure-line { display: flex; align-items: flex-start; gap: 0.4rem; color: var(--primary, #D97757); }
 .studio-failure-line svg { flex: none; margin-top: 0.15em; }
 .studio-failure-more {
   align-self: flex-start;
@@ -7629,7 +7621,7 @@ body, .claude-main { background: var(--surface-sunken); }
 }
 .studio-progress.is-done .studio-progress-bar > span::after,
 .studio-progress.is-failed .studio-progress-bar > span::after { display: none; }
-.studio-progress.is-failed .studio-progress-bar > span { background: #D97757; }
+.studio-progress.is-failed .studio-progress-bar > span { background: var(--primary, #D97757); }
 
 @media (prefers-reduced-motion: reduce) {
   .studio-progress-frame img,
@@ -7881,7 +7873,7 @@ body, .claude-main { background: var(--surface-sunken); }
   background: var(--surface-sunken);
   overflow: hidden;
 }
-.tool-receipt.is-failed { border-color: color-mix(in srgb, #D97757 45%, var(--hairline)); }
+.tool-receipt.is-failed { border-color: color-mix(in srgb, var(--primary, #D97757) 45%, var(--hairline)); }
 
 .tool-receipt-head {
   display: flex;
@@ -7892,9 +7884,9 @@ body, .claude-main { background: var(--surface-sunken); }
   color: var(--text-secondary);
 }
 .tool-receipt-head svg { flex: none; color: var(--primary); opacity: 0.9; }
-.tool-receipt.is-failed .tool-receipt-head svg { color: #D97757; }
+.tool-receipt.is-failed .tool-receipt-head svg { color: var(--primary, #D97757); }
 .tool-receipt-verb { font-weight: 600; letter-spacing: 0.01em; }
-.tool-receipt.is-failed .tool-receipt-verb { color: #D97757; }
+.tool-receipt.is-failed .tool-receipt-verb { color: var(--primary, #D97757); }
 
 /* A body only appears where there is something to read, so it can afford the
    line that separates it. */
@@ -7928,7 +7920,7 @@ body, .claude-main { background: var(--surface-sunken); }
    last line rather than as a second card inside the first. */
 .tool-block > .tool-receipt {
   border: 0;
-  border-top: 1px solid color-mix(in srgb, #D97757 45%, var(--hairline));
+  border-top: 1px solid color-mix(in srgb, var(--primary, #D97757) 45%, var(--hairline));
   border-radius: 0;
 }
 
@@ -8169,7 +8161,7 @@ body, .claude-main { background: var(--surface-sunken); }
 }
 
 .picture-tags-wait { display: flex; align-items: center; gap: 0.5rem; color: var(--text-secondary); padding: 1rem 0; }
-.picture-tags-error { color: #D97757; font-size: 0.85rem; }
+.picture-tags-error { color: var(--primary, #D97757); font-size: 0.85rem; }
 .picture-tags-list { display: flex; flex-wrap: wrap; gap: 0.3rem; max-height: 50vh; overflow: auto; }
 .picture-tag {
   padding: 0.22rem 0.55rem;
@@ -8339,8 +8331,8 @@ body, .claude-main { background: var(--surface-sunken); }
 }
 .studio-progress-cancel:hover {
   color: #fff;
-  background: #D97757;
-  border-color: #D97757;
+  background: var(--primary, #D97757);
+  border-color: var(--primary, #D97757);
 }
 
 /* The picture an edit started from, in the corner of the frame; held, it is
@@ -9869,3 +9861,20 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 .guide-btn.is-ghost { border-color: transparent; background: none; color: var(--text-muted); }
 .guide-btn.is-primary { background: var(--accent, #d97757); border-color: transparent; color: #fff; }
 .guide-btn.is-primary:hover { filter: brightness(1.08); background: var(--accent, #d97757); }
+
+/* The text field of promptDialog (ConfirmDialog.jsx). */
+.confirm-dialog-input { width: 100%; box-sizing: border-box; margin-top: 0.75rem; }
+
+/* A file shown on a sent message (App.jsx). Was an inline style with a fixed
+   rgba(0,0,0,.2) fill -- a grey smudge on the light theme. */
+.sent-attachment {
+  display: flex; align-items: center; gap: 0.4rem;
+  padding: 0.4rem 0.6rem; border-radius: 6px;
+  border: 1px solid var(--border-color);
+  background: var(--surface-sunken, color-mix(in srgb, currentColor 8%, transparent));
+  color: inherit; font: inherit; font-size: 0.8rem; cursor: default;
+  transition: border-color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out);
+}
+.sent-attachment.is-openable { cursor: pointer; }
+.sent-attachment.is-openable:hover { border-color: var(--primary); }
+.sent-attachment-name { max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }

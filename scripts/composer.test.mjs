@@ -1,4 +1,4 @@
-import { createChatJobStore, followChatJob } from '../server/chatJobs.js';
+﻿import { createChatJobStore, followChatJob } from '../server/chatJobs.js';
 const replayStore = createChatJobStore();
 // The composer, as a stack.
 //
@@ -601,11 +601,11 @@ await send('Page.reload');
    is still arriving. Reported as the screen being dragged back to a finished
    chat, so what is exercised here is what a person does -- press "go there". */
 const goToRecovering = () => evaluate(`(() => {
-  const go = document.querySelector('.busy-elsewhere button');
+  const go = document.querySelector('button.busy-elsewhere');
   if (go) { go.click(); return 'went'; }
   return 'already there';
 })()`);
-await waitFor(`!!document.querySelector('.busy-elsewhere button') || !!document.querySelector('.markdown-body.is-streaming')`, 10000);
+await waitFor(`!!document.querySelector('button.busy-elsewhere') || !!document.querySelector('.markdown-body.is-streaming')`, 10000);
 await goToRecovering();
 check('reload restores the active answer and streaming class', await waitFor(
   `!![...document.querySelectorAll('.markdown-body.is-streaming')].find(x => x.textContent.includes('복구 첫부분 🎉'))`, 10000));
@@ -613,7 +613,7 @@ replayStore.appendChunk(recoveryJob.id, JSON.stringify({ message: { content: ' �
 check('new tokens arrive live after reload', await waitFor(`document.body.textContent.includes('중간 이어쓰기')`));
 await sleep(1100);
 await send('Page.reload');
-await waitFor(`!!document.querySelector('.busy-elsewhere button') || !!document.querySelector('.markdown-body.is-streaming')`, 10000);
+await waitFor(`!!document.querySelector('button.busy-elsewhere') || !!document.querySelector('.markdown-body.is-streaming')`, 10000);
 await goToRecovering();
 check('a second reload reconnects to the same job', await waitFor(
   `!![...document.querySelectorAll('.markdown-body.is-streaming')].find(x => x.textContent.includes('중간 이어쓰기'))`, 10000));

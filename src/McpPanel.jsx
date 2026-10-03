@@ -1,6 +1,7 @@
-import React from 'react';
+﻿import React from 'react';
 import { RefreshCcw, RotateCw, TriangleAlert, Server, Wrench, FileText, MessageSquarePlus, ShieldCheck } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
+import { promptDialog } from './ConfirmDialog.jsx';
 
 /**
  * What the model can reach, and what it cannot.
@@ -45,13 +46,14 @@ export const McpPanel = ({ tools, problems, config, loading, onRefresh, onRestar
 
   /* The arguments a prompt needs, asked for one at a time. A form per prompt
      would be a page of fields for something used once in a while. */
-  const choosePrompt = (server, prompt) => {
+  // The app's own dialog, not window.prompt(): a grey browser box on a phone.
+  const choosePrompt = async (server, prompt) => {
     const args = {};
     for (const arg of prompt.arguments || []) {
-      const value = window.prompt(t('mcp.promptArg', {
+      const value = await promptDialog(t('mcp.promptArg', {
         name: arg.name,
         hint: arg.description ? ` — ${arg.description}` : '',
-      }), '');
+      }));
       if (value === null) return;               // cancelled
       if (value === '' && arg.required) return;
       if (value !== '') args[arg.name] = value;

@@ -1,4 +1,4 @@
-import { flushSync } from 'react-dom';
+﻿import { flushSync } from 'react-dom';
 import { resumableChatReader } from './chatStream.js';
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, useCallback } from 'react';
 import localforage from 'localforage';
@@ -181,7 +181,7 @@ import {
 import { deriveScope, ownerOfScope } from './profileScope.js';
 import { NewbieGuide, guideSeen } from './NewbieGuide.jsx';
 import { stamped, conversationTime } from './sessionEdit.js';
-import { fileMarker, indexedMarker, extractAttachments, stripAttachments } from './attachMarkers.js';
+import { fileMarker, indexedMarker, pathMarker, extractAttachments, stripAttachments } from './attachMarkers.js';
 import { forHistory, isToolResult, turnStart, wireText } from './wireHistory.js';
 import { isDraft, newDraft, promoted, withoutStaleDrafts, persistable, nextSessionId } from './draftChat.js';
 import { Logo } from './Logo.jsx';
@@ -307,7 +307,7 @@ class ErrorBoundary extends React.Component {
   render() {
     if (this.state.hasError) {
       return (
-        <div style={{ padding: '2rem', color: 'red', background: '#222', height: '100vh', overflow: 'auto' }}>
+        <div style={{ padding: '2rem', color: 'var(--danger, #ef4444)', background: 'var(--bg-main, #1a1916)', height: '100vh', overflow: 'auto' }}>
           <h2>React Crashed!</h2>
           <pre>{this.state.error?.toString()}</pre>
           <pre>{this.state.info?.componentStack}</pre>
@@ -1843,6 +1843,29 @@ function App() {
     if (travelled >= slack - 2) { setTabOverflow('start'); return; }
     setTabOverflow('both');
   }, []);
+
+  /* A mouse wheel only scrolls up and down, and the strip only scrolls
+   * sideways -- so the wheel turns into sideways travel over it. Native, not
+   * React, because React's wheel listener is passive and could not stop the
+   * page scrolling as well. A trackpad's own sideways swipe is left alone, and
+   * at either end the wheel goes back to scrolling the panel. */
+  useEffect(() => {
+    if (!tabStrip) return undefined;
+    const onWheel = (e) => {
+      if (e.ctrlKey || Math.abs(e.deltaX) > Math.abs(e.deltaY)) return;
+      const slack = tabStrip.scrollWidth - tabStrip.clientWidth;
+      if (slack <= 2) return;
+      const rtl = getComputedStyle(tabStrip).direction === 'rtl';
+      // Wheel down = towards the last tab, whichever way the page reads.
+      const forward = (e.deltaMode === 1 ? 32 : e.deltaMode === 2 ? tabStrip.clientWidth : 1) * e.deltaY;
+      const at = Math.abs(tabStrip.scrollLeft);
+      if ((forward < 0 && at <= 1) || (forward > 0 && at >= slack - 1)) return;
+      e.preventDefault();
+      tabStrip.scrollBy({ left: rtl ? -forward : forward });
+    };
+    tabStrip.addEventListener('wheel', onWheel, { passive: false });
+    return () => tabStrip.removeEventListener('wheel', onWheel);
+  }, [tabStrip]);
 
   useEffect(() => {
     if (!showSettings || !tabStrip) { setTabOverflow(null); return undefined; }
@@ -8523,7 +8546,9 @@ ${data.text}` : data.text));
   }, []);
 
   const handleFileChange = (e) => {
-    addFiles(Array.from(e.target.files));
+    const picked = Array.from(e.target.files);
+    addFiles(picked);
+    rememberPaths(picked); // declared below; only called on a pick, after render
     // Reset file input
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
@@ -8579,13 +8604,68 @@ ${data.text}` : data.text));
     addLog(`Pasted ${text.length.toLocaleString()} characters as ${name}.`, 'success');
   };
 
-  const handleDrop = (e) => {
+  /* Real paths of dropped things. A browser only gives a name, size and time,
+   * so the server on this PC finds the match (/cli/locate). Kept by name
+   * in a ref too, so a message sent before the lookup lands on the chip still
+   * gets the path. Null where it could not be told apart or the server is not
+   * on this PC (a phone) -- then the name alone goes, as before. */
+  const attachPaths = useRef(new Map());
+  const locatePaths = async (items) => {
+    try {
+      const res = await fetch('/cli/locate', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ items }),
+      });
+      const data = res.ok ? await res.json() : null;
+      return Array.isArray(data?.paths) ? data.paths : items.map(() => null);
+    } catch { return items.map(() => null); }
+  };
+
+  // Looks up attached files' paths and pins them on their chips.
+  const rememberPaths = (files) => {
+    locatePaths(files.map(f => ({ kind: 'file', name: f.name, size: f.size, lastModified: f.lastModified })))
+      .then(paths => paths.forEach((p, i) => {
+        if (!p) return;
+        attachPaths.current.set(files[i].name, p);
+        setAttachments(prev => prev.map(a => (a.name === files[i].name && !a.path ? { ...a, path: p } : a)));
+      }));
+  };
+
+  // A dropped folder's first few file names: what tells two folders of the
+  // same name apart on the server side.
+  const folderChildren = (entry) => new Promise((resolve) => {
+    try { entry.createReader().readEntries(list => resolve(list.slice(0, 5).map(x => x.name)), () => resolve([])); }
+    catch { resolve([]); }
+  });
+
+  const handleDrop = async (e) => {
     e.preventDefault();
     setIsDragging(false);
-    const files = Array.from(e.dataTransfer?.files || []);
+    const items = Array.from(e.dataTransfer?.items || []);
+    const entries = items.map(it => (it.kind === 'file' ? it.webkitGetAsEntry?.() : null));
+    const all = Array.from(e.dataTransfer?.files || []);
+    // A folder arrives as a zero-byte "file" too; it is not one to attach.
+    const folders = entries.filter(en => en?.isDirectory);
+    const files = all.filter((f, i) => !entries[i]?.isDirectory);
+
     if (files.length > 0) {
       addFiles(files);
       addLog(`Attached ${files.length} dropped file(s).`, 'success');
+      rememberPaths(files);
+    }
+
+    // A folder goes into the message as its path, for the model (or the CLI
+    // agent) to work in -- not read and attached file by file.
+    if (folders.length > 0) {
+      const wanted = await Promise.all(folders.map(async f => ({ kind: 'folder', name: f.name, children: await folderChildren(f) })));
+      const paths = await locatePaths(wanted);
+      const text = folders.map((f, i) => {
+        const p = paths[i] || f.name;
+        return /\s/.test(p) ? `"${p}"` : p;
+      }).join(' ');
+      setInput(prev => (prev && !/\s$/.test(prev) ? `${prev} ` : prev || '') + text + ' ');
+      requestAnimationFrame(() => textareaRef.current?.focus?.());
+      addLog(`Inserted ${folders.length} folder path(s).`, 'success');
     }
   };
 
@@ -9250,6 +9330,10 @@ ${data.text}` : data.text));
       // Process Attachments (synchronous)
       if (currentAttachments.length > 0) {
         currentAttachments.forEach(att => {
+          // Where the file is on this PC, when it could be found (handleDrop):
+          // the model can name it, and a CLI agent can open it itself.
+          const where = att.path || (att.type !== 'pasted' && attachPaths.current.get(att.name));
+          if (where) finalInputText += pathMarker(att.name, where);
           // A pasted block travels exactly as an attached file does; the two
           // differ only in where they came from and what the chip says.
           if (att.type === 'text' || att.type === 'pasted') {
@@ -15487,16 +15571,15 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                         <button
                                           key={aIdx}
                                           type="button"
-                                          className="user-attachment-card"
                                           disabled={!canOpen}
                                           title={att.type === 'indexed'
                                             ? `${att.name} — ${t('attach.indexedFull')}${att.pages ? ` (${att.pages}p)` : ''}`
                                             : canOpen ? `${att.name} — ${t('attach.open')}` : att.name}
                                           onClick={() => canOpen && setViewingAttachment(att)}
-                                          style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'rgba(0,0,0,0.2)', padding: '0.4rem 0.6rem', borderRadius: '6px', fontSize: '0.8rem', border: '1px solid var(--border-color)', color: 'inherit', font: 'inherit', cursor: canOpen ? 'pointer' : 'default' }}
+                                          className={`user-attachment-card sent-attachment${canOpen ? ' is-openable' : ''}`}
                                         >
                                           <Paperclip size={14} />
-                                          <span style={{ maxWidth: '200px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{att.name}</span>
+                                          <span className="sent-attachment-name">{att.name}</span>
                                         </button>
                                       );
                                     })}
@@ -15553,7 +15636,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           <button className="action-btn" onClick={() => toggleStar(i)} title={msg.starred ? t('msg.unstar') : t('msg.star')}>
                             <Star size={14} fill={msg.starred ? 'currentColor' : 'none'} color={msg.starred ? 'var(--primary)' : 'currentColor'} />
                           </button>
-                          <button className="action-btn" onClick={() => deleteMessage(i)} title={t('msg.delete')} style={{ color: '#EF4444' }}>
+                          <button className="action-btn" onClick={() => deleteMessage(i)} title={t('msg.delete')} style={{ color: 'var(--danger, #EF4444)' }}>
                             <Trash2 size={14} />
                           </button>
                         </>
@@ -15655,7 +15738,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                               </span>
                             </>
                           )}
-                          <button className="action-btn" onClick={() => deleteMessage(i)} title={t('msg.delete')} style={{ color: '#EF4444' }}>
+                          <button className="action-btn" onClick={() => deleteMessage(i)} title={t('msg.delete')} style={{ color: 'var(--danger, #EF4444)' }}>
                             <Trash2 size={14} />
                           </button>
                         </>
@@ -15985,7 +16068,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 }}
                 onPointerUp={() => { window.clearTimeout(voiceHoldRef.current); voiceHoldRef.current = null; }}
                 onPointerLeave={() => { window.clearTimeout(voiceHoldRef.current); voiceHoldRef.current = null; }}
-                style={{ color: voiceMode ? 'var(--primary)' : isListening ? '#EF4444' : 'var(--text-muted)' }}
+                style={{ color: voiceMode ? 'var(--primary)' : isListening ? 'var(--danger, #EF4444)' : 'var(--text-muted)' }}
                 disabled={isTranscribing}
               >
                 {/* Three states, and they are not the same thing: waiting for
@@ -15997,6 +16080,22 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   : isListening || voiceMode ? <Mic size={20} />
                   : <MicOff size={20} />}
               </button>
+
+              {/* Only when the answer is landing somewhere else: without it the
+                  send button is dead with nothing saying why. Inline in the
+                  toolbar beside the microphone, not a row of its own under the
+                  composer. The whole chip opens the busy chat. */}
+              {isGenerating && !isThisChatGenerating && (
+                <button
+                  type="button"
+                  className="busy-elsewhere"
+                  title={`${t('chat.busyElsewhere')} · ${t('chat.goThere')}`}
+                  onClick={() => openChat(generatingSessionId)}
+                >
+                  <RefreshCcw size={11} className="spin" />
+                  <span>{t('chat.busyElsewhere')}</span>
+                </button>
+              )}
               
               {/* Everything on the left is about the message. Everything after
                   this is about the answer, and the gap is what says so. */}
@@ -16286,19 +16385,6 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             </div>
           )}
 
-          {/* Only when the answer is landing somewhere else. Without it the
-              composer is simply unresponsive and there is nothing on screen
-              explaining why. */}
-          {isGenerating && !isThisChatGenerating && (
-            <div className="busy-elsewhere">
-              <RefreshCcw size={12} className="spin" />
-              <span>{t('chat.busyElsewhere')}</span>
-              <button type="button" onClick={() => openChat(generatingSessionId)}>
-                {t('chat.goThere')}
-              </button>
-            </div>
-          )}
-
           {/* Classes rather than inline styles, because the phone rules have to
               be able to change `flex-wrap` and the gap — and an inline style
               cannot be overridden by a media query without `!important` on
@@ -16448,7 +16534,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   {/* The beginner guide again: its tour and the setup check. */}
                   <div className="settings-group">
                     <button type="button" className="guide-btn is-small" onClick={() => { setShowSettings(false); setShowGuide(true); }}>
-                      {lang?.startsWith?.('ko') ? '초보자 가이드 다시 보기' : 'Show the beginner guide'}
+                      {t('settings.showGuide')}
                     </button>
                   </div>
                   {/* ---- who is asking ----
@@ -16990,7 +17076,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                 <Edit size={14} />
                               </button>
                               <button className="icon-btn" title={t('persona.delete')}
-                                onClick={() => deletePersona(p.id)} style={{ color: '#EF4444' }}>
+                                onClick={() => deletePersona(p.id)} style={{ color: 'var(--danger, #EF4444)' }}>
                                 <Trash2 size={14} />
                               </button>
                             </div>
@@ -18868,7 +18954,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                               </button>
                             )}
                             <button className="icon-btn" title={t('share.revoke')}
-                              onClick={() => revokeOneShare(s.id)} style={{ color: '#EF4444' }}>
+                              onClick={() => revokeOneShare(s.id)} style={{ color: 'var(--danger, #EF4444)' }}>
                               <Trash2 size={14} />
                             </button>
                           </div>
