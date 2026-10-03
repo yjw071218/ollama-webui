@@ -26,7 +26,10 @@ export function registrationValues({ origin, port = '5173' }) {
   const local = `http://localhost:${port}`;
   const origins = [...new Set([origin, local].filter(Boolean))];
   return {
-    googleOrigins: origins,
+    googleOrigins: origins.filter(o => {
+      try { const u = new URL(o); return u.protocol === 'https:' || ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname); }
+      catch { return false; }
+    }),
     googleRedirects: [GOOGLE_LOOPBACK_REDIRECT],
     kakaoDomains: origins,
     kakaoRedirects: origins.map(o => o + '/kakao/callback'),
@@ -50,7 +53,8 @@ export function socialGuide({ origin, port = '5173' }) {
     '0. 주소 정하기 (PUBLIC_ORIGIN)',
     '------------------------------',
     '  Google은 http://192.168.0.5:5173 같은 IP 주소를 등록할 수 없습니다.',
-    '  그래서 IP 뒤에 .nip.io 를 붙인 주소를 씁니다. 예: http://192.168.0.5.nip.io:5173',
+    '  nip.io는 DNS 이름만 제공합니다. Google용 HTTPS 요구사항을 없애 주지 않습니다.',
+    '  Google 웹 로그인은 localhost 외에는 유효한 인증서가 있는 HTTPS 주소를 사용하세요.',
     '  (nip.io는 그 IP로 그대로 연결해 주는 공개 DNS입니다. 첫 실행이 자동으로 정해 줍니다.)',
     '  밖에서 접속한다면 공인 IP로 같은 형식을 쓰고, 공유기에서 포트를 열어 주세요.',
     '  .env 의 PUBLIC_ORIGIN 이 이 주소입니다. 주소를 바꾸면 아래 콘솔 등록값도 함께 바꾸세요.',
@@ -65,7 +69,7 @@ export function socialGuide({ origin, port = '5173' }) {
     '     - 연락처 이메일 입력 → 정책 동의 → [만들기]',
     '  ④ [대상(Audience)] 메뉴에서',
     '     - 게시 상태가 "테스트"이면 [테스트 사용자 추가]로 로그인할 Google 계정을 넣거나,',
-    '     - [앱 게시]를 눌러 누구나 로그인할 수 있게 합니다. (이메일·프로필만 쓰므로 Google 검수는 필요 없습니다)',
+    '     - 공개 서비스는 [앱 게시] 및 콘솔에서 요구하는 브랜드·도메인 검증을 완료하세요.',
     '  ⑤ [클라이언트(사용자 인증 정보)] → [클라이언트 만들기 / + 사용자 인증 정보 만들기 → OAuth 클라이언트 ID]',
     '     - 애플리케이션 유형: [웹 애플리케이션]',
     '     - [승인된 JavaScript 원본]에 아래를 하나씩 추가:',
@@ -78,7 +82,7 @@ export function socialGuide({ origin, port = '5173' }) {
     '  ⑦ Google 설정은 반영까지 5분~몇 시간 걸릴 수 있습니다.',
     '  자주 나는 오류',
     '     - "origin_mismatch" / 버튼이 안 뜸 : ⑤의 JavaScript 원본에 지금 접속한 주소가 없습니다.',
-    '     - 앱에서 중간 페이지가 먼저 뜸     : ⑤의 리디렉션 URI가 아직 없거나 반영 전입니다. 등록하면 1분 안에 자동으로 바로 열기로 바뀝니다.',
+    '     - 앱에서 중간 페이지가 먼저 뜸     : ⑤의 리디렉션 URI가 아직 없거나 반영 전입니다. Google에 반영된 뒤 다시 시도하세요(거절 결과는 1분 캐시).',
     '     - "403 access_denied"               : ④에서 테스트 사용자에 계정을 넣지 않았습니다.',
     '',
     '2. 카카오 로그인',
@@ -109,6 +113,9 @@ export function socialGuide({ origin, port = '5173' }) {
     '-------',
     '  .env 를 저장한 뒤 서버를 다시 시작하세요. 웹에서 로그인 화면을 새로고침하면 버튼이 보입니다.',
     '  이 안내를 다시 보려면:  node server/first-run.mjs --reconfigure',
+    '  앱과 서버를 함께 업데이트하세요. 파일을 설치해도 실행 중인 옛 서버는 재시작 전까지 그대로입니다.',
+    '  공식 Google 안내: https://developers.google.com/identity/protocols/oauth2/web-server',
+    '  공식 카카오 안내: https://developers.kakao.com/docs/ko/kakaologin/rest-api',
     '',
   ];
 }

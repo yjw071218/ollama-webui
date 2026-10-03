@@ -1272,7 +1272,7 @@ mark.chat-hit.current {
 /* =========================================================
    Small screens: the panel takes over instead of squeezing the chat
    ========================================================= */
-@media (max-width: 860px) {
+@media (max-width: 1280px) {
   .artifact-panel {
     position: fixed;
     inset: 0;
