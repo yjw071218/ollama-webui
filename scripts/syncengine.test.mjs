@@ -169,6 +169,7 @@ await current.forage.setItem(CHATS, [
   { id: 2, title: 'Second', updatedAt: 2000, messages: [] },
 ]);
 S.setActiveScope(SCOPE);
+S.setSetting('systemPrompt', 'Initial default');
 S.setSetting('systemPrompt', 'Be terse.');
 
 let records = await E.collectLocal(SCOPE);
@@ -205,6 +206,7 @@ eq('an unchanged device sends nothing', result.sent, 0);
 
 on(phone);
 S.setActiveScope(SCOPE);
+S.setSetting('systemPrompt', 'Default from a newly installed phone');
 check('a device that never synced needs the first sync', E.needsInitialSync(SCOPE) === true);
 check('a guest never waits for a first sync', E.needsInitialSync('guest') === false);
 E.markInitialSync(SCOPE, true);

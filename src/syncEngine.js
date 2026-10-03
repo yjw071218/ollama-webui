@@ -323,6 +323,9 @@ export const collectLocal = async (scope) => {
   }
 
   for (const [key, value] of Object.entries(readScopeSettings(scope))) {
+    // Explicit zero marks a boot default, not a user edit. Do not upload it:
+    // servers may normalize zero timestamps to their current clock.
+    if (stamps[key] === 0) continue;
     out.push({ kind: 'setting', id: key, updatedAt: stamps[key] || 0, payload: value });
   }
 

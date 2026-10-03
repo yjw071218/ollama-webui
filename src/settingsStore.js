@@ -197,9 +197,15 @@ export const getSetting = (key) => {
 export const setSetting = (key, value) => {
   try {
     const target = scopedKey(key, activeScope);
-    if (localStorage.getItem(target) === String(value)) return;   // no real change
+    const previous = localStorage.getItem(target);
+    if (previous === String(value)) return;   // no real change
     localStorage.setItem(target, value);
-    if (isScopedSetting(key)) stampSetting(activeScope, key);
+    if (isScopedSetting(key)) {
+      // Mount defaults before the first download are not newer account edits.
+      const initializing = previous === null && activeScope.startsWith('srv-')
+        && !(Number(localStorage.getItem(`syncRev@${activeScope}`)) > 0);
+      stampSetting(activeScope, key, initializing ? 0 : Date.now());
+    }
   } catch (e) { /* quota */ }
 };
 

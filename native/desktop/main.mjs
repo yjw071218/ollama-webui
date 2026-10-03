@@ -143,7 +143,7 @@ async function connect(value) {
     win.on('closed', () => {
       current.close();
       if (gateway === current) gateway = undefined;
-      if (!connecting && !setupWindow?.isVisible()) app.quit();
+      if (!connecting && (!setupWindow || setupWindow.isDestroyed() || !setupWindow.isVisible())) app.quit();
     });
     settings.server = server;
     settings.ports[key] = current.port;
