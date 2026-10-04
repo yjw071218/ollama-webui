@@ -84,14 +84,14 @@ export const windowLabel = (t, id) => {
 export const LimitBars = ({ limits, cli = '', now = Date.now() }) => {
   const { t, lang } = useI18n();
   const muted = { fontSize: '0.75rem', color: 'var(--text-muted)' };
-  if (!limits || !(limits.windows || []).length) return <div style={muted}>{t(cli === 'agy' ? 'cli.limit.noneAgy' : 'cli.limit.none')}</div>;
+  if (!limits || (!(limits.windows || []).length && limits.status !== 'rejected')) return <div style={muted}>{t(cli === 'agy' ? 'cli.limit.noneAgy' : 'cli.limit.none')}</div>;
 
   return (
     <div style={{ display: 'grid', gap: '0.35rem' }}>
       {limits.status === 'rejected' && (
         <div style={{ ...muted, color: 'var(--danger)', fontWeight: 600 }}>{t('cli.limit.blocked')}</div>
       )}
-      {limits.windows.map((w) => {
+      {(limits.windows || []).map((w) => {
         const used = Number.isFinite(w.usedPercent) ? w.usedPercent : null;
         return (
           <div key={w.id}>

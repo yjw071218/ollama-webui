@@ -47,30 +47,7 @@ if (process.argv.includes('--check')) {
   const notesFile = (await readFile(path.join(root, 'native/RELEASE_NOTES.md'), 'utf8')).replace(/\r\n/g, '\n').trim();
   const [heading, ...noteLines] = notesFile.split('\n');
   if (heading.trim() !== '# ' + version) throw new Error('native/RELEASE_NOTES.md 첫 줄이 "# ' + version + '"이 아닙니다.');
-  const body = [
-    '## 이번 버전 (' + version + ')', ...noteLines.filter(l => l.trim()), '',
-    '## 서버 연결형 Android / Windows 앱',
-    '- 처음 실행할 때 서버 주소를 입력하세요. 이후에는 저장된 서버에 자동 연결됩니다. 주소 입력은 서버 변경에서 가능합니다. http://0.0.0.0:5173/는 실제 연결용이 아닌 예시입니다.',
-    '- Android 8+ APK / Windows x64 설치형 및 포터블 EXE',
-    '- 마이크·카메라, 파일 업로드·저장, 클립보드, 화면 캡처. Android 네이티브 공유·실행 중 알림.',
-    '- HTTP 원격 서버를 앱 내부 loopback 보안 컨텍스트에 연결합니다. HTTP 네트워크 통신 자체는 암호화되지 않습니다.',
-    '- Android 화면 캡처는 이번 커밋의 서버 프런트엔드와 OS 동의가 필요합니다.',
-    '- 계정으로 처음 로그인한 기기는 동기화가 끝날 때까지 진행률(%) 화면이 표시되고, 완료 후 앱이 열립니다(서버 재시작 후 적용).',
-    '- Android: 상단 버튼 줄을 없앴습니다. 새로고침·서버 변경은 왼쪽 아래 프로필 메뉴에 있고, 상태 표시줄은 화면 테마 색을 따릅니다.',
-    '- Google 버튼을 Google로 계속으로 복원하고, 인증 브라우저를 닫아도 재시도할 수 있도록 수정했습니다. Android 인증 ID 처리 오류를 수정했습니다. 웹 로그인 변경은 서버 코드 반영이 필요합니다.',
-    '- 첫 동기화 미완료 상태를 완료로 처리하지 않도록 수정하고 내부 동기화 상태를 계정 설정에서 제외했습니다.',
-    '- Windows: 앱 전용 상단 바와 확인·오류·권한·업데이트 팝업을 추가했습니다. 파일 선택/저장 등 OS 창은 유지합니다.',
-    '- Google 버튼 디자인을 수정했습니다. 카카오는 외부 인증 화면으로 바로 연결하고 일회성 앱 세션 전달을 지원합니다(새 서버 코드 필요).',
-    '- Google 계정 선택 창 바로 열기(1.0.8): Google 콘솔의 웹 클라이언트에 승인된 리디렉션 URI http://127.0.0.1:47615/api/auth/native/google/callback 을 등록하면 켜집니다(서버가 Google에 자동 확인, 서버 v1.0.3 이상). 등록 전에는 중간 페이지 방식으로 동작합니다. 설정 방법: https://github.com/' + repo + '/blob/' + tag + '/docs/SOCIAL_LOGIN.ko.md',
-    '- 웹서버 설치 파일은 같은 시기의 서버 릴리스(v1.0.3 이상)에 있습니다: https://github.com/' + repo + '/releases',
-    '- 실계정 로그인 성공은 미검증입니다. 공급자 모의 응답 테스트는 실제 로그인 성공을 의미하지 않습니다. 설정 동기화 누락 전체 해결도 미완료입니다. OAuth 키는 앱에 내장하지 않습니다.',
-    '- 앱 실행 시 새 버전이 있으면 업데이트 창이 열리고, 앱 안에서 내려받아(SHA-256 검증) 설치합니다. 1.0.6 이하에서는 1.0.7을 한 번 직접 설치해야 합니다.',
-    '- 종료 후 Web Push, 서버 도메인 패스키는 지원하지 않습니다. 모든 브라우저 API의 지원을 보장하지 않습니다.',
-    '- Windows 실행 파일은 상용 코드 서명 인증서가 없어 SmartScreen 경고가 나올 수 있습니다.',
-    '- Android APK는 지속 보관하는 로컬 릴리스 키로 서명했습니다. Android 실제 기기의 카메라·마이크·화면 캡처는 추가 확인이 필요합니다.',
-    '', '소스 커밋: ' + sha,
-    '설치 및 지원 범위: https://github.com/' + repo + '/blob/' + tag + '/native/README.ko.md',
-  ].join('\n');
+  const body = ['## 이번 버전 (' + version + ')', ...noteLines, '', '웹서버: https://github.com/' + repo + '/releases/tag/v1.0.5', 'Google callback: http://127.0.0.1:47615/api/auth/native/google/callback', '실계정 로그인 및 실기기 설치는 미검증입니다.', '소스 커밋: ' + sha].join('\n');
   const releases = await api('/releases?per_page=100');
   let release = releases.find(r => r.tag_name === tag);
   if (release && !release.draft) throw new Error('이미 공개된 릴리스는 변경하지 않습니다.');

@@ -270,6 +270,30 @@ eq('a machine-specific value is not part of it', B.settingsFingerprint(),
 check('and does not make it differ from the same state elsewhere',
   !B.settingsFingerprint().includes('ttsRefAudio'));
 
+// Importing into a differently named account must not write unreachable buckets.
+const { backupForProfile } = await import('../src/backupProfile.js');
+reset();
+const moved = backupForProfile({
+  kind: 'ollama-webui-backup', version: 3,
+  sessions: { 'ollama-sessions:old': [{ id: 'restored', messages: [] }], 'ollama-sessions:other': [{id:'private'}] },
+  settings: { 'temperature@old': '0.4', 'temperature@other': '0.9', 'syncRev@old': '100',
+    'ollama-auth-session': 'secret', 'chatFolders:old': '[]' },
+  knowledge: { 'knowledge:old': [{id:'doc'}] }, memory: { 'memory:old': [{id:'memory'}] }
+}, 'ollama-sessions:old', 'ollama-sessions:new');
+restored = await B.restoreBackup(moved, {primaryKey:'ollama-sessions:new',settingsWin:true});
+eq('mapped backup restores into the active account', restored.chats, 1);
+eq('restored chats are visible in the current bucket', storeFor('default').get('ollama-sessions:new')[0].id, 'restored');
+eq('account settings do not get a double suffix', localStorage.getItem('temperature@new'), '0.4');
+eq('other accounts are not imported', storeFor('default').has('ollama-sessions:other'), false);
+eq('login credentials are not restored', localStorage.getItem('ollama-auth-session'), null);
+eq('sync cursors are not restored', localStorage.getItem('syncRev@old'), null);
+check('documents are remapped', storeFor('knowledge').has('knowledge:new'));
+check('memories are remapped', storeFor('memory').has('memory:new'));
+storeFor('knowledge').set('knowledge:new', []);
+const docsAgain = await B.restoreBackup(moved, {primaryKey:'ollama-sessions:new'});
+eq('an initialized empty document list does not suppress restore', docsAgain.documents, 1);
+eq('repeated mapped import does not duplicate chats', docsAgain.chats, 0);
+
 // ------------------------------------------------------------- refusals
 let threw = '';
 try { await B.restoreBackup({ hello: 'world' }); } catch (e) { threw = e.message; }

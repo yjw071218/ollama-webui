@@ -203,6 +203,7 @@ export const setSetting = (key, value) => {
     if (isScopedSetting(key)) {
       // Mount defaults before the first download are not newer account edits.
       const initializing = previous === null && activeScope.startsWith('srv-')
+        && localStorage.getItem(`initialSyncPending@${activeScope}`) !== '0'
         && !(Number(localStorage.getItem(`syncRev@${activeScope}`)) > 0);
       stampSetting(activeScope, key, initializing ? 0 : Date.now());
     }

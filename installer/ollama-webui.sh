@@ -30,7 +30,8 @@ export PATH
 "$NODE" server/setup-env.mjs --network
 PORT=$("$NODE" server/setup-env.mjs --print-port 2>/dev/null || echo 5173)
 [ -n "$PORT" ] || PORT=5173
-URL="http://localhost:$PORT"
+URL=$("$NODE" server/setup-env.mjs --print-origin 2>/dev/null)
+[ -n "$URL" ] || URL="http://localhost:$PORT"
 
 open_browser() {
   if [ "$(uname -s)" = "Darwin" ]; then open "$URL" >/dev/null 2>&1

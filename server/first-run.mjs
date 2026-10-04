@@ -23,6 +23,7 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readEnvValue, writeEnvValue } from './envFile.js';
 import { socialLoginSetup } from './socialSetup.mjs';
+import { networkSetup } from './networkSetup.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
 const ENV_FILE = path.join(ROOT, '.env');
@@ -78,6 +79,9 @@ for (;;) {
 ensureNetwork(token);
 console.log('  저장했습니다. 나중에 바꾸려면 .env의 ACCESS_TOKEN을 고치거나');
 console.log('  이 설정을 다시 실행하세요 (node server/first-run.mjs --reconfigure).');
+
+await networkSetup({ env: () => env, readEnvValue, save, ask, yes,
+  writeGuide: text => fs.writeFileSync(path.join(ROOT, 'NETWORK_SETUP.ko.txt'), text) });
 
 /* ---------------------------------------------------- 2. social sign-in */
 

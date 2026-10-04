@@ -235,9 +235,18 @@ export const signInWithKakao = async ({ onOpened } = {}) => {
     const native = info.ok && info.headers.get('content-type')?.includes('application/json')
       && (await info.json()).nativeKakao === true;
     if (native) {
-      const post = (action, body) => api('/api/auth/native/kakao/' + action, {
-        method: 'POST', body, signal: AbortSignal.timeout(15000),
-      });
+      const post = async (action, body) => {
+        try {
+          return await api('/api/auth/native/kakao/' + action, {
+            method: 'POST', body, signal: AbortSignal.timeout(15000),
+          });
+        } catch (error) {
+          // No IDs, polling secrets or server addresses in the error message.
+          if (error.status === 404) error.message = 'HTTP 404 · /api/auth/native/kakao/' + action
+            + ' — 실행 중인 서버의 앱 로그인 경로를 확인하세요. 설치 파일만 교체한 경우 서버 재시작이 필요합니다.';
+          throw error;
+        }
+      };
       let started = null;
       try { started = await post('start', {}); }
       catch (e) {

@@ -80,3 +80,5 @@ force_restore.cjs
 installer/stage/
 installer/app.ico
 release/
+
+NETWORK_SETUP.ko.txt

@@ -175,10 +175,12 @@ import { safeHead, stripLoneSurrogates } from './textCut.js';
 import { takeSpeakable, splitForSpeech } from './speechChunks.js';
 import { relativeTime, absoluteTime } from './relativeTime.js';
 import { collectBackup, restoreBackup, describeBackup, isBackup, settingsFingerprint } from './backup.js';
+import { backupProfiles, backupForProfile } from './backupProfile.js';
 import {
   setActiveScope, getActiveScope, getSetting, setSetting, clearScopeSettings,
 } from './settingsStore.js';
 import { deriveScope, ownerOfScope } from './profileScope.js';
+import { applyLiveSettings } from './liveSettings.js';
 import { NewbieGuide, guideSeen } from './NewbieGuide.jsx';
 import { stamped, conversationTime } from './sessionEdit.js';
 import { fileMarker, indexedMarker, pathMarker, extractAttachments, stripAttachments } from './attachMarkers.js';
@@ -1268,7 +1270,10 @@ function App() {
      The roleplay tab follows only this: it keeps a model of its own, and an
      automatic change made for the chat tab was undoing the one picked there. */
   const [handPickedModel, setHandPickedModel] = useState(null);
-  const noteHandPick = (name) => setHandPickedModel({ name, at: Date.now() });
+  const noteHandPick = (name) => {
+    restoredModelRef.current = `${storageKey}\u0000${currentSessionId}`;
+    setHandPickedModel({ name, at: Date.now() });
+  };
   const [selectedVisionModel, setSelectedVisionModel] = useState('');
   // The breakpoint the stylesheet uses for the drawer layout, kept in one place
   // so the two cannot disagree about what "narrow" means.
@@ -4534,13 +4539,13 @@ ${data.text}` : data.text));
 
   /* How wide the code panel may get. The chat in the middle keeps at least
      MIN_CHAT_WIDTH next to the open sidebar (it only overlays below 1024px),
-     and the panel never takes more than 60% of the window: dragged wider, the
+     and the panel takes at most half the remaining width (720px): dragged wider, the
      conversation was squeezed into a column its toolbar and composer broke in. */
   const MIN_CHAT_WIDTH = 480;
   const artifactMaxWidth = useCallback(() => {
     const vw = window.innerWidth;
     const sidebar = isSidebarOpen && vw > 1024 ? sidebarWidth : 0;
-    return Math.max(320, Math.min(Math.round(vw * 0.6), vw - sidebar - MIN_CHAT_WIDTH));
+    return Math.max(320, Math.min(720, Math.floor((vw - sidebar) * 0.5), vw - sidebar - MIN_CHAT_WIDTH));
   }, [isSidebarOpen, sidebarWidth]);
 
   // Keep the panels usable when the window shrinks or the sidebar opens.
@@ -4725,13 +4730,19 @@ ${data.text}` : data.text));
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, []);
 
-  // Restore last used model when switching session
+  // Restore once per conversation, not every time a quota/menu refresh replaces
+  // the model list. A fresh explicit choice must survive catalogue refreshes.
+  const restoredModelRef = useRef(null);
   useEffect(() => {
+    const key = `${storageKey}\u0000${currentSessionId}`;
+    if (restoredModelRef.current === key) return;
     const session = sessions.find(s => s.id === currentSessionId);
-    if (session && session.lastModel && models.find(m => m.name === session.lastModel)) {
+    if (!session || !models.length) return;
+    if (session.lastModel && models.some(m => m.name === session.lastModel)) {
       setSelectedModel(session.lastModel);
     }
-  }, [currentSessionId, models]);
+    restoredModelRef.current = key;
+  }, [currentSessionId, storageKey, models, sessions]);
 
   // Save sessions to localforage.
   // Streaming updates state on every token, and each save serialises *every*
@@ -6689,9 +6700,9 @@ ${data.text}` : data.text));
       if (first) {
         markInitialSync(profileScope, false);
         setInitialSync({ percent: 100, error: '' });
-        // Settings and lists are read into state at mount, so a first download
-        // that brought any shows the app only after it starts again from them.
-        if (result.applied.settings > 0 || result.applied.lists > 0) {
+        // Apply supported preferences in place before revealing the app.
+        // Lists and unsupported settings still use the guarded reload path.
+        if (!applySyncedSettings(result.applied) || result.applied.lists > 0) {
           window.location.reload();
           return;
         }
@@ -7182,7 +7193,7 @@ ${data.text}` : data.text));
       // A file backup takes the whole browser, which is what backing up a
       // browser means. It carries no credentials: accounts live on the server
       // now, so there is nothing here to leak into a file people email around.
-      const backup = await collectBackup();
+      const backup = await collectBackup({ primaryKey: storageKey });
       const summary = describeBackup(backup);
       const stamp = new Date().toISOString().slice(0, 10);
       downloadBlob(`ollama-webui-backup-${stamp}.json`,
@@ -7206,7 +7217,25 @@ ${data.text}` : data.text));
       const question = mode === 'replace' ? t('backup.confirmReplace', summary) : t('backup.confirmMerge', summary);
       if (!(await confirmDialog(question, { danger: mode === 'replace' }))) return;
 
-      const restored = await restoreBackup(data, { mode });
+      const profiles = backupProfiles(data);
+      let source = profiles.find(p => p.key === data.primaryKey);
+      if (!source && profiles.length === 1) source = profiles[0];
+      if (!source) {
+        // Legacy whole-browser backups did not identify their active account.
+        // Never silently combine different people's histories.
+        for (let i = 0; i < profiles.length; i++) {
+          if (await confirmDialog(`백업 계정 ${i + 1}/${profiles.length} (대화 ${profiles[i].chats}개)를 현재 계정에 복원할까요? 취소하면 다음 계정을 확인합니다.`)) {
+            source = profiles[i]; break;
+          }
+        }
+      }
+      if (!source) throw new Error('복원할 계정을 선택하지 않았습니다.');
+      const settingsWin = await confirmDialog('백업의 설정도 적용할까요? 확인하면 현재 계정 설정을 백업 값으로 바꾸고, 취소하면 현재 설정을 유지합니다.');
+      const mapped = backupForProfile(data, source.key, storageKey);
+      if (!settingsWin) mapped.settings = {};
+      const restored = await restoreBackup(mapped, { mode, primaryKey: storageKey, settingsWin });
+      if (settingsWin) applySyncedSettings({ settings: restored.settings, settingKeys: Object.keys(mapped.settings) });
+      await refreshChatsFromStorage();
       addLog(`[backup] restored ${restored.chats} chats, ${restored.settings} settings.`, 'success');
       toast(t('backup.restored', restored), 'success', 8000, {
         label: t('backup.reload'),
@@ -7252,9 +7281,71 @@ ${data.text}` : data.text));
    * for as long as the model is talking. So a sync that touched only chats is
    * applied in place, and only the rest is worth a reload.
    */
+  const applySyncedSettings = (applied) => {
+    if (!applied.settings) return true;
+    if (!applied.settingKeys?.length) return false;
+    return applyLiveSettings(applied.settingKeys, getSetting, {
+      temperature: [setTemperature, 'number'],
+      topP: [setTopP, 'number'],
+      topK: [setTopK, 'number'],
+      repeatPenalty: [setRepeatPenalty, 'number'],
+      numCtx: [setNumCtx, 'number'],
+      maxTokens: [setMaxTokens, 'number'],
+      minP: [setMinP, 'number'],
+      presencePenalty: [setPresencePenalty, 'number'],
+      frequencyPenalty: [setFrequencyPenalty, 'number'],
+      ragTopK: [setRagTopK, 'number'],
+      toolBudget2: [setToolBudget, 'number'],
+      voiceSensitivity: [setVoiceSensitivity, 'number'],
+      ttsSpeed: [setTtsSpeed, 'number'],
+      ttsMaxChars: [setTtsMaxChars, 'number'],
+      autoContinue: [setAutoContinue, 'boolean'],
+      memoryEnabled: [setMemoryEnabled, 'boolean'],
+      autoRemember: [setAutoRemember, 'boolean'],
+      autoCompact: [setAutoCompact, 'boolean'],
+      ragEnabled: [setRagEnabled, 'boolean'],
+      ragHybrid: [setRagHybrid, 'boolean'],
+      ragRerank: [setRagRerank, 'boolean'],
+      autoGround: [setAutoGround, 'boolean'],
+      routingEnabled: [setRoutingEnabled, 'boolean'],
+      convMemory: [setConvMemory, 'boolean'],
+      autoTitle: [setAutoTitle, 'boolean'],
+      showTimestamps: [setShowTimestamps, 'boolean'],
+      showSystemStrip: [setShowSystemStrip, 'boolean'],
+      voiceBargeIn: [setVoiceBargeIn, 'boolean'],
+      ttsAutoPlay: [setTtsAutoPlay, 'boolean'],
+      notifyWhenDone: [setNotifyWhenDone, 'boolean'],
+      mcpEnabled: [setMcpEnabled, 'boolean'],
+      systemPrompt: [setSystemPrompt, 'string'],
+      codeTheme: [setCodeTheme, 'string'],
+      theme: [setTheme, 'string'],
+      chatFontSize: [setChatFontSize, 'string'],
+      chatDensity: [setChatDensity, 'string'],
+      contentWidth: [setContentWidth, 'string'],
+      motionMode: [setMotionMode, 'string'],
+      userLocation: [setUserLocation, 'string'],
+      outputFormat: [setOutputFormat, 'string'],
+      outputSchema: [setOutputSchema, 'string'],
+      embedModel: [setEmbedModel, 'string'],
+      seed: [setSeed, 'string'],
+      stopSequences: [setStopSequences, 'string'],
+      thinkMode: [setThinkMode, 'string'],
+      keepAlive: [setKeepAlive, 'string'],
+      researchDepth: [setResearchDepth, 'string'],
+      defaultModel: [setDefaultModel, 'string'],
+      sendKey: [setSendKey, 'string'],
+      sttModel: [setSttModel, 'string'],
+      ttsEngine: [setTtsEngine, 'string'],
+      ttsPromptText: [setTtsPromptText, 'string'],
+      ttsTextLang: [setTtsTextLang, 'string'],
+      ttsPromptLang: [setTtsPromptLang, 'string'],
+      viewportPreset: [setViewportPreset, 'string'],
+    });
+  };
   const showRemoteChanges = (result) => {
     const applied = result.applied || {};
-    const beyondChats = (applied.settings || 0) + (applied.lists || 0)
+    const settingsApplied = applySyncedSettings(applied);
+    const beyondChats = (settingsApplied ? 0 : (applied.settings || 0)) + (applied.lists || 0)
       + (applied.documents || 0) + (applied.memories || 0);
 
     /* The Studio re-reads its own records in place, so a change to them is
@@ -8069,7 +8160,7 @@ ${data.text}` : data.text));
       setModels(data.models || []);
       const chatable = (data.models || []).filter(m => !isEmbeddingModel(m));
       if (chatable.length > 0) {
-        if (!selectedModel || isEmbeddingModel(selectedModel)) setSelectedModel(chatable[0].name);
+        setSelectedModel(current => !current || isEmbeddingModel(current) ? chatable[0].name : current);
         // Try to auto-select a vision model if available
         if (!selectedVisionModel || isEmbeddingModel(selectedVisionModel)) {
           const visionModel = chatable.find(m => m.name.toLowerCase().includes('llava') || m.name.toLowerCase().includes('minicpm'));

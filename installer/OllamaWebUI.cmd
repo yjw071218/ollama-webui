@@ -19,9 +19,12 @@ if not exist ".env" if exist ".env.example" copy /y ".env.example" ".env" >nul
 set "PORT=5173"
 for /f "usebackq delims=" %%p in (`"%NODE%" server\setup-env.mjs --print-port 2^>nul`) do set "PORT=%%p"
 
+set "OPEN_URL=http://localhost:%PORT%"
+for /f "usebackq delims=" %%o in (`"%NODE%" server\setup-env.mjs --print-origin 2^>nul`) do set "OPEN_URL=%%o"
+
 curl -s -o nul -m 2 http://127.0.0.1:%PORT%/ && (
   echo Ollama WebUI is already running.
-  start "" "http://localhost:%PORT%"
+  start "" "%OPEN_URL%"
   exit /b 0
 )
 
@@ -32,17 +35,21 @@ for /f "usebackq delims=" %%p in (`"%NODE%" server\setup-env.mjs --print-port 2^
 rem Prints the LAN addresses; HOST/token are already set by first-run.
 "%NODE%" server\setup-env.mjs --network
 
-rem ---- firewall -------------------------------------------------------------
+findstr /x /c:"EXTERNAL_ACCESS=1" .env >nul || goto firewall_done
 powershell -NoProfile -ExecutionPolicy Bypass -File "%~dp0app\server\check-firewall.ps1" >nul 2>&1
 if errorlevel 1 (
   echo Opening the Windows firewall, a permission prompt will appear...
   powershell -NoProfile -Command "Start-Process powershell -Verb RunAs -Wait -ArgumentList '-NoProfile','-ExecutionPolicy','Bypass','-File','%~dp0app\server\open-firewall.ps1'" >nul 2>&1
 )
 
+:firewall_done
+set "OPEN_URL=http://localhost:%PORT%"
+for /f "usebackq delims=" %%o in (`"%NODE%" server\setup-env.mjs --print-origin 2^>nul`) do set "OPEN_URL=%%o"
+
 echo.
 echo Starting Ollama WebUI on port %PORT% ...
 echo Close this window to stop it.
-start "" /b cmd /c "timeout /t 3 /nobreak >nul & start "" http://localhost:%PORT%"
+start "" /b cmd /c "timeout /t 3 /nobreak >nul & start "" %OPEN_URL%"
 "%NODE%" server\index.js
 if errorlevel 1 goto fail
 exit /b 0

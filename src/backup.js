@@ -217,9 +217,17 @@ export const restoreBackup = async (backup, {
 
   const knowledge = named('knowledge');
   for (const [key, value] of Object.entries(backup.knowledge || {})) {
-    if (!replace && (await knowledge.getItem(key)) !== null) continue;
-    await knowledge.setItem(key, value);
-    restored.documents++;
+    const existing = replace ? null : await knowledge.getItem(key);
+    if (Array.isArray(value)) {
+      const previous = Array.isArray(existing) ? existing : [];
+      const seen = new Set(previous.map(doc => doc.id));
+      const added = value.filter(doc => !seen.has(doc.id));
+      if (replace || added.length) await knowledge.setItem(key, [...previous, ...added]);
+      restored.documents += added.length;
+    } else if (replace || existing === null) {
+      await knowledge.setItem(key, value);
+      restored.documents++;
+    }
   }
 
   const memory = named('memory');

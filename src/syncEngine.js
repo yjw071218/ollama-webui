@@ -150,6 +150,7 @@ const writeSent = (scope, sent) => {
 export const resetSyncPosition = (scope) => {
   try {
     localStorage.removeItem(revKey(scope));
+    localStorage.removeItem(`initialSyncPending@${scope}`);
     localStorage.removeItem(sentKey(scope));
   } catch (e) { /* private mode */ }
 };
@@ -488,16 +489,20 @@ export const applyLocal = async (scope, records) => {
 
   // --- settings ---
   const stamps = settingStamps(scope);
+  applied.settingKeys = [];
   for (const record of byKind('setting')) {
     if (record.deleted) {
       removeScopedKey(scope, record.id);
       forgetSettingStamp(scope, record.id);
       applied.settings++;
+      applied.settingKeys.push(record.id);
       continue;
     }
     // A local change made more recently than this one keeps its place.
     if ((stamps[record.id] || 0) > record.updatedAt) continue;
-    applied.settings += writeScopeSettings(scope, { [record.id]: record.payload });
+    const changed = writeScopeSettings(scope, { [record.id]: record.payload });
+    applied.settings += changed;
+    if (changed) applied.settingKeys.push(record.id);
     stampSetting(scope, record.id, record.updatedAt);
   }
 
@@ -629,6 +634,7 @@ export const syncFully = async (scope, { full = false, maxRounds = 20, onProgres
       applied: {
         chats: total.applied.chats + result.applied.chats,
         settings: total.applied.settings + result.applied.settings,
+        settingKeys: [...new Set([...(total.applied.settingKeys || []), ...(result.applied.settingKeys || [])])],
         documents: total.applied.documents + result.applied.documents,
         memories: total.applied.memories + result.applied.memories,
         lists: total.applied.lists + result.applied.lists,
@@ -653,14 +659,18 @@ const firstSyncKey = (scope) => `initialSyncPending@${scope}`;
 /** Whether this device has never finished a sync with this account. */
 export const needsInitialSync = (scope) => {
   if (!ownerOfScope(scope)) return false;
-  try { if (localStorage.getItem(firstSyncKey(scope)) === '1') return true; } catch (e) { /* private mode */ }
+  try {
+    const state = localStorage.getItem(firstSyncKey(scope));
+    if (state === '1') return true;
+    if (state === '0') return false; // Empty accounts can complete at revision zero.
+  } catch (e) { /* private mode */ }
   return readRev(scope) === 0;
 };
 
 export const markInitialSync = (scope, pending) => {
   try {
     if (pending) localStorage.setItem(firstSyncKey(scope), '1');
-    else localStorage.removeItem(firstSyncKey(scope));
+    else localStorage.setItem(firstSyncKey(scope), '0');
   } catch (e) { /* private mode */ }
 };
 

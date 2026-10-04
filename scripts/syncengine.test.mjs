@@ -209,6 +209,10 @@ S.setActiveScope(SCOPE);
 S.setSetting('systemPrompt', 'Default from a newly installed phone');
 check('a device that never synced needs the first sync', E.needsInitialSync(SCOPE) === true);
 check('a guest never waits for a first sync', E.needsInitialSync('guest') === false);
+E.markInitialSync('srv-empty', false);
+check('completed empty account does not wait on every launch', E.needsInitialSync('srv-empty') === false);
+E.resetSyncPosition('srv-empty');
+check('explicit reset requires initial sync again', E.needsInitialSync('srv-empty') === true);
 E.markInitialSync(SCOPE, true);
 const progress = [];
 result = await E.syncFully(SCOPE, { onProgress: p => progress.push(p) });
@@ -222,6 +226,7 @@ eq('an unfinished sync never shows 100%', E.syncPercent(1000, 1000, false), 99);
 eq('an unknown target shows 0%', E.syncPercent(5, 0, false), 0);
 eq('the phone downloads the account', result.applied.chats, 2);
 eq('and the settings with it', result.applied.settings, 1);
+eq('sync identifies precisely the settings to refresh without reload', JSON.stringify(result.applied.settingKeys), JSON.stringify(['systemPrompt']));
 
 const phoneChats = await current.forage.getItem(CHATS);
 eq('the chats really landed', phoneChats.length, 2);
