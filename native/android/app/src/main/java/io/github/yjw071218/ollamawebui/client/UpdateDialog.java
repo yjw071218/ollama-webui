@@ -84,7 +84,19 @@ final class UpdateDialog {
         TextView notesTitle = text(12, MUTED, true); notesTitle.setText("이번 버전 변경 사항"); notesBox.addView(notesTitle);
         TextView notes = text(14, TEXT, false); notes.setLineSpacing(0, 1.25f); notes.setPadding(0, dp(6), 0, 0);
         notes.setText(formatNotes(update.notes));
-        ScrollView scroll = new ScrollView(activity); scroll.addView(notes);
+        /* Capped, so long notes scroll inside the box instead of pushing the
+           buttons below the bottom of the screen. Worked out on every measure
+           so a rotation gets the height of the new orientation. */
+        ScrollView scroll = new ScrollView(activity) {
+            @Override protected void onMeasure(int widthSpec, int heightSpec) {
+                int screen = activity.getResources().getDisplayMetrics().heightPixels;
+                int max = Math.max(dp(72), Math.min(screen / 2, screen - dp(320)));
+                int mode = MeasureSpec.getMode(heightSpec), size = MeasureSpec.getSize(heightSpec);
+                super.onMeasure(widthSpec, MeasureSpec.makeMeasureSpec(mode == MeasureSpec.UNSPECIFIED ? max : Math.min(size, max), MeasureSpec.AT_MOST));
+            }
+        };
+        scroll.setScrollBarStyle(android.view.View.SCROLLBARS_OUTSIDE_OVERLAY);
+        scroll.addView(notes);
         notesBox.addView(scroll, new LinearLayout.LayoutParams(-1, -2));
         LinearLayout.LayoutParams notesParams = new LinearLayout.LayoutParams(-1, -2); notesParams.topMargin = dp(16);
         root.addView(notesBox, notesParams);
