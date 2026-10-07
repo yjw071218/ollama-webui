@@ -17,6 +17,12 @@ public final class LoopbackProxy implements Closeable {
     private final ServerSocket listener;
     private final ExecutorService workers = new ThreadPoolExecutor(0, 64, 30, TimeUnit.SECONDS, new SynchronousQueue<>());
     private final Set<Socket> sockets = ConcurrentHashMap.newKeySet();
+    /* One idle server connection not tied to any page connection: opened ahead
+       of the first page load (DNS, TCP and TLS paid while the WebView starts),
+       and handed on when a page connection ends, so the next one does not
+       start with a handshake either. */
+    private final java.util.concurrent.atomic.AtomicReference<Upstream> spare = new java.util.concurrent.atomic.AtomicReference<>();
+    private volatile boolean closed;
     public final String origin, token;
     public static final String COOKIE = "__ollama_native_gate";
     public static String normalize(String raw) throws Exception {
@@ -48,6 +54,8 @@ public final class LoopbackProxy implements Closeable {
                 } catch (IOException ignored) { }
             }
         }, "native-loopback"); accept.setDaemon(true); accept.start();
+        try { workers.execute(() -> { try { park(openUpstream()); } catch (IOException ignored) { } }); }
+        catch (RejectedExecutionException ignored) { }
     }
     public int port() { return listener.getLocalPort(); }
     private static String line(InputStream in) throws IOException {
@@ -134,6 +142,8 @@ public final class LoopbackProxy implements Closeable {
         Socket raw = new Socket(); sockets.add(raw);
         Socket socket = raw;
         try {
+            // Tokens arrive as many small writes; Nagle would hold each one for the last one's ACK.
+            raw.setTcpNoDelay(true);
             raw.connect(new InetSocketAddress(target.getHost(), port), 15000);
             if (secure) {
                 SSLSocket ssl = (SSLSocket) ((SSLSocketFactory) SSLSocketFactory.getDefault()).createSocket(raw, target.getHost(), port, true);
@@ -157,6 +167,22 @@ public final class LoopbackProxy implements Closeable {
         try { up.socket.close(); } catch (IOException ignored) { }
         sockets.remove(up.socket);
     }
+    private static boolean fresh(Upstream up) {
+        return up != null && !up.socket.isClosed() && System.currentTimeMillis() - up.idleSince <= UPSTREAM_IDLE_MS;
+    }
+    /** Keep an idle, healthy server connection for the next page connection. */
+    private void park(Upstream up) {
+        if (up == null) return;
+        if (closed || !fresh(up)) { close(up); return; }
+        close(spare.getAndSet(up));
+        if (closed) close(spare.getAndSet(null));
+    }
+    /** The parked server connection, if it is still young enough to trust. */
+    private Upstream takeSpare() {
+        Upstream up = spare.getAndSet(null);
+        if (up != null && !fresh(up)) { close(up); return null; }
+        return up;
+    }
     private static final String OFFLINE = "서버에 연결하지 못했습니다. 주소와 서버 실행 상태를 확인한 뒤 다시 시도하세요.";
     /** What a page load gets when the server cannot be reached, with the ways out on it. */
     private String offlinePage() {
@@ -174,8 +200,9 @@ public final class LoopbackProxy implements Closeable {
             + "<script>if(window.ollamaNative&&window.ollamaNative.changeServer)document.getElementById('change').hidden=false</script></body></html>";
     }
     private void serve(Socket client) {
-        Upstream up = null; boolean responseStarted = false; String requestPath = null; List<String[]> h = null;
+        Upstream up = null; boolean responseStarted = false, parkable = true; String requestPath = null; List<String[]> h = null;
         try {
+            client.setTcpNoDelay(true);
             client.setSoTimeout(300000);
             InputStream input = new BufferedInputStream(client.getInputStream());
             OutputStream browser = new BufferedOutputStream(client.getOutputStream(), 32768);
@@ -233,10 +260,12 @@ public final class LoopbackProxy implements Closeable {
                 byte[] headBytes = head.toString().getBytes(StandardCharsets.ISO_8859_1);
 
                 // A websocket gets a connection of its own; a kept one gone stale is replaced.
+                parkable = false;
                 if (up != null && (websocket || System.currentTimeMillis() - up.idleSince > UPSTREAM_IDLE_MS)) { close(up); up = null; }
                 String status = null;
                 for (int attempt = 0; ; attempt++) {
                     boolean reused = up != null;
+                    if (up == null && !websocket) { up = takeSpare(); reused = up != null; }
                     if (up == null) up = openUpstream();
                     try {
                         up.out.write(headBytes); up.out.flush();
@@ -304,6 +333,7 @@ public final class LoopbackProxy implements Closeable {
                     if (upload != null) upload.get();
                     if (!keep) return;
                     up.idleSince = System.currentTimeMillis();
+                    parkable = true;
                     break;
                 }
             }
@@ -321,10 +351,13 @@ public final class LoopbackProxy implements Closeable {
             } catch (IOException alsoIgnored) { }
         } finally {
             try { client.close(); } catch (IOException ignored) { } sockets.remove(client);
-            close(up);
+            // Between requests the server connection is clean: hand it on rather than drop it.
+            if (parkable) park(up); else close(up);
         }
     }
     @Override public void close() {
+        closed = true;
+        close(spare.getAndSet(null));
         try { listener.close(); } catch (IOException ignored) { }
         for (Socket socket : sockets) try { socket.close(); } catch (IOException ignored) { }
         sockets.clear(); workers.shutdownNow();

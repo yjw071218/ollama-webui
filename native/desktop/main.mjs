@@ -34,6 +34,21 @@ const rememberBounds = win => {
   } catch {}
 };
 const configPath = () => path.join(app.getPath('userData'), 'connection.json');
+/** The page's background colour, kept so the next launch paints it before the page does. */
+/* Runs in the page (executeJavaScript), so it is sent as source text. */
+function pageBackground() {
+  const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/.exec(getComputedStyle(document.body || document.documentElement).backgroundColor || '');
+  return m && !(m[4] !== undefined && Number(m[4]) === 0) ? '#' + [m[1], m[2], m[3]].map(v => Number(v).toString(16).padStart(2, '0')).join('') : '';
+}
+const PAGE_BACKGROUND = '(' + pageBackground.toString() + ')()';
+const rememberBackground = async contents => {
+  try {
+    const color = await contents.executeJavaScript(PAGE_BACKGROUND, false);
+    if (!/^#[0-9a-f]{6}$/i.test(color) || color === settings.pageBackground) return;
+    settings.pageBackground = color;
+    await writeFile(configPath(), JSON.stringify(settings, null, 2), { mode: 0o600 });
+  } catch {}
+};
 const sameOrigin = (value, origin) => { try { return new URL(value).origin === origin; } catch { return false; } };
 async function external(url, owner) {
   if (!/^https?:\/\//i.test(url)) return;
@@ -117,11 +132,12 @@ async function connect(value) {
     });
     ses.removeAllListeners('will-download');
     ses.on('will-download', (_event, item) => item.setSaveDialogOptions({ title: '파일 저장' }));
-    clientWindow = createClientWindow({ icon: path.join(directory, 'icons/app.png'), show: !process.argv.includes('--native-smoke'), ...savedBounds(), minWidth: 420, minHeight: 500, title: 'Ollama WebUI Client',
+    clientWindow = createClientWindow({ icon: path.join(directory, 'icons/app.png'), show: !process.argv.includes('--native-smoke'), ...savedBounds(), pageBackground: settings.pageBackground, minWidth: 420, minHeight: 500, title: 'Ollama WebUI Client',
       webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, allowRunningInsecureContent: false } }, { server: openSetup, updates: () => notifyUpdate(true), menu: win => Menu.getApplicationMenu()?.popup({window:win}) });
     const win = clientWindow;
     if (settings.window?.maximized) win.maximize();
     win.on('close', () => rememberBounds(win));
+    win.clientContents.on('did-finish-load', () => { if (sameOrigin(win.clientContents.getURL(), current.origin)) void rememberBackground(win.clientContents); });
     /* Google's account chooser in the browser, answered on 127.0.0.1:47615
        (googleLoopback.mjs). If the port is taken, the server's page instead. */
     const googleDirect = async ({ id, clientId }) => {

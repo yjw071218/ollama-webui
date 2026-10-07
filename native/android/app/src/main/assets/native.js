@@ -73,12 +73,21 @@
     lastChrome = color;
     call('chrome', { color }).catch(() => {});
   };
+  /* A class or style change on <html>/<body> comes in bursts (scroll locks,
+     drawers, theme switches); the computed style is read once per frame, not
+     once per change, since each read forces a style recalculation. */
+  let queued = false;
+  const queueChrome = () => {
+    if (queued) return;
+    queued = true;
+    requestAnimationFrame(() => { queued = false; sendChrome(); });
+  };
   const watchChrome = () => {
     sendChrome();
-    const observer = new MutationObserver(() => requestAnimationFrame(sendChrome));
+    const observer = new MutationObserver(queueChrome);
     observer.observe(document.documentElement, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
     if (document.body) observer.observe(document.body, { attributes: true, attributeFilter: ['class', 'data-theme', 'style'] });
-    matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', () => requestAnimationFrame(sendChrome));
+    matchMedia('(prefers-color-scheme: dark)').addEventListener?.('change', queueChrome);
   };
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchChrome, { once: true });
   else watchChrome();

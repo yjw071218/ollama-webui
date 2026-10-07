@@ -1,6 +1,6 @@
 import http from 'node:http';
 import { spawn } from 'node:child_process';
-import { mkdir, mkdtemp } from 'node:fs/promises';
+import { mkdir, mkdtemp, rm } from 'node:fs/promises';
 import { once } from 'node:events';
 import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
@@ -19,4 +19,6 @@ child.stderr.on('data', bytes => process.stderr.write(bytes));
 const timeout = setTimeout(() => { child.kill(); }, 45000);
 const [code] = await once(child, 'exit'); clearTimeout(timeout);
 server.closeAllConnections(); await new Promise(resolve => server.close(resolve));
+// The Electron profile is 10-40 MB; one was left behind on every run.
+await rm(profile, { recursive: true, force: true, maxRetries: 10, retryDelay: 200 });
 if (code !== 0 || !output.includes('"secure":true') || !output.includes('"node":"undefined"')) process.exitCode = 1;

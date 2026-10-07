@@ -5,10 +5,14 @@ import { attachShortcuts } from './shortcuts.mjs';
 const root = path.dirname(fileURLToPath(import.meta.url));
 const shellURL = pathToFileURL(path.join(root, 'chrome.html')).href;
 export const chromeOptions = { titleBarStyle: 'hidden', titleBarOverlay: { color: '#211f1c', symbolColor: '#ede8df', height: 44 }, backgroundColor: '#211f1c', autoHideMenuBar: true };
-export function createClientWindow(options, actions) {
+export function createClientWindow({ pageBackground, ...options }, actions) {
   const win = new BrowserWindow({ ...options, ...chromeOptions,
     webPreferences: { preload: path.join(root, 'chrome-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   const view = new WebContentsView({webPreferences: options.webPreferences});
+  /* Until the page paints, the view shows its own background, which is white:
+     a dark app flashed white on every launch and reload. The page's own colour
+     from last time (main.mjs pageBackground), else the title bar's. */
+  view.setBackgroundColor(/^#[0-9a-f]{6}$/i.test(pageBackground || '') ? pageBackground : chromeOptions.backgroundColor);
   win.contentView.addChildView(view);
   win.clientContents = view.webContents;
   win.loadClientURL = url => view.webContents.loadURL(url);

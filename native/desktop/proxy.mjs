@@ -16,6 +16,11 @@ export async function startProxy(value, port = 0) {
   const target = new URL(normalizeServer(value));
   const token = randomBytes(32).toString('hex');
   const sockets = new Set();
+  /* Server connections are pooled and kept between requests, whichever page
+     connection asks: a request does not pay for a new TCP (and TLS) handshake.
+     lifo hands out the most recently used socket, the one least likely to have
+     been closed by the server's keep-alive timeout in the meantime. */
+  const agent = new (target.protocol === 'https:' ? https : http).Agent({ keepAlive: true, keepAliveMsecs: 30000, scheduling: 'lifo', maxFreeSockets: 16 });
   let origin;
   const track = socket => {
     sockets.add(socket);
@@ -51,8 +56,13 @@ export async function startProxy(value, port = 0) {
       res.end(JSON.stringify({ nativeGoogle: true, googleLoopback: 47615 })); return;
     }
     const transport = target.protocol === 'https:' ? https : http;
-    const upstream = transport.request(target, {
-      path: req.url, method: req.method, headers: headersFor(req),
+    const headers = headersFor(req);
+    // Nothing to send but the head: safe to send again if a kept connection was already closed.
+    const bodyless = ['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !headers['transfer-encoding'] && !(Number(headers['content-length']) > 0);
+    let current;
+    const send = (retried) => {
+    const upstream = current = transport.request(target, {
+      path: req.url, method: req.method, headers, agent,
     }, response => {
       const headers = { ...response.headers };
       if (headers.location) {
@@ -66,22 +76,28 @@ export async function startProxy(value, port = 0) {
     });
     upstream.setTimeout(0); // Generation may remain silent indefinitely; cancellation still destroys the request.
     // API calls parse JSON, so they get JSON; a page gets the sentence.
-    upstream.on('error', () => {
+    upstream.on('error', error => {
+      if (!retried && bodyless && upstream.reusedSocket && !res.headersSent && !res.destroyed && ['ECONNRESET', 'EPIPE'].includes(error.code)) { send(true); return; }
       const message = '서버에 연결할 수 없습니다. 서버 주소와 실행 상태를 확인하고 새로고침하세요.';
       const api = String(req.url || '').startsWith('/api/');
       if (!res.headersSent) res.writeHead(502, { 'content-type': `${api ? 'application/json' : 'text/plain'}; charset=utf-8` });
       res.end(api ? JSON.stringify({ error: message, code: 'offline' }) : message);
     });
-    req.on('aborted', () => upstream.destroy());
     res.on('close', () => upstream.destroy());
-    req.pipe(upstream);
+    if (bodyless) upstream.end(); else req.pipe(upstream);
+    };
+    send(false);
+    if (bodyless) req.resume();
+    req.on('aborted', () => current.destroy());
   });
   server.on('connection', track);
   server.on('upgrade', (req, client, head) => {
     if (!authorized(req) || req.headers.upgrade?.toLowerCase() !== 'websocket') { client.destroy(); return; }
     const secure = target.protocol === 'https:';
     const options = { host: target.hostname, port: Number(target.port) || (secure ? 443 : 80) };
+    client.setNoDelay(true); // Small frames go out at once instead of waiting on Nagle.
     const connected = () => {
+      upstream.setNoDelay(true);
       const headers = headersFor(req);
       upstream.write(req.method + ' ' + req.url + ' HTTP/1.1\r\n' + Object.entries(headers).map(([k,v]) => k + ': ' + v).join('\r\n') + '\r\n\r\n');
       if (head.length) upstream.write(head);
@@ -95,5 +111,5 @@ export async function startProxy(value, port = 0) {
   });
   await new Promise((resolve, reject) => { server.once('error', reject); server.listen(port, '127.0.0.1', resolve); });
   origin = 'http://127.0.0.1:' + server.address().port;
-  return { origin, token, port: server.address().port, close: () => new Promise(resolve => { server.close(resolve); for (const socket of sockets) socket.destroy(); }) };
+  return { origin, token, port: server.address().port, close: () => new Promise(resolve => { server.close(resolve); for (const socket of sockets) socket.destroy(); agent.destroy(); }) };
 }

@@ -49,7 +49,11 @@ test('android gateway: an unreachable server gets a page with a way out', { skip
   } finally { await gateway.close(); }
 });
 for (const kind of ['desktop', 'android']) test(kind + ' gateway integration', { skip: kind === 'android' && !existsSync(javac), timeout: 30000 }, async t => {
+  const served = new WeakMap();
   const backend = http.createServer(async (req, res) => {
+    const before = served.get(req.socket) || 0; served.set(req.socket, before + 1);
+    // A kept connection the server has just given up on: the request gets no answer.
+    if (req.url === '/flaky' && before > 0) { req.socket.destroy(); return; }
     if (req.url === '/redirect') { res.writeHead(302, { location: target + '/next?q=1' }); res.end(); return; }
     if (req.url === '/cookie') { res.setHeader('set-cookie', ['session=abc; Domain=127.0.0.1; Path=/; HttpOnly; SameSite=Lax']); res.end('ok'); return; }
     if (req.url === '/stream') { res.setHeader('content-type', 'text/event-stream'); res.write('data: first\n\n'); setTimeout(() => res.end('data: last\n\n'), 400); return; }
@@ -104,7 +108,7 @@ for (const kind of ['desktop', 'android']) test(kind + ' gateway integration', {
       }).on('error', reject);
     });
   });
-  if (kind === 'android') await t.test('keeps the server connection between requests, including chunked uploads', async () => {
+  await t.test('keeps the server connection between requests, including chunked uploads', async () => {
     const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
     let connections = 0;
     const count = () => { connections++; };
@@ -124,7 +128,12 @@ for (const kind of ['desktop', 'android']) test(kind + ' gateway integration', {
       const stream = await send('/stream');
       assert.match(stream.body, /first[\s\S]*last/);
       assert.equal(JSON.parse((await send('/after')).body).url, '/after');
-      assert.equal(connections, 1);
+      // One at most: a connection kept from the requests above may be handed on.
+      assert.ok(connections <= 1, 'server connections opened: ' + connections);
+      // The server closed the kept connection as it was reused: a GET is sent again on a new one.
+      const flaky = await send('/flaky');
+      assert.equal(flaky.status, 200);
+      assert.equal(JSON.parse(flaky.body).url, '/flaky');
     } finally { backend.off('connection', count); agent.destroy(); }
   });
   if (kind === 'android') await t.test('normalizes addresses typed without a scheme', async () => {
