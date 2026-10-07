@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The mark (src/Logo.jsx) on the 108dp adaptive-icon canvas. Scaled into the
+     72dp safe zone so no launcher mask (circle, squircle, teardrop) clips it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp" android:height="108dp"
+    android:viewportWidth="108" android:viewportHeight="108">
+    <group android:translateX="28.4" android:translateY="28.4" android:scaleX="1.6" android:scaleY="1.6">
+        <path android:fillColor="@android:color/transparent" android:strokeColor="#F7F5F0"
+            android:strokeWidth="2.6" android:strokeLineCap="round"
+            android:pathData="M15 4.54A11.5 11.5 0 1 1 6.58 9.4"/>
+        <path android:fillColor="@android:color/transparent" android:strokeColor="#F7F5F0"
+            android:strokeWidth="2.8" android:strokeLineCap="round"
+            android:pathData="M15.44 9.62A6.4 6.4 0 0 1 20.53 20.53"/>
+        <path android:fillColor="#F7F5F0" android:pathData="M18.3,16a2.3,2.3 0,1 1,-4.6,0a2.3,2.3 0,1 1,4.6,0"/>
+    </group>
+</vector>
