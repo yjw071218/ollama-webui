@@ -234,7 +234,7 @@ check('they run one at a time', /for \(const invoked of running\)/.test(app));
 
 /* ------------------------------------------------------ clickable citations */
 
-check('the passages are kept as data, not only as prompt text', /turnCitations = hits\.map/.test(app));
+check('the passages are kept as data, not only as prompt text', /turnCitations = (hits|sections)\.map/.test(app));
 check('and attached to the finished message', /citations: turnCitations/.test(app));
 check('a citation marker becomes a button', /tagName: 'button'[\s\S]{0,400}?citation-mark/.test(app));
 

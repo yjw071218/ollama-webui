@@ -438,6 +438,14 @@ export const addDocument = async (userId, doc) => {
   return next;
 };
 
+/** Merge `patch` into one document (a cached summary, say). Returns the library. */
+export const updateDocument = async (userId, docId, patch) => {
+  const docs = await loadLibrary(userId);
+  const next = docs.map(d => (d.id === docId ? { ...d, ...patch } : d));
+  await saveLibrary(userId, next);
+  return next;
+};
+
 export const removeDocument = async (userId, docId) => {
   const docs = await loadLibrary(userId);
   const next = docs.filter(d => d.id !== docId);
@@ -532,16 +540,19 @@ const searchSetFor = (docs) => {
 
   const candidates = [];
   for (const doc of docs) {
-    for (const chunk of doc.chunks) {
+    doc.chunks.forEach((chunk, index) => {
       candidates.push({
         docId: doc.id,
         docName: doc.name,
+        /* Where in the document it is, so a hit can bring its neighbours and
+           be put back in reading order (src/docContext.js). */
+        index,
         page: chunk.page,
         text: chunk.text,
         vector: chunk.vector,
         embedModel: doc.embedModel || LEGACY_EMBED_MODEL,
       });
-    }
+    });
   }
   // Built on first use rather than here: a library searched with the lexical
   // half switched off should not pay for term statistics nothing reads.

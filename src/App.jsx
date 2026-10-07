@@ -165,7 +165,7 @@ import { FitNote } from './FitNote.jsx';
 import { WatchedFolders } from './WatchedFolders.jsx';
 import { isAudioFile, formatDuration } from './audio.js';
 import { looksLikeDocument } from './canvas.js';
-import { loadLibrary, saveLibrary, retrieve, formatContext, visibleDocuments, removeDocument, DEFAULT_EMBED_MODEL, isEmbeddingModel, extractDocument, renderPdfPages, embedTexts, normalise } from './rag.js';
+import { loadLibrary, saveLibrary, retrieve, visibleDocuments, removeDocument, updateDocument, DEFAULT_EMBED_MODEL, isEmbeddingModel, extractDocument, renderPdfPages, embedTexts, normalise } from './rag.js';
 import { buildIndex, searchIndex, loadIndex, clearIndex, indexBytes, MAX_INDEXED } from './chatSearch.js';
 import {
   loadMemories, saveMemories, addMemories, removeMemory,
@@ -224,6 +224,7 @@ import {
   makeEntry, isRetryable, MAX_ATTEMPTS, heldReason, carryAttempt,
 } from './sendQueue.js';
 import { ingestDocument, shouldPasteAsFile, namePastedText } from './ingest.js';
+import { fitsWhole, passageBudget, promptBudget, isOverviewQuestion, assemblePassages, coverageSections, documentParts, documentTokens, formatSections, partSummaryPrompt, estimateTokens as estimateDocTokens } from './docContext.js';
 import { holdScreenAwake } from './wakeLock.js';
 import { notify, notifyState, askToNotify, unattended, subscribeToPush, unsubscribeFromPush } from './notify.js';
 import { recordRun, loadRuns, clearRuns, summarise, promptCostTrend } from './perf.js';
@@ -8195,6 +8196,64 @@ ${data.text}` : data.text));
 
 
   /**
+   * A whole-document summary of an indexed document, made part by part.
+   *
+   * "요약해줘" about a document too long for the context has no right five
+   * pieces to retrieve. So the document is cut into consecutive parts that each
+   * fit, every part is summarised by the model that is about to answer, and the
+   * summaries -- in order, covering every page -- are what it reads. Sized so
+   * that all of them together fit `budgetTokens`.
+   *
+   * Kept on the document (per model), so the next such question about the
+   * same file is answered at once rather than summarised all over again.
+   */
+  const digestDocument = async (doc, { model, budgetTokens, ctxOpts, signal }) => {
+    const cached = doc.digest;
+    if (cached?.model === model && cached.text && estimateDocTokens(cached.text) <= budgetTokens) return cached.text;
+
+    // Each part leaves room in the window for the instructions and the summary.
+    const partTokens = Math.max(1500, Math.min(24000, Math.floor(promptBudget(ctxOpts) * 0.6)));
+    const parts = documentParts(doc, partTokens);
+    const perPart = Math.max(120, Math.min(900, Math.floor((budgetTokens * 0.9) / parts.length)));
+    addLog(`[knowledge] summarising ${doc.name} in ${parts.length} parts for a whole-document question`, 'info');
+    toast(t('rag.summarising', { name: doc.name, parts: parts.length }), 'info', 8000);
+
+    const out = [];
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const res = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        signal,
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: partSummaryPrompt({
+            name: doc.name, part: i + 1, of: parts.length, text: part.text,
+            maxWords: Math.max(40, Math.floor(perPart / 2.5)),
+          }) }],
+          stream: false,
+          think: false,
+          options: helperOptions({ temperature: 0.2, num_predict: perPart }),
+        }),
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      const data = await res.json();
+      const text = decodeByteFallback(data.message?.content || '')
+        .replace(/<think>[\s\S]*?<\/think>/g, '').trim();
+      if (!text) throw new Error(`no summary for part ${i + 1}`);
+      const pages = part.pageEnd && part.pageEnd !== part.page ? ` (pp.${part.page}-${part.pageEnd})` : part.page > 1 ? ` (p.${part.page})` : '';
+      out.push(`## Part ${i + 1} of ${parts.length}${pages}\n${text}`);
+      addLog(`[knowledge] ${doc.name}: part ${i + 1}/${parts.length} summarised`, 'info');
+    }
+    const digest = out.join('\n\n');
+    try {
+      const library = await updateDocument(profileScopeRef.current, doc.id, { digest: { model, text: digest, at: Date.now() } });
+      setKnowledge(library);
+    } catch { /* Only the cache is lost: the next such question summarises again. */ }
+    return digest;
+  };
+
+  /**
    * Pin documents to a folder, so every chat in it can be asked about them.
    *
    * The same indexing the composer does for an oversized attachment, with a
@@ -8864,7 +8923,10 @@ ${data.text}` : data.text));
    * exactly the case where retrieving the relevant two minutes beats sending
    * all ninety. */
   const attachExtractedText = async (file, text) => {
-      if (text.length > MAX_ATTACHMENT_CHARS) {
+      /* Whole whenever the context window can hold it, rather than past a fixed
+         30,000 characters: a CLI model or a large num_ctx reads all of a
+         document that used to be cut into pieces (src/docContext.js). */
+      if (!fitsWhole(text, { numCtx, maxTokens, cli: !!cliOf(selectedModel) })) {
         const bigFile = file;
         setAttachments(prev => [...prev, {
           name: bigFile.name, type: 'indexing', data: '', chars: text.length,
@@ -9930,42 +9992,96 @@ ${data.text}` : data.text));
       });
       if (ragEnabled && !isAutoTool && originalInput.trim() && inScope.length > 0) {
         try {
-          const hits = await retrieve(originalInput, knowledge, {
-            model: embedModel,
-            topK: ragTopK,
-            chatId: currentSessionId,
-            folderId: currentFolderId,
-            hybrid: ragHybrid,
-            rerank: ragRerank,
-            /* The model that is about to answer, rather than a setting of its
-               own. A judge weaker than the model reading its verdict is a
-               filter that removes passages the answer would have used; a
-               judge stronger than it is a second model loaded into VRAM
-               before every message, which on this hardware is the pause the
-               feature was supposed to be worth. */
-            rerankModel: chosenModel,
-            signal,
-          });
-          if (hits.length > 0) {
+          /* How much the model can be shown, from the context it actually has
+             -- and in what shape. See src/docContext.js for why five pieces in
+             order of score was not enough to understand a document. */
+          const ctxOpts = { numCtx, maxTokens, cli: !!cliOf(chosenModel) };
+          const budget = passageBudget(ctxOpts);
+          // The files attached to this chat: "the document" in a question means these.
+          const own = inScope.filter(d => d.chatId && String(d.chatId) === String(currentSessionId) && d.chunks?.length);
+          let sections = [];
+          let shape = '';
+          let hits = [];
+          if (isOverviewQuestion(originalInput) && own.length > 0) {
+            /* About the whole document: no "closest pieces" answer that. All of
+               it if it fits; else a summary made part by part over all of it;
+               else pieces spread across the whole of it. */
+            const share = Math.max(800, Math.floor(budget / own.length));
+            for (const doc of own) {
+              if (documentTokens(doc) <= share) {
+                sections.push(...coverageSections(doc, share).map(s => ({ ...s, kind: 'whole', score: null })));
+                shape ||= 'whole document';
+                continue;
+              }
+              try {
+                const digest = await digestDocument(doc, { model: chosenModel, budgetTokens: share, ctxOpts, signal });
+                sections.push({
+                  docId: doc.id, docName: doc.name, page: 1, pageEnd: doc.pages || 1,
+                  from: 0, to: doc.chunks.length - 1, total: doc.chunks.length,
+                  text: digest, kind: 'digest', score: null,
+                });
+                shape ||= 'part-by-part summary';
+              } catch (err) {
+                if (err.name === 'AbortError') throw err;
+                addLog(`[knowledge] could not summarise ${doc.name}: ${err.message}; sending pieces from all of it`, 'error');
+                sections.push(...coverageSections(doc, share));
+                shape ||= 'spread across the document';
+              }
+            }
+          }
+          if (sections.length === 0) {
+            hits = await retrieve(originalInput, knowledge, {
+              model: embedModel,
+              topK: ragTopK,
+              chatId: currentSessionId,
+              folderId: currentFolderId,
+              hybrid: ragHybrid,
+              rerank: ragRerank,
+              /* The model that is about to answer, rather than a setting of its
+                 own. A judge weaker than the model reading its verdict is a
+                 filter that removes passages the answer would have used; a
+                 judge stronger than it is a second model loaded into VRAM
+                 before every message, which on this hardware is the pause the
+                 feature was supposed to be worth. */
+              rerankModel: chosenModel,
+              signal,
+            });
+            /* Each piece with what is either side of it, back in reading
+               order, joined where they meet -- so an explanation that runs on
+               past the end of the piece that matched is read to its end. */
+            sections = assemblePassages({ hits, docs: inScope, budgetTokens: budget, neighbours: 2 });
+            shape = 'passages in document order';
+          }
+          if (sections.length > 0) {
             /* Kept as data as well as as text.
                The block below is what the model reads; this is what makes the
                `[1]` it writes back into something the reader can press. The
                order is the citation numbering, so index 0 is `[1]`. */
-            turnCitations = hits.map(h => ({
-              docName: h.docName, page: h.page, score: h.score, text: h.text,
+            turnCitations = sections.map(s => ({
+              docName: s.docName, page: s.page, score: s.score, text: s.text,
             }));
-            const block = `--- [Knowledge] Passages from your documents, most relevant first ---\n${formatContext(hits)}\n--- Cite these as [1], [2] ... when you use them. If they do not answer the question, say so instead of guessing. ---`;
-            finalInputText += `\n\n${block}`;
-            initialAssistantContent += `<think>\n${block}\n</think>\n\n`;
+            const block = `--- [Knowledge] From your documents (${shape}). Passages next to each other in a document are joined; […] marks text left out between them ---
+${formatSections(sections)}
+--- Cite these as [1], [2] ... when you use them. If they do not answer the question, say so instead of guessing. ---`;
+            finalInputText += `
+
+${block}`;
+            initialAssistantContent += `<think>
+${block}
+</think>
+
+`;
             /* Which retriever found what, because "5 passages" is the same
                line whether the lexical half is working or silently returning
                nothing, and those are very different situations. */
             const byWords = hits.filter(h => h.found?.includes('lexical')).length;
             const detail = [
+              shape,
               ragHybrid && byWords ? `${byWords} by exact words` : null,
               ragRerank && hits.some(h => h.rerank !== undefined) ? 'reranked' : null,
+              `~${sections.reduce((n, s) => n + estimateDocTokens(s.text), 0)} of ${budget} tokens`,
             ].filter(Boolean).join(', ');
-            addLog(`[knowledge] ${hits.length} passages from ${new Set(hits.map(h => h.docName)).size} document(s)${detail ? ` (${detail})` : ''}`, 'success');
+            addLog(`[knowledge] ${sections.length} passages from ${new Set(sections.map(s => s.docName)).size} document(s) (${detail})`, 'success');
           } else {
             addLog('[knowledge] nothing relevant enough to include', 'info');
           }
@@ -14709,9 +14825,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   [{openCitation.n}] {openCitation.docName}
                   {openCitation.page > 1 ? `, p.${openCitation.page}` : ''}
                 </span>
-                <span className="attachment-viewer-meta">
-                  {t('rag.relevance', { score: openCitation.score.toFixed(2) })}
-                </span>
+                {/* The whole document, or its summary, has no relevance score. */}
+                {typeof openCitation.score === 'number' && (
+                  <span className="attachment-viewer-meta">
+                    {t('rag.relevance', { score: openCitation.score.toFixed(2) })}
+                  </span>
+                )}
                 <button
                   className="icon-btn"
                   title={t('common.copy')}

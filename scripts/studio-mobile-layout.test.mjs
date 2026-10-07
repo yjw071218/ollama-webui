@@ -1,4 +1,4 @@
-import {readFileSync,mkdtempSync,existsSync} from 'node:fs';
+import {readFileSync,mkdtempSync,existsSync,rmSync} from 'node:fs';
 import {spawn} from 'node:child_process';
 import path from 'node:path';
 import assert from 'node:assert/strict';
@@ -33,4 +33,9 @@ try {
  }
  console.log('PASS mobile Studio action containment: '+count+' viewport/density combinations');
  await send('Browser.close');
-}finally{ws?.close();}
+}finally{
+ ws?.close();
+ // The browser profile is 20+ MB; one was left behind on every run.
+ if(child.exitCode===null&&child.signalCode===null){child.kill();await new Promise(r=>child.once('exit',r));}
+ rmSync(profile,{recursive:true,force:true,maxRetries:10,retryDelay:200});
+}
