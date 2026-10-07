@@ -178,7 +178,9 @@ self.addEventListener('notificationclick', (event) => {
       // any window of it is a window that can show this.
       if (new URL(client.url).origin === self.location.origin) {
         await client.focus().catch(() => {});
-        try { client.postMessage({ type: 'OPEN_CHAT', url: wanted }); } catch (e) { /* focused anyway */ }
+        // The chat goes with it: the page opens that conversation by its id.
+        const chat = event.notification.data && event.notification.data.chat;
+        try { client.postMessage({ type: 'OPEN_CHAT', url: wanted, chat }); } catch (e) { /* focused anyway */ }
         return;
       }
     }

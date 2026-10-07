@@ -170,9 +170,13 @@ check('the worker handles the click', /addEventListener\('notificationclick'/.te
 check('  focusing a window that is already open before opening another',
   /client\.focus\(\)/.test(sw) && /openWindow\(wanted\)/.test(sw));
 check('  and saying which conversation it was about',
-  /postMessage\(\{ type: 'OPEN_CHAT', url: wanted \}\)/.test(sw));
-check('which the app takes it to', /event\.data\?\.type !== 'OPEN_CHAT'/.test(app)
+  /postMessage\(\{ type: 'OPEN_CHAT', url: wanted, chat \}\)/.test(sw)
+  && /event\.notification\.data && event\.notification\.data\.chat/.test(sw));
+check('which the app takes it to', /event\.data\?\.type === 'OPEN_CHAT'\) openChat\(event\.data\.chat\)/.test(app)
   && /setCurrentSessionId\(found\.id\)/.test(app));
+check('  and so does the Android app, even before the chats have loaded',
+  /addEventListener\('ollama-native-open-chat'/.test(app) && /window\.__ollamaOpenChat/.test(app)
+  && /pendingOpenChatRef\.current = String\(chat\)/.test(app));
 
 const i18n = read('src/i18n.jsx');
 for (const key of ['notify.label', 'notify.help', 'notify.ready', 'notify.denied', 'notify.unsupported']) {

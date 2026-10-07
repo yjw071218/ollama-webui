@@ -186,7 +186,8 @@ export const CanvasPanel = ({
     link.href = url;
     link.download = `${(title || 'document').replace(/[^\w가-힣\- ]+/g, '').trim().slice(0, 60) || 'document'}.md`;
     link.click();
-    URL.revokeObjectURL(url);
+    // Not at once: the Android app reads the file from this URL after the click.
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
   };
 
   const words = useMemo(() => (text.match(/\S+/g) || []).length, [text]);

@@ -344,6 +344,11 @@ const localChanges = async (scope) => {
     const key = `${record.kind}:${record.id}`;
     seen.add(key);
     if (sent[key] === record.updatedAt) continue;
+    /* Which version of the chat this edit was made on: the one this device
+       last had in step with the account. The server merges instead of
+       replacing when another device wrote after it (server/chatMerge.js).
+       -1 is "re-send everything" from an older client, which says nothing. */
+    if (record.kind === 'chat' && Number.isFinite(sent[key]) && sent[key] >= 0) record.base = sent[key];
     changed.push(record);
   }
 

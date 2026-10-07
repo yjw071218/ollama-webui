@@ -435,15 +435,29 @@ const categorizeSession = (timestamp) => {
 
 // Rough token estimate. Latin text averages ~4 chars/token, Hangul ~1.5,
 // so weight by how much of the string is non-ASCII.
+/* Asked again for every message of the chat on every render -- each frame of a
+   streamed reply -- about texts that have not changed. Measured on a phone-speed
+   CPU with 160 messages, counting them again was a frame of its own. A message's
+   text is the same string each time, so it is remembered by the string. */
+const tokenCache = new Map();
 const estimateTokens = (text) => {
   if (!text) return 0;
   const str = String(text);
+  const known = tokenCache.get(str);
+  if (known !== undefined) return known;
   let wide = 0;
   for (let i = 0; i < str.length; i++) {
     if (str.charCodeAt(i) > 127) wide++;
   }
   const ascii = str.length - wide;
-  return Math.ceil(ascii / 4 + wide / 1.5);
+  const tokens = Math.ceil(ascii / 4 + wide / 1.5);
+  // Short texts are cheaper to count than to keep; a streaming answer's
+  // every length would otherwise each be kept.
+  if (str.length > 200) {
+    if (tokenCache.size > 4000) tokenCache.clear();
+    tokenCache.set(str, tokens);
+  }
+  return tokens;
 };
 
 /* ---- How hard the model should think ----
@@ -546,7 +560,8 @@ const downloadBlob = (filename, content, mime = 'text/plain;charset=utf-8') => {
   a.href = url;
   a.download = filename;
   a.click();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  // A minute, not a second: the Android app reads the file from this URL after the click.
+  setTimeout(() => URL.revokeObjectURL(url), 60000);
 };
 
 const slugify = (text) => (text || 'chat')
@@ -1340,6 +1355,49 @@ const useRevealClock = (length, live, settled = 0) => {
   } : null), [live, length]); // eslint-disable-line react-hooks/exhaustive-deps
 };
 
+/* The top of a long chat's shown part: a button for the earlier messages, also
+ * pressed by scrolling up to it. What is on screen stays where it is when they
+ * are put in above -- set by hand, since not every browser anchors the scroll
+ * (iOS Safari does not), and without it the reader would stay at the top and
+ * load the whole history one batch after another. */
+const HistorySentinel = ({ onShow, label }) => {
+  const ref = useRef(null);
+  const show = useCallback(() => {
+    const scroller = (() => {
+      for (let node = ref.current?.parentElement; node; node = node.parentElement) {
+        const { overflowY } = getComputedStyle(node);
+        if ((overflowY === 'auto' || overflowY === 'scroll') && node.scrollHeight > node.clientHeight) return node;
+      }
+      return null;
+    })();
+    const height = scroller?.scrollHeight || 0, top = scroller?.scrollTop || 0;
+    onShow();
+    if (!scroller) return;
+    requestAnimationFrame(() => requestAnimationFrame(() => {
+      scroller.scrollTop = top + (scroller.scrollHeight - height);
+    }));
+  }, [onShow]);
+  const showRef = useRef(show);
+  showRef.current = show;
+  useEffect(() => {
+    const el = ref.current;
+    if (!el || typeof IntersectionObserver === 'undefined') return undefined;
+    let armed = false;
+    const observer = new IntersectionObserver(([entry]) => {
+      // Not on the way in: only once the reader has scrolled up to it.
+      if (!entry.isIntersecting) { armed = true; return; }
+      if (armed) { armed = false; showRef.current(); }
+    }, { rootMargin: '200px 0px 0px 0px' });
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, []);
+  return (
+    <div ref={ref} className="history-earlier">
+      <button type="button" onClick={show}>{label}</button>
+    </div>
+  );
+};
+
 const LiveAnswerMarkdown = ({ text, live, revealKey, ...rest }) => {
   const [typed, settled] = useTypewriter(text, live, revealKey);
   const shownText = typed.length < text.length ? closeOpenMarks(typed) : typed;
@@ -1373,7 +1431,7 @@ const fetchJsonQuietly = (url, init) => fetch(url, init)
   .then((text) => { try { return JSON.parse(text); } catch (e) { return null; } });
 
 function App() {
-  /* Everything Ollama has installed, and the part of it that can be chatted
+    /* Everything Ollama has installed, and the part of it that can be chatted
      with. Embedding models only make vectors -- picking one for a chat is an
      error -- so every model picker reads `models`, and only the knowledge
      settings and the disk view see `installedModels`. */
@@ -1916,8 +1974,19 @@ function App() {
   const [isDragging, setIsDragging] = useState(false);
   const [showScrollBtn, setShowScrollBtn] = useState(false);
   // Reading position, 0 to 1. See handleScroll for why it is worth having.
-  const [scrollProgress, setScrollProgress] = useState(0);
+  /* The hairline under the header, set on the element itself rather than kept
+     as state. As state, every scroll event re-rendered the whole app -- and
+     while a reply streams the list scrolls on every frame, so in a long chat on
+     a phone the app spent all its time drawing the conversation again for a
+     bar one pixel high, and the answer itself stalled until the end. */
+  const readProgressRef = useRef(null);
+  const setScrollProgress = useCallback((value) => {
+    const bar = readProgressRef.current;
+    if (bar) bar.style.transform = `scaleX(${value})`;
+  }, []);
   const [showTopBtn, setShowTopBtn] = useState(false);
+  // What the two scroll buttons were last set to, so a scroll only sets them on a change.
+  const scrollFlagsRef = useRef({ bottom: false, top: false });
 
   // --- Model management ---
   const [runningModels, setRunningModels] = useState([]);
@@ -2845,6 +2914,48 @@ function App() {
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
 
+  /* A long chat shows its most recent turns, and the earlier ones on asking.
+     Every row is drawn again each time the answer being written changes, so a
+     chat of a few hundred messages cost a few hundred rows a frame: on a phone
+     the reply stopped streaming and arrived whole at the end, and the app did
+     not answer a tap while it was being written (scripts/stream-perf.mjs).
+     Rows before `historyStart` are not drawn; scrolling to the top, the button
+     there, or a jump to an older message (search, outline, keys, gallery)
+     brings them back. Starred-only and search show every match. */
+  const HISTORY_WINDOW = 40, HISTORY_WINDOW_FROM = 60;
+  const [historyWindow, setHistoryWindow] = useState({ chat: null, from: Infinity });
+  const historyStart = (() => {
+    if (starredOnly || chatSearchQuery.trim() || messages.length <= HISTORY_WINDOW_FROM) return 0;
+    let from = Math.max(0, messages.length - HISTORY_WINDOW);
+    if (historyWindow.chat === currentSessionId) from = Math.min(from, historyWindow.from);
+    // From a question, so no answer is shown without what it answered (and no
+    // continuation row loses the row it is folded into).
+    while (from > 0 && messages[from]?.role !== 'user') from--;
+    return from;
+  })();
+  const historyStartRef = useRef(historyStart);
+  historyStartRef.current = historyStart;
+  const showEarlier = useCallback((count = HISTORY_WINDOW) => {
+    setHistoryWindow(prev => ({
+      chat: currentSessionIdRef.current,
+      from: Math.max(0, Math.min(prev.chat === currentSessionIdRef.current ? prev.from : Infinity, historyStartRef.current) - count),
+    }));
+  }, []);
+  // On paper, the whole conversation: drawn before the page is printed.
+  useEffect(() => {
+    const all = () => flushSync(() => setHistoryWindow({ chat: currentSessionIdRef.current, from: 0 }));
+    window.addEventListener('beforeprint', all);
+    return () => window.removeEventListener('beforeprint', all);
+  }, []);
+  /* The row for a message, drawn first if it is in the part not shown. `then`
+     gets the element once it is on the page. */
+  const withMessageRow = useCallback((index, then) => {
+    const row = messageRefs.current[index];
+    if (row && index >= historyStartRef.current) { then?.(row); return; }
+    setHistoryWindow({ chat: currentSessionIdRef.current, from: index });
+    requestAnimationFrame(() => requestAnimationFrame(() => then?.(messageRefs.current[index])));
+  }, []);
+
   const [input, setInput] = useState('');
   /* Which message the keyboard is on, or null before anything is focused.
      Mirrored into a ref because the global key handler is registered once and
@@ -3426,15 +3537,33 @@ function App() {
    * `notificationclick` in public/sw.js -- and then says which chat it was, so
    * the app can go there rather than leaving the reader on whichever one
    * happened to be on screen when they walked away. */
+  const pendingOpenChatRef = useRef(null);
   useEffect(() => {
-    if (typeof navigator === 'undefined' || !navigator.serviceWorker) return undefined;
-    const onMessage = (event) => {
-      if (event.data?.type !== 'OPEN_CHAT' || !event.data.chat) return;
-      const found = sessionsRef.current.find(session => String(session.id) === String(event.data.chat));
-      if (found) setCurrentSessionId(found.id);
+    const chat = pendingOpenChatRef.current;
+    if (!chat) return;
+    const found = sessions.find(session => String(session.id) === chat);
+    if (found) { pendingOpenChatRef.current = null; setCurrentSessionId(found.id); }
+  }, [sessions]);
+  useEffect(() => {
+    const openChat = (chat) => {
+      if (!chat) return;
+      if (typeof window !== 'undefined') window.__ollamaOpenChat = undefined;
+      const found = sessionsRef.current.find(session => String(session.id) === String(chat));
+      // An app opened cold from the notification has no chats yet: it waits.
+      if (found) { pendingOpenChatRef.current = null; setCurrentSessionId(found.id); }
+      else pendingOpenChatRef.current = String(chat);
     };
-    navigator.serviceWorker.addEventListener('message', onMessage);
-    return () => navigator.serviceWorker.removeEventListener('message', onMessage);
+    const onMessage = (event) => { if (event.data?.type === 'OPEN_CHAT') openChat(event.data.chat); };
+    // The Android app's own notifications (native.js) say it this way.
+    const onNative = (event) => openChat(event.detail?.chat);
+    window.addEventListener('ollama-native-open-chat', onNative);
+    navigator.serviceWorker?.addEventListener('message', onMessage);
+    // Said before this listener existed (the app was still starting): it was kept.
+    if (window.__ollamaOpenChat) openChat(window.__ollamaOpenChat);
+    return () => {
+      window.removeEventListener('ollama-native-open-chat', onNative);
+      navigator.serviceWorker?.removeEventListener('message', onMessage);
+    };
   }, []);
 
   // How much of a generated picture is shown before someone chooses to see it.
@@ -4600,7 +4729,7 @@ ${data.text}` : data.text));
 
   // Switching chats does not fire a scroll event, so the bar would keep showing
   // how far through the *previous* conversation the reader had got.
-  useEffect(() => { setScrollProgress(0); setShowTopBtn(false); }, [currentSessionId]);
+  useEffect(() => { setScrollProgress(0); setShowTopBtn(false); scrollFlagsRef.current.top = false; }, [currentSessionId, setScrollProgress]);
 
   /**
    * Put the reader back where they were in this chat.
@@ -8361,7 +8490,11 @@ ${data.text}` : data.text));
     if (!selfScrollRef.current) {
       isAutoScrollRef.current = distanceFromBottom <= STICK_SLACK;
     }
-    setShowScrollBtn(distanceFromBottom > 240);
+    /* Only on a change: a setter given the value it already has still runs
+       the whole of App to find that out when an update is pending -- which,
+       while a reply streams, is every scroll event. */
+    const scrollBtn = distanceFromBottom > 240;
+    if (scrollFlagsRef.current.bottom !== scrollBtn) { scrollFlagsRef.current.bottom = scrollBtn; setShowScrollBtn(scrollBtn); }
 
     // How far through the conversation the reader is, as a percentage.
     //
@@ -8377,7 +8510,8 @@ ${data.text}` : data.text));
     // width the bar last had, stuck.
     const scrollable = scrollHeight - clientHeight;
     setScrollProgress(scrollable > 40 ? Math.min(1, Math.max(0, scrollTop / scrollable)) : 0);
-    setShowTopBtn(scrollTop > clientHeight);
+    const topBtn = scrollTop > clientHeight;
+    if (scrollFlagsRef.current.top !== topBtn) { scrollFlagsRef.current.top = topBtn; setShowTopBtn(topBtn); }
 
     // Where the reader is in this chat, remembered as they go. See the effect
     // that swaps drafts for why it cannot be captured at the moment of
@@ -8391,7 +8525,7 @@ ${data.text}` : data.text));
       top: scrollTop,
       atBottom: distanceFromBottom <= STICK_SLACK,
     });
-  }, []);
+  }, [setScrollProgress]);
 
   const scrollToTop = () => {
     isAutoScrollRef.current = false;
@@ -10734,12 +10868,26 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       // a second in a hidden page and once a *minute* after five minutes of it.
       const HIDDEN_COMMIT_MS = 250;
       let flushHandle = null;
+      let flushTimer = null;
       let lastCommitAt = 0;
+      /* What one commit costs, measured: from the commit to the next frame,
+         which cannot start until React has rendered and the browser laid the
+         page out. One commit a frame is right for a short chat; in a long one
+         on a phone a commit is the whole chat rendered again, 100-200 ms at
+         phone speed (scripts/stream-perf.mjs), so a commit every frame kept the
+         main thread busy for the entire reply -- the answer came in jerks or not
+         until the end, and the app did not answer a tap. The next commit waits
+         for 1.5x what the last one took, which keeps at least half of the time
+         free; the typewriter (StreamingAnswer) lets the text out smoothly in
+         between, since it re-renders only its own message. */
+      let commitCost = 0;
+      const commitGap = () => Math.min(400, commitCost * 1.5);
       /* Text after a drawing call waits for its picture -- see
          `holdAfterDrawing`. Released once the tools have had their say. */
       let holdDrawn = true;
       const flushNow = () => {
         flushHandle = null;
+        if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
         lastCommitAt = Date.now();
         const committedContent = holdDrawn ? holdAfterDrawing(assistantContent) : assistantContent;
         reviseSession(currentSessionId, s => {
@@ -10747,6 +10895,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           msgs[newMessageIndex] = { ...msgs[newMessageIndex], content: committedContent, isMcpFetching: false };
           return { ...s, messages: msgs };
         });
+        if (document.visibilityState !== 'hidden') {
+          const began = performance.now();
+          requestAnimationFrame(() => { commitCost = performance.now() - began; });
+        }
       };
       const scheduleFlush = () => {
         // Hidden: commit straight off the chunk, at most four times a second.
@@ -10755,13 +10907,20 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         // because timers are the thing that does not work here.
         if (document.visibilityState === 'hidden') {
           if (flushHandle !== null) { cancelAnimationFrame(flushHandle); flushHandle = null; }
+          if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
           if (Date.now() - lastCommitAt >= HIDDEN_COMMIT_MS) flushNow();
           return;
         }
-        if (flushHandle !== null) return;
+        if (flushHandle !== null || flushTimer !== null) return;
+        const wait = lastCommitAt + commitGap() - Date.now();
+        if (wait > 8) {
+          flushTimer = setTimeout(() => { flushTimer = null; flushHandle = requestAnimationFrame(flushNow); }, wait);
+          return;
+        }
         flushHandle = requestAnimationFrame(flushNow);
       };
       const cancelFlush = () => {
+        if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
         if (flushHandle === null) return;
         cancelAnimationFrame(flushHandle);
         flushHandle = null;
@@ -13448,7 +13607,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     const target = (next + searchHits.length) % searchHits.length;
     setSearchHitIndex(target);
     isAutoScrollRef.current = false;
-    messageRefs.current[searchHits[target]]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    withMessageRow(searchHits[target], row => row?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
   };
 
   // Reset the cursor whenever the query changes.
@@ -13466,7 +13625,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
   const jumpToMessage = (index) => {
     isAutoScrollRef.current = false;
-    messageRefs.current[index]?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    withMessageRow(index, row => row?.scrollIntoView({ behavior: 'smooth', block: 'center' }));
     setShowOutline(false);
   };
 
@@ -13720,8 +13879,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             setNavIndex(target);
             // Centred rather than merely brought on screen: a message scrolled
             // to the very bottom edge is one you then have to scroll again.
-            const row = document.querySelector(`[data-message-index="${target}"]`);
-            row?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+            withMessageRow(target, row => row?.scrollIntoView({ block: 'center', behavior: 'smooth' }));
           }
           return;
         }
@@ -13793,6 +13951,48 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     return () => window.removeEventListener('keydown', onKeyDown);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showPalette, showShortcuts, showSettings, showSystemMonitor, showCompare, activeArtifact, codeArtifacts, selectMode]);
+
+  /* The Android app's back button (native/android … native.js). The page has
+     no history of its own, so back used to fall straight through to "change
+     server" whatever was open. Now it closes the top thing on screen, one per
+     press, and only with nothing left open does the app go to the background.
+     Handled = preventDefault; the app reads that. */
+  const nativeBackRef = useRef(null);
+  const nativeBackEscapedRef = useRef(null);
+  nativeBackRef.current = () => {
+    if (showPalette) { setShowPalette(false); return true; }
+    if (showShortcuts) { setShowShortcuts(false); return true; }
+    if (showCompare) { setShowCompare(false); return true; }
+    if (chainEditor) { setChainEditor(null); return true; }
+    if (tagEditorFor !== null) { setTagEditorFor(null); return true; }
+    if (showSystemMonitor) { setShowSystemMonitor(false); return true; }
+    if (showPersonaPicker) { setShowPersonaPicker(false); return true; }
+    if (showChatInfo) { setShowChatInfo(false); return true; }
+    if (showSettings) { setShowSettings(false); return true; }
+    if (showProfileMenu) { setShowProfileMenu(false); return true; }
+    /* Anything else that covers the page -- a confirm, the lightbox, a menu --
+       closes on Escape by itself; it is sent one. */
+    /* One that ignored the last Escape is passed over, or a panel that does
+       not close on Escape would hold the back button forever. */
+    const layer = [...document.querySelectorAll('[aria-modal="true"], [role="dialog"], [role="menu"], [role="listbox"]')]
+      .reverse().find(el => el.getClientRects().length > 0 && el !== nativeBackEscapedRef.current);
+    nativeBackEscapedRef.current = layer || null;
+    if (layer) {
+      (layer.contains(document.activeElement) ? document.activeElement : layer)
+        .dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', bubbles: true, cancelable: true }));
+      return true;
+    }
+    if (activeArtifact) { setActiveArtifact(null); return true; }
+    if (searchOpen) { setChatSearchQuery(''); setSearchOpen(false); return true; }
+    if (selectMode) { exitSelectMode(); return true; }
+    if (isNarrow && isSidebarOpen) { setIsSidebarOpen(false); return true; }
+    return false;
+  };
+  useEffect(() => {
+    const onBack = (event) => { if (nativeBackRef.current?.()) event.preventDefault(); };
+    window.addEventListener('ollama-native-back', onBack);
+    return () => window.removeEventListener('ollama-native-back', onBack);
+  }, []);
 
   // Keep the palette selection in range as the query narrows the list.
   useEffect(() => {
@@ -14488,9 +14688,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             screen on a phone. Zero-width and transparent at the top of a
             chat, so an unscrolled conversation shows nothing at all. */}
         <div
+          ref={readProgressRef}
           className="read-progress"
           role="presentation"
-          style={{ transform: `scaleX(${scrollProgress})` }}
+          style={{ transform: 'scaleX(0)' }}
         />
 
         {/* The passage a citation points at.
@@ -14737,6 +14938,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                  gallery keeps itself. */
               onGoTo={(item) => {
                 setCurrentSessionId(item.sessionId);
+                // Drawn even if it is among the earlier messages of a long chat.
+                setHistoryWindow({ chat: item.sessionId, from: item.index });
                 setSidebarPlace('home');
                 setTimeout(() => messageRefs.current[item.index]?.scrollIntoView({ behavior: 'smooth', block: 'center' }), 200);
               }}
@@ -14794,7 +14997,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             </div>
           ) : (
             <div className="messages-wrapper">
+              {historyStart > 0 && (
+                <HistorySentinel count={historyStart} onShow={() => showEarlier()} label={t('chat.showEarlier', { n: historyStart })} />
+              )}
               {messages.map((msg, i) => {
+                // Earlier than the part of a long chat being shown.
+                if (i < historyStart) return null;
                 const isPureToolResult = (m) => m && m.role === 'user' && m.content.trim().startsWith('<TOOL_RESULT>') && m.content.trim().endsWith('</TOOL_RESULT>');
                 // The continue instruction is scaffolding, not something the reader wrote.
                 if (msg.continuation) return null;

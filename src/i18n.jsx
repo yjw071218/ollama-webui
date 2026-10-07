@@ -1247,7 +1247,7 @@ const en = {
   'data.importNotChats': 'That file is not a chat export.',
   'data.confirmClearAll': 'Delete ALL chat history? This cannot be undone.',
 
-  'msg.thinking': 'Thinking...', 'msg.thought': 'Thought process', 'msg.fetching': 'Fetching content...',
+  'msg.thinking': 'Thinking...', 'chat.showEarlier': 'Show {n} earlier messages', 'msg.thought': 'Thought process', 'msg.fetching': 'Fetching content...',
   'msg.readAloud': 'Read aloud (thinking and code are skipped)', 'msg.stopReading': 'Stop reading',
   'msg.copy': 'Copy message text', 'msg.branch': 'Branch a new chat from here', 'msg.star': 'Star this message',
   'msg.unstar': 'Remove star', 'msg.delete': 'Delete message', 'msg.retry': 'Retry response',
@@ -2959,7 +2959,7 @@ const ko = {
   'data.importNotChats': '대화 내보내기 파일이 아닙니다.',
   'data.confirmClearAll': '모든 대화 기록을 삭제할까요? 되돌릴 수 없습니다.',
 
-  'msg.thinking': '생각하는 중...', 'msg.thought': '사고 과정', 'msg.fetching': '내용을 가져오는 중...',
+  'msg.thinking': '생각하는 중...', 'chat.showEarlier': '이전 메시지 {n}개 보기', 'msg.thought': '사고 과정', 'msg.fetching': '내용을 가져오는 중...',
   'msg.readAloud': '읽어주기 (사고 과정과 코드는 제외)', 'msg.stopReading': '읽기 중지',
   'msg.copy': '메시지 복사', 'msg.branch': '여기서 새 대화 분기', 'msg.star': '별표 추가',
   'msg.unstar': '별표 제거', 'msg.delete': '메시지 삭제', 'msg.retry': '답변 다시 생성',
@@ -4685,7 +4685,7 @@ const ja = {
   'data.importNotChats': '会話のエクスポートファイルではありません。',
   'data.confirmClearAll': 'すべての会話履歴を削除しますか？元に戻せません。',
 
-  'msg.thinking': '考えています...', 'msg.thought': '思考プロセス', 'msg.fetching': 'コンテンツを取得中...',
+  'msg.thinking': '考えています...', 'chat.showEarlier': '以前のメッセージ {n} 件を表示', 'msg.thought': '思考プロセス', 'msg.fetching': 'コンテンツを取得中...',
   'msg.readAloud': '読み上げ（思考とコードは除く）', 'msg.stopReading': '読み上げを停止',
   'msg.copy': 'メッセージをコピー', 'msg.branch': 'ここから新しいチャットに分岐', 'msg.star': 'スターを付ける',
   'msg.unstar': 'スターを外す', 'msg.delete': 'メッセージを削除', 'msg.retry': '回答を再生成',
@@ -6398,7 +6398,7 @@ const zhHans = {
   'data.importNotChats': '这不是对话导出文件。',
   'data.confirmClearAll': '删除所有对话记录？此操作无法撤销。',
 
-  'msg.thinking': '思考中...', 'msg.thought': '思考过程', 'msg.fetching': '正在获取内容...',
+  'msg.thinking': '思考中...', 'chat.showEarlier': '显示之前的 {n} 条消息', 'msg.thought': '思考过程', 'msg.fetching': '正在获取内容...',
   'msg.readAloud': '朗读（跳过思考过程和代码）', 'msg.stopReading': '停止朗读',
   'msg.copy': '复制消息', 'msg.branch': '从这里分支出新对话', 'msg.star': '加星标',
   'msg.unstar': '取消星标', 'msg.delete': '删除消息', 'msg.retry': '重新生成回答',
@@ -8111,7 +8111,7 @@ const zhHant = {
   'data.importNotChats': '這不是對話匯出檔案。',
   'data.confirmClearAll': '刪除所有對話紀錄？此操作無法復原。',
 
-  'msg.thinking': '思考中...', 'msg.thought': '思考過程', 'msg.fetching': '正在取得內容...',
+  'msg.thinking': '思考中...', 'chat.showEarlier': '顯示之前的 {n} 則訊息', 'msg.thought': '思考過程', 'msg.fetching': '正在取得內容...',
   'msg.readAloud': '朗讀（略過思考過程與程式碼）', 'msg.stopReading': '停止朗讀',
   'msg.copy': '複製訊息', 'msg.branch': '從這裡分支出新對話', 'msg.star': '加星號',
   'msg.unstar': '取消星號', 'msg.delete': '刪除訊息', 'msg.retry': '重新產生回答',
@@ -9824,7 +9824,7 @@ const es = {
   'data.importNotChats': 'Ese archivo no es una exportación de chats.',
   'data.confirmClearAll': '¿Borrar TODO el historial de chats? No se puede deshacer.',
 
-  'msg.thinking': 'Pensando...', 'msg.thought': 'Proceso de razonamiento', 'msg.fetching': 'Obteniendo contenido...',
+  'msg.thinking': 'Pensando...', 'chat.showEarlier': 'Mostrar {n} mensajes anteriores', 'msg.thought': 'Proceso de razonamiento', 'msg.fetching': 'Obteniendo contenido...',
   'msg.readAloud': 'Leer en voz alta (sin razonamiento ni código)', 'msg.stopReading': 'Detener la lectura',
   'msg.copy': 'Copiar el mensaje', 'msg.branch': 'Ramificar un chat desde aquí', 'msg.star': 'Destacar el mensaje',
   'msg.unstar': 'Quitar de destacados', 'msg.delete': 'Eliminar el mensaje', 'msg.retry': 'Regenerar la respuesta',
@@ -11537,7 +11537,7 @@ const fr = {
   'data.importNotChats': 'Ce fichier n’est pas un export de conversations.',
   'data.confirmClearAll': 'Supprimer TOUT l’historique des conversations ? Action irréversible.',
 
-  'msg.thinking': 'Réflexion...', 'msg.thought': 'Raisonnement', 'msg.fetching': 'Récupération du contenu...',
+  'msg.thinking': 'Réflexion...', 'chat.showEarlier': 'Afficher {n} messages précédents', 'msg.thought': 'Raisonnement', 'msg.fetching': 'Récupération du contenu...',
   'msg.readAloud': 'Lire à voix haute (sans le raisonnement ni le code)', 'msg.stopReading': 'Arrêter la lecture',
   'msg.copy': 'Copier le message', 'msg.branch': 'Créer une branche à partir d’ici', 'msg.star': 'Marquer ce message',
   'msg.unstar': 'Retirer le marquage', 'msg.delete': 'Supprimer le message', 'msg.retry': 'Regénérer la réponse',
@@ -13250,7 +13250,7 @@ const de = {
   'data.importNotChats': 'Diese Datei ist kein Chat-Export.',
   'data.confirmClearAll': 'GESAMTEN Chatverlauf löschen? Das kann nicht rückgängig gemacht werden.',
 
-  'msg.thinking': 'Denkt nach...', 'msg.thought': 'Gedankengang', 'msg.fetching': 'Inhalt wird geladen...',
+  'msg.thinking': 'Denkt nach...', 'chat.showEarlier': '{n} frühere Nachrichten anzeigen', 'msg.thought': 'Gedankengang', 'msg.fetching': 'Inhalt wird geladen...',
   'msg.readAloud': 'Vorlesen (ohne Gedankengang und Code)', 'msg.stopReading': 'Vorlesen beenden',
   'msg.copy': 'Nachricht kopieren', 'msg.branch': 'Von hier aus neuen Chat abzweigen', 'msg.star': 'Nachricht markieren',
   'msg.unstar': 'Markierung entfernen', 'msg.delete': 'Nachricht löschen', 'msg.retry': 'Antwort neu erzeugen',
@@ -14963,7 +14963,7 @@ const pt = {
   'data.importNotChats': 'Este arquivo não é uma exportação de conversas.',
   'data.confirmClearAll': 'Apagar TODO o histórico de conversas? Não é possível desfazer.',
 
-  'msg.thinking': 'Pensando...', 'msg.thought': 'Raciocínio', 'msg.fetching': 'Buscando conteúdo...',
+  'msg.thinking': 'Pensando...', 'chat.showEarlier': 'Mostrar {n} mensagens anteriores', 'msg.thought': 'Raciocínio', 'msg.fetching': 'Buscando conteúdo...',
   'msg.readAloud': 'Ler em voz alta (sem raciocínio nem código)', 'msg.stopReading': 'Parar a leitura',
   'msg.copy': 'Copiar a mensagem', 'msg.branch': 'Ramificar uma conversa a partir daqui', 'msg.star': 'Favoritar a mensagem',
   'msg.unstar': 'Remover dos favoritos', 'msg.delete': 'Excluir a mensagem', 'msg.retry': 'Gerar a resposta de novo',
@@ -16676,7 +16676,7 @@ const ru = {
   'data.importNotChats': 'Этот файл не является экспортом чатов.',
   'data.confirmClearAll': 'Удалить ВСЮ историю чатов? Это нельзя отменить.',
 
-  'msg.thinking': 'Думает...', 'msg.thought': 'Ход рассуждений', 'msg.fetching': 'Загрузка содержимого...',
+  'msg.thinking': 'Думает...', 'chat.showEarlier': 'Показать {n} предыдущих сообщений', 'msg.thought': 'Ход рассуждений', 'msg.fetching': 'Загрузка содержимого...',
   'msg.readAloud': 'Прочитать вслух (без рассуждений и кода)', 'msg.stopReading': 'Остановить чтение',
   'msg.copy': 'Копировать сообщение', 'msg.branch': 'Создать новый чат отсюда', 'msg.star': 'В избранное',
   'msg.unstar': 'Убрать из избранного', 'msg.delete': 'Удалить сообщение', 'msg.retry': 'Сгенерировать ответ заново',
@@ -18389,7 +18389,7 @@ const vi = {
   'data.importNotChats': 'Tệp này không phải bản xuất cuộc trò chuyện.',
   'data.confirmClearAll': 'Xóa TOÀN BỘ lịch sử trò chuyện? Không thể hoàn tác.',
 
-  'msg.thinking': 'Đang suy nghĩ...', 'msg.thought': 'Quá trình suy luận', 'msg.fetching': 'Đang tải nội dung...',
+  'msg.thinking': 'Đang suy nghĩ...', 'chat.showEarlier': 'Hiện {n} tin nhắn trước đó', 'msg.thought': 'Quá trình suy luận', 'msg.fetching': 'Đang tải nội dung...',
   'msg.readAloud': 'Đọc to (bỏ qua suy luận và mã)', 'msg.stopReading': 'Dừng đọc',
   'msg.copy': 'Sao chép tin nhắn', 'msg.branch': 'Tách nhánh từ đây', 'msg.star': 'Gắn sao tin nhắn',
   'msg.unstar': 'Bỏ gắn sao', 'msg.delete': 'Xóa tin nhắn', 'msg.retry': 'Tạo lại câu trả lời',
@@ -20102,7 +20102,7 @@ const ar = {
   'data.importNotChats': 'هذا الملف ليس تصديراً للمحادثات.',
   'data.confirmClearAll': 'حذف كل سجل المحادثات؟ لا يمكن التراجع.',
 
-  'msg.thinking': 'يفكر...', 'msg.thought': 'مسار التفكير', 'msg.fetching': 'جارٍ جلب المحتوى...',
+  'msg.thinking': 'يفكر...', 'chat.showEarlier': 'عرض {n} من الرسائل السابقة', 'msg.thought': 'مسار التفكير', 'msg.fetching': 'جارٍ جلب المحتوى...',
   'msg.readAloud': 'قراءة بصوت عالٍ (بدون التفكير والشيفرة)', 'msg.stopReading': 'إيقاف القراءة',
   'msg.copy': 'نسخ الرسالة', 'msg.branch': 'تفريع محادثة جديدة من هنا', 'msg.star': 'تمييز الرسالة',
   'msg.unstar': 'إزالة التمييز', 'msg.delete': 'حذف الرسالة', 'msg.retry': 'إعادة توليد الرد',

@@ -1,5 +1,6 @@
 import fs from 'node:fs';
 import os from 'node:os';
+import crypto from 'node:crypto';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -663,6 +664,70 @@ export const agyAgentFile = ({ name, vision, servers = null }) => {
 
 const agyAgentsDir = (env) => env.AGY_AGENTS_DIR || path.join(HOME, '.gemini', 'config', 'agents');
 
+/* ---------------------------------------- agy's message size, and past it
+
+   Measured on agy's own transcripts: a message is cut at 192,000 bytes,
+   with "<truncated N bytes>" where the rest was, however it is split into
+   content blocks. Its agent system prompt took 370 KB whole. */
+const AGY_MESSAGE_BYTES = 150000;  // what goes in the message, with room to spare
+const AGY_TAIL_BYTES = 100000;     // how much of the end stays in the message
+const LONG_AGENT_PREFIX = 'ollama-webui-long-';
+
+/** A long message as the head (for the agent) and what is still sent; null when it fits. */
+export const splitAgyInput = (text, env = {}) => {
+  const limit = Number(env.CLI_AGY_MESSAGE_BYTES) > 0 ? Number(env.CLI_AGY_MESSAGE_BYTES) : AGY_MESSAGE_BYTES;
+  const bytes = Buffer.from(String(text), 'utf8');
+  if (bytes.length <= limit) return null;
+  const tailBytes = Math.min(AGY_TAIL_BYTES, Math.floor(limit * 0.66));
+  // At a line, so no word (or UTF-8 character) is cut in two.
+  let at = bytes.length - tailBytes;
+  const newline = bytes.indexOf(0x0a, at);
+  at = newline > 0 && newline < bytes.length - 1 ? newline + 1 : at;
+  while (at < bytes.length && (bytes[at] & 0xc0) === 0x80) at++;
+  const head = bytes.subarray(0, at).toString('utf8');
+  const rest = bytes.subarray(at).toString('utf8');
+  return {
+    head,
+    message: `<message_part_2>\n${rest}\n</message_part_2>`,
+  };
+};
+
+/** This run's agent: the usual one, with the head of the message in its system prompt. */
+export const agyLongAgentFile = ({ name, vision, servers = null, head }) => [
+  agyAgentFile({ name, vision, servers }).trimEnd(),
+  '',
+  "# The user's message, first part",
+  '',
+  "The user's message is too long to arrive in one piece. Its first part is below, between <message_part_1> tags. The message you receive, between <message_part_2> tags, is the rest of it and continues exactly where part 1 stops. Read the two parts as one single message from the user and answer it as a whole; the instructions at the start of part 1 apply in full.",
+  '',
+  '<message_part_1>',
+  head,
+  '</message_part_1>',
+  '',
+].join('\n');
+
+export const writeAgyLongAgent = (env = {}, { base, vision, servers, head }) => {
+  const root = agyAgentsDir(env);
+  // Left over by a server that stopped mid-answer.
+  try {
+    for (const entry of fs.readdirSync(root)) {
+      if (!entry.startsWith(LONG_AGENT_PREFIX)) continue;
+      const dir = path.join(root, entry);
+      if (Date.now() - fs.statSync(dir).mtimeMs > 6 * 3600 * 1000) fs.rmSync(dir, { recursive: true, force: true });
+    }
+  } catch { /* nothing to tidy */ }
+  const name = `${LONG_AGENT_PREFIX}${crypto.randomBytes(6).toString('hex')}`;
+  const dir = path.join(root, name);
+  try {
+    fs.mkdirSync(dir, { recursive: true });
+    fs.writeFileSync(path.join(dir, 'agent.md'), agyLongAgentFile({ name, vision, servers, head }), { encoding: 'utf8', mode: 0o600 });
+    return { name, dir, base };
+  } catch {
+    try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ }
+    return null;
+  }
+};
+
 /** The agent to run this answer as, written if missing or changed; '' to run agy as itself. */
 /* Set when this agy could not find the agent (an older build, or one that
    reads agents from elsewhere): it runs as itself from then on. */
@@ -861,15 +926,35 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
         `Apart from viewing these images: ${ownTools} Do not mention the file paths to the user; to them these are simply the images they sent.\n`,
       ].join('\n')
       : `Answer directly in text. ${ownTools}\n`;
-    const text = [
+    let text = [
       // A resumed conversation has had them: the history it was found by
       // includes every instruction in it.
       system && !resume ? `<instructions>\n${system}\n</instructions>\n` : '',
       rules,
       prompt,
     ].join('\n').trim();
+    /* agy keeps only the first 192,000 bytes of a message and drops the rest
+       without a word -- the END of it, which is the newest message and the
+       instructions placed after the history. A roleplay with a long preset
+       and first message passed that by its second turn, and the model, never
+       shown what was just said, wrote its first answer again. An agent's
+       system prompt has no such limit, so the head of a long message goes
+       there, in an agent made for this one run, and the message carries the
+       rest. See splitAgyInput. */
+    const split = agent ? splitAgyInput(text, env) : null;
+    let extra = {};
+    if (split) {
+      const long = writeAgyLongAgent(env, { base: agent, vision: images.length > 0, servers: hasServers ? servers : null, head: split.head });
+      if (long) {
+        args[args.indexOf(agent)] = long.name;
+        text = split.message;
+        // Its first part lives only in this run's agent: a later turn could
+        // not resume this conversation and still see it.
+        extra = { cleanupDirs: [long.dir], unresumable: true };
+      }
+    }
     const stdin = `${JSON.stringify({ event: 'user', message: { content: [{ type: 'text', text }] } })}\n`;
-    return { args, stdin, extraEnv: hasServers ? agyServerEnv(servers) : {}, ...(pictures.length ? { cwd: files } : {}) };
+    return { args, stdin, extraEnv: hasServers ? agyServerEnv(servers) : {}, ...(pictures.length ? { cwd: files } : {}), ...extra };
   }
 
   throw new Error(`Unknown CLI ${provider.id}`);
@@ -2258,13 +2343,15 @@ const runCliOnce = ({
   /* Retried: on Windows taskkill is asynchronous and the CLI can still hold
      the folder (agy runs in it when there are pictures). Once only. */
   let cleaned = false;
+  let invocation;
   const cleanup = () => {
     if (cleaned) return;
     cleaned = true;
     fs.rm(files, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }, () => {});
+    // An agent made for this run only (agy's long messages, splitAgyInput).
+    for (const dir of invocation?.cleanupDirs || []) fs.rm(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 300 }, () => {});
   };
 
-  let invocation;
   try { invocation = buildInvocation(provider, model, request, { think, files, tools, env, resume, persist, project }); } catch (e) { cleanup(); reject(e); return; }
   /* Asked in the browser, said in the thinking so a pause has a reason.
      Nobody to ask means no. */
@@ -2310,6 +2397,11 @@ const runCliOnce = ({
     killTree(child);
     if (exited) cleanup();
     else setTimeout(cleanup, 15000).unref?.();
+    // Part of what it was told lived in a one-run agent: not a session to pick up.
+    if (invocation.unresumable) {
+      if (value) value.sessionId = '';
+      if (error) error.sessionId = '';
+    }
     if (error) reject(error); else resolve(value);
   };
   const onAbort = () => settle(new Error('Generation cancelled'));

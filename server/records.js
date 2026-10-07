@@ -25,6 +25,7 @@
 
 import { database, transaction } from './db.js';
 import { packPayload } from './recordHistory.js';
+import { mergeChats } from './chatMerge.js';
 
 /** The kinds a client may sync. Anything else is refused rather than stored. */
 export const KINDS = new Set([
@@ -161,7 +162,9 @@ const validate = (record) => {
   if (payload && Buffer.byteLength(payload) > MAX_RECORD_BYTES) {
     throw new Error(`One record is larger than the ${Math.round(MAX_RECORD_BYTES / 1024 / 1024)} MB limit.`);
   }
-  return { kind: record.kind, id: String(record.id), updatedAt: record.updatedAt, deleted: !!record.deleted, payload };
+  // The stamp of the copy this edit was made on, when the device says (see server/chatMerge.js).
+  const base = Number.isFinite(record.base) && record.base >= 0 ? record.base : null;
+  return { kind: record.kind, id: String(record.id), updatedAt: record.updatedAt, deleted: !!record.deleted, payload, base };
 };
 
 /**
@@ -242,8 +245,26 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
       // counter a real cursor.
       let rev = handle.prepare('SELECT rev FROM users WHERE id = ?').get(userId)?.rev ?? 0;
 
-      for (const record of clean) {
+      for (let record of clean) {
         const current = existing.get(userId, record.kind, record.id);
+
+        /* Two devices, one chat: this edit was made on a copy older than the
+           one the account now holds -- another device wrote in between. The
+           later write winning whole is how an answer finished on one device
+           disappeared when the other, not yet in step, touched the same chat.
+           Merged instead (server/chatMerge.js); the result goes back to the
+           device that sent this, like any record that lost. */
+        if (record.kind === 'chat' && !record.deleted && record.base !== null && current && !current.deleted
+            && current.updated_at > record.base && current.updated_at !== record.updatedAt) {
+          let merged = null;
+          try { merged = mergeChats(JSON.parse(current.payload), JSON.parse(record.payload)); } catch { merged = undefined; }
+          if (merged === null) { rejected++; lost.push(record); continue; }
+          if (merged !== undefined) {
+            const updatedAt = Math.max(current.updated_at, record.updatedAt) + 1;
+            record = { ...record, updatedAt, payload: JSON.stringify({ ...merged, updatedAt }) };
+            lost.push(record);
+          }
+        }
 
         // Last write wins, by the record's own clock. An older edit arriving
         // late — a phone that was offline, a tab that was asleep — must not

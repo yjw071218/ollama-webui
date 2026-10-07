@@ -228,6 +228,32 @@ try {
   fs.rmSync(scratch, { recursive: true, force: true });
 }
 
+/* ----------------------------------------------- agy and a long message
+
+   agy keeps the first 192,000 bytes of a message and silently drops the rest:
+   the end, which is the newest message and the instructions after the history.
+   A roleplay with a long preset and first message lost what had just been said
+   by its second turn and wrote its first answer again. Past the limit the head
+   goes into a one-run agent's system prompt (which has no such limit). */
+{
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'climodels-agylong-'));
+  const filler = (tag) => Array.from({ length: 2500 }, (_, i) => `${tag} 문단 ${i}: 길이를 채우는 한국어 문장입니다.`).join('\n');
+  const request = { system: '너는 이야기꾼이다.', prompt: `${filler('가')}\n${filler('나')}\n[마지막 입력] 초록고래77`, images: [] };
+  const short = sandboxed(C.PROVIDERS.agy, 'gemini-3.1-pro-high', { system: 'x', prompt: 'hi', images: [] }, { files: scratch, env: AGY_ENV });
+  check('a short message is sent as it is, with no extra agent', !short.cleanupDirs && !JSON.parse(short.stdin).message.content[0].text.includes('message_part'));
+  const long = sandboxed(C.PROVIDERS.agy, 'gemini-3.1-pro-high', request, { files: scratch, env: AGY_ENV });
+  const sent = JSON.parse(long.stdin).message.content[0].text;
+  check('a long message is cut down below agy\'s limit', Buffer.byteLength(sent) < 160000, String(Buffer.byteLength(sent)));
+  check('  keeping its end -- the newest input -- in the message', sent.includes('[마지막 입력] 초록고래77'));
+  const name = long.args[long.args.indexOf('--agent') + 1];
+  check('  and run as an agent made for this run', name.startsWith('ollama-webui-long-') && long.cleanupDirs?.length === 1);
+  const agentText = fs.readFileSync(path.join(long.cleanupDirs[0], 'agent.md'), 'utf8');
+  check('  whose system prompt holds the start, instructions included', agentText.includes('<message_part_1>') && agentText.includes('너는 이야기꾼이다.') && agentText.includes('가 문단 0:'));
+  check('  and nothing is lost between the two parts', (agentText + sent).includes('나 문단 2499:') && (agentText.match(/나 문단 1200:/g) || []).length + (sent.match(/나 문단 1200:/g) || []).length === 1);
+  check('  which cannot be resumed later', long.unresumable === true);
+  fs.rmSync(scratch, { recursive: true, force: true });
+}
+
 /* ------------------------------------------------------------- reading back */
 
 {

@@ -1,7 +1,7 @@
 import { getDatabase, importPreset } from './ts/storage/database.svelte';
 import { importCharacterProcess } from './ts/characterCards';
 import { readModule } from './ts/process/modules';
-import { DBState, settingsOpen, SettingsMenuIndex, sideBarStore, sideBarClosing } from './ts/stores.svelte';
+import { DBState, settingsOpen, SettingsMenuIndex, sideBarStore, sideBarClosing, ReloadGUIPointer } from './ts/stores.svelte';
 import { get } from 'svelte/store';
 import { checkCharOrder } from './ts/globalApi.svelte';
 import { alertStore } from './ts/alert';
@@ -32,6 +32,16 @@ export async function initializeWebUI() {
     if (event.data.session) (window as any).__WEBUI_SESSION__ = event.data.session;
     if (action === 'session') {
       sync ||= startWebUISync(() => busy);
+      send({ thinkingState: true, hidden: !!(getDatabase() as any).webuiHideThinking });
+      return;
+    }
+    /* The toolbar's 사고과정 switch: thought blocks shown or left out of every
+       message on screen (the saved messages keep them). */
+    if (action === 'thinking') {
+      const db = getDatabase() as any;
+      if (typeof event.data.hidden === 'boolean') db.webuiHideThinking = event.data.hidden;
+      ReloadGUIPointer.update(v => v + 1);
+      send({ thinkingState: true, hidden: !!db.webuiHideThinking });
       return;
     }
     if (action === 'sync') { sync?.run(); return; }

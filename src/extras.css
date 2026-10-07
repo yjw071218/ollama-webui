@@ -10012,3 +10012,12 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
   background: transparent; color: inherit; font: inherit; cursor: pointer;
 }
 .connection-banner button:disabled { opacity: .6; cursor: default; }
+
+/* The top of a long chat's shown part (HistorySentinel in App.jsx). */
+.history-earlier { display: flex; justify-content: center; padding: 0.25rem 0 0.5rem; }
+.history-earlier button {
+  border: 1px solid var(--border-color); background: transparent; color: var(--text-secondary);
+  border-radius: 999px; padding: 0.45rem 1rem; font: inherit; font-size: 0.85rem; cursor: pointer;
+}
+.history-earlier button:hover { color: var(--text-primary); background: var(--hover-bg); }
+@media print { .history-earlier { display: none; } }

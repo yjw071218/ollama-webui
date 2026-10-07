@@ -14,7 +14,9 @@ import { createAssetIndex } from './webui-sync-asset-index.js';
 const fields = ['characters', 'botPresets', 'modules'] as const;
 const empty = () => ({ characters: [], botPresets: [], modules: [], assets: {} });
 const fingerprint = data => JSON.stringify(data);
-const announce = (state, message) => window.parent.postMessage({ channel: 'webui-risu', syncState: state, syncMessage: message }, location.origin);
+/* `progress` ({ done, total }) lets the host draw a bar; the first sync after
+   opening keeps RisuAI covered until it is done (src/RisuPanel.jsx). */
+const announce = (state, message, progress = null) => window.parent.postMessage({ channel: 'webui-risu', syncState: state, syncMessage: message, ...(progress ? { syncProgress: progress } : {}) }, location.origin);
 const hex = (digest: Uint8Array) => Array.from(digest, x => x.toString(16).padStart(2, '0')).join('');
 /* The browser's own SHA-256 where there is one (native, off the main thread's
    JS) -- the same digest the pure-JS one gives, many times faster on big
@@ -48,11 +50,12 @@ export function startWebUISync(isImporting: () => boolean) {
     return (done: number, total: number) => {
       if (done === total || Date.now() - last > 250) {
         last = Date.now();
-        announce('syncing', `${label} ${done.toLocaleString()}/${total.toLocaleString()}`);
+        announce('syncing', `${label} ${done.toLocaleString()}/${total.toLocaleString()}`, { done, total });
       }
     };
   };
-  const synced = () => announce('synced', `동기화됨 · 캐릭터 ${DBState.db.characters.length}개`);
+  let everSynced = false;
+  const synced = () => { everSynced = true; announce('synced', `동기화됨 · 캐릭터 ${DBState.db.characters.length}개`); };
   const snapshot = () => {
     const db = getDatabase({ snapshot: true });
     return { ...Object.fromEntries(fields.map(field => [field, db[field] || []])), settings: syncSettings(db) };
@@ -126,10 +129,13 @@ export function startWebUISync(isImporting: () => boolean) {
         const bytes = await forageStorage.getItem('webui-sync/base');
         base = bytes ? JSON.parse(new TextDecoder().decode(bytes)) : null;
       }
+      // The first sync is waited for with RisuAI covered: say each step.
+      if (!everSynced) announce('syncing', '서버에서 동기화 정보를 받는 중…');
       const local = snapshot();
       const before = fingerprint(local);
       const response = await (await request(remoteCache ? '?delta=1&revision=' + remoteCache.revision : '')).json();
       if (response.delta && response.fromRevision !== remoteCache?.revision) throw new Error('동기화 기준 버전이 일치하지 않습니다.');
+      if (!everSynced) announce('syncing', '이 기기의 데이터와 비교하는 중…');
       const remote = response.unchanged ? remoteCache : response.delta ? { revision: response.revision, data: applyDelta(remoteCache.data, response.delta) } : response;
       remoteCache = remote;
       const assets = await assetsIndex.read(progress('최초 에셋 확인'));

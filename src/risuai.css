@@ -77,3 +77,11 @@
   .risu-sync { order: 2; flex-basis: 100%; margin: 0 2px; font-size: 11px; }
   .risu-status { padding: 6px 12px; }
 }
+/* The first sync, waited for over the frame (RisuPanel waitingForSync). */
+.risu-sync-cover { z-index: 3; }
+.risu-sync-cover strong { color: var(--text-primary); font-size: 15px; font-weight: 600; }
+.risu-sync-bar { width: min(320px, 80%); height: 6px; border-radius: 999px; background: var(--bg-tertiary, rgba(127,127,127,.2)); overflow: hidden; }
+.risu-sync-bar i { display: block; height: 100%; border-radius: inherit; background: var(--accent, #d97757); transition: width .25s ease; }
+.risu-sync-cover small { color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.risu-sync-cover button { margin-top: 6px; border: 1px solid var(--border-color, rgba(127,127,127,.35)); background: transparent; color: var(--text-primary); border-radius: 8px; padding: 7px 14px; font: inherit; cursor: pointer; }
+.risu-thinking.is-on { color: var(--accent, #d97757); }

@@ -65,7 +65,7 @@ export default context => {
           ` + code.slice(end);
         }
         if (file.endsWith('/ts/storage/database.svelte.ts')) {
-          code = replaceOnce(code, 'useStreaming:boolean', 'webuiFastGeneration?:boolean\n    useStreaming:boolean', file);
+          code = replaceOnce(code, 'useStreaming:boolean', 'webuiFastGeneration?:boolean\n    webuiHideThinking?:boolean\n    useStreaming:boolean', file);
           code = "import { pinLocalModel } from '../../webui-local-model.js';\n" + code;
           code = replaceOnce(code, '    return db\n}', '    return pinLocalModel(db)\n}', file);
         }
@@ -145,6 +145,16 @@ export async function getFileSrc(loc: string) {
           code = replaceOnce(code,
             "data = (await processScriptFull(char, data, 'editdisplay', chatID, cbsConditions)).data",
             "data = (await processScriptFull(char, data, 'editdisplay', chatID, cbsConditions)).data\n        if (/\\{\\{#(?:if|when)\\b/.test(data)) {\n            data = risuChatParser(data, { chara: char, chatID, rmVar: true, visualize: true, cbsConditions });\n        }", file);
+          // The host toolbar's 사고과정 switch (webuiHideThinking): thought
+          // blocks are left out of the display, not out of the saved message,
+          // so turning it back on shows them again. An unclosed one -- still
+          // streaming -- is hidden to its end.
+          code = replaceOnce(code,
+            "                result += `<details><summary>${language.cot}</summary>${data.substring(i + 10, j - 1)}</details>`\n",
+            "                if (!DBState.db.webuiHideThinking) result += `<details><summary>${language.cot}</summary>${data.substring(i + 10, j - 1)}</details>`\n", file);
+          code = replaceOnce(code,
+            "                i = j + 10\n                continue\n            }\n",
+            "                i = j + 10\n                continue\n            }\n            if (DBState.db.webuiHideThinking) break\n", file);
           // The blob has the actual type. A hard-coded MP4/MP3 <source> type
           // prevents the browser from trying WAV, Ogg and WebM assets.
           code = code.replaceAll(' type="video/mp4"', '').replaceAll(' type="audio/mpeg"', '');

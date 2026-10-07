@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState } from 'react';
-import { Upload, Cpu, RefreshCcw, HelpCircle, SlidersHorizontal, PanelLeft } from 'lucide-react';
+import { Upload, Cpu, RefreshCcw, HelpCircle, SlidersHorizontal, PanelLeft, Brain } from 'lucide-react';
 import './risuai.css';
 import embedCss from './risuEmbed.css?raw';
 import { currentTabSession, currentCsrfToken } from './session.jsx';
 
 const sessionInfo = () => ({ id: currentTabSession(), csrf: currentCsrfToken() });
+/* RisuAI's own terms screen comes up inside the frame on first use, before it
+   says `ready`; covering the frame then would wait forever. Its answer is kept
+   in the frame's (account-scoped) localStorage, which this page shares. */
+const termsAccepted = (scope) => {
+  try { return localStorage.getItem(`webui-risu:${encodeURIComponent(scope || 'guest')}:tos4`) === 'true'; } catch { return false; }
+};
+// The states after which there is nothing more to wait for.
+const SETTLED = new Set(['synced', 'guest', 'error']);
 
 export function RisuPanel({ scope, model, picked, onPick }) {
   const frame = useRef(null);
@@ -27,6 +35,15 @@ export function RisuPanel({ scope, model, picked, onPick }) {
      first model report is proof enough that `connect` will be heard. */
   const [bridge, setBridge] = useState(false);
   const [sync, setSync] = useState({ state: 'waiting', message: '동기화 연결 대기 중' });
+  /* RisuAI stays covered until the first sync has finished, so what shows is
+     what is on the server -- not this device's older copy, replaced a moment
+     later. `firstSync` ends on the first settled state; `skipSync` is the
+     reader not wanting to wait. */
+  const [firstSync, setFirstSync] = useState(false);
+  const [skipSync, setSkipSync] = useState(false);
+  const [syncProgress, setSyncProgress] = useState(null);
+  const [canSkip, setCanSkip] = useState(false);
+  const [thinkingHidden, setThinkingHidden] = useState(null);
   // Changing the chat's model must not reload a live roleplay conversation.
   const [initialModel] = useState(model || '');
   const lastPick = useRef(picked);
@@ -47,7 +64,13 @@ export function RisuPanel({ scope, model, picked, onPick }) {
     const requests = pending.current;
     const receive = event => {
       if (event.origin !== location.origin || event.source !== frame.current?.contentWindow || event.data?.channel !== 'webui-risu') return;
-      if (event.data.syncState) { setSync({ state: event.data.syncState, message: event.data.syncMessage }); return; }
+      if (event.data.syncState) {
+        setSync({ state: event.data.syncState, message: event.data.syncMessage });
+        setSyncProgress(event.data.syncProgress || null);
+        if (SETTLED.has(event.data.syncState)) setFirstSync(true);
+        return;
+      }
+      if (event.data.thinkingState) { setThinkingHidden(!!event.data.hidden); return; }
       if (event.data.modelState) {
         setBridge(true);
         setLocalModel(event.data.model || '');
@@ -84,6 +107,14 @@ export function RisuPanel({ scope, model, picked, onPick }) {
     lastPick.current = picked;
     frame.current?.contentWindow.postMessage({ channel: 'webui-risu', action: 'connect', model: picked.name, session: sessionInfo() }, location.origin);
   }, [picked, bridge]);
+  /* "기다리지 않고 열기" after a few seconds, for a sync that is slow (a big
+     asset library on mobile data) or stuck. */
+  const waitingForSync = installed && !skipSync && !firstSync && (ready || termsAccepted(scope));
+  useEffect(() => {
+    if (!waitingForSync) { setCanSkip(false); return undefined; }
+    const timer = setTimeout(() => setCanSkip(true), 5000);
+    return () => clearTimeout(timer);
+  }, [waitingForSync, reload]);
   const request = payload => new Promise(resolve => {
     const id = crypto.randomUUID();
     pending.current.set(id, resolve);
@@ -135,8 +166,12 @@ export function RisuPanel({ scope, model, picked, onPick }) {
       <button className="risu-import" type="button" disabled={!ready || busy} onClick={() => input.current.click()}><Upload size={15} /> 파일 가져오기</button>
       <button type="button" disabled={!ready || busy} title="캐릭터 패널 열기/닫기" aria-label="캐릭터 패널" onClick={() => frame.current?.contentWindow.postMessage({ channel: 'webui-risu', action: 'characters' }, location.origin)}><PanelLeft size={15} /> 캐릭터</button>
       <input ref={input} hidden type="file" multiple accept=".charx,.png,.jpg,.jpeg,.json,.risup,.risupreset,.preset,.risum" onChange={event => importFiles([...event.target.files])} />
+      <button type="button" className={`risu-thinking${thinkingHidden === false ? ' is-on' : ''}`} disabled={!ready || thinkingHidden === null}
+        aria-pressed={thinkingHidden === false} title={thinkingHidden ? '사고과정 보이기' : '사고과정 숨기기'}
+        onClick={() => frame.current?.contentWindow.postMessage({ channel: 'webui-risu', action: 'thinking', hidden: !thinkingHidden }, location.origin)}>
+        <Brain size={15} /> 사고과정 {thinkingHidden ? '끔' : '켬'}</button>
       <button type="button" disabled={!ready || busy} title="설정 · 프리셋" aria-label="설정 · 프리셋" onClick={async () => report(await request({ action: 'settings' }))}><SlidersHorizontal size={15} /> 설정 · 프리셋</button>
-      <button className="risu-icon-button" type="button" disabled={busy} title="다시 불러오기" aria-label="RisuAI 다시 불러오기" onClick={() => { setReady(false); setBridge(false); setLoaded(false); setStatus('RisuAI를 불러오는 중입니다…'); setReload(value => value + 1); }}><RefreshCcw size={15} /></button>
+      <button className="risu-icon-button" type="button" disabled={busy} title="다시 불러오기" aria-label="RisuAI 다시 불러오기" onClick={() => { setReady(false); setBridge(false); setLoaded(false); setFirstSync(false); setSkipSync(false); setSyncProgress(null); setStatus('RisuAI를 불러오는 중입니다…'); setReload(value => value + 1); }}><RefreshCcw size={15} /></button>
       <details><summary aria-label="사용 안내"><HelpCircle size={17} /></summary><div className="risu-help"><p>CHARX·PNG·JSON 캐릭터 카드, RISUP·RISUPRESET 프리셋, RISUM 모듈을 가져올 수 있습니다. 프리셋은 가져온 뒤 설정에서 선택하세요.</p><p>Ollama에 설치된 로컬 대화 모델을 자동으로 연결합니다. WebUI에서 선택한 모델이 로컬에 있으면 우선 사용하며, 프리셋을 바꿔도 로컬 연결을 유지합니다.</p><p>같은 WebUI 서버와 계정으로 로그인하면 캐릭터·에셋·대화를 기기 간 동기화합니다. 먼저 PC에서 동기화됨을 확인한 뒤 모바일에서 열어 주세요. 게스트 데이터는 이 기기에만 저장됩니다.</p><p><a href="https://github.com/kwaroran/Risuai" target="_blank" rel="noreferrer">RisuAI 원본</a> · <a href="/risuai/LICENSE.txt" target="_blank" rel="noreferrer">라이선스</a></p></div></details>
     </div>
     {(modelError || (status && (loaded || installed === false))) && <p className={`risu-status${error || modelError ? ' is-error' : ''}`} role="status">{modelError || status}</p>}
@@ -148,6 +183,16 @@ export function RisuPanel({ scope, model, picked, onPick }) {
             lifts on the frame's load, not on `ready`: `ready` waits for the
             terms dialog, and covering that dialog would wait forever. */}
         {!loaded && <div className="risu-loading" role="status"><RefreshCcw className="spin" size={18} /><span>{status || 'RisuAI를 불러오는 중입니다…'}</span></div>}
+        {loaded && waitingForSync && <div className="risu-loading risu-sync-cover" role="status" aria-live="polite">
+          <RefreshCcw className="spin" size={18} />
+          <strong>동기화하는 중입니다</strong>
+          <span>{sync.state === 'waiting' ? '동기화 서버에 연결하는 중…' : sync.message}</span>
+          {syncProgress?.total > 0 && <div className="risu-sync-bar" role="progressbar" aria-valuemin={0} aria-valuemax={syncProgress.total} aria-valuenow={syncProgress.done}>
+            <i style={{ width: `${Math.min(100, Math.round(syncProgress.done / syncProgress.total * 100))}%` }} />
+          </div>}
+          {syncProgress?.total > 0 && <small>{Math.min(100, Math.round(syncProgress.done / syncProgress.total * 100))}%</small>}
+          {canSkip && <button type="button" onClick={() => setSkipSync(true)}>기다리지 않고 열기</button>}
+        </div>}
       </div>}
   </section>;
 }

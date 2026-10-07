@@ -439,6 +439,14 @@ export const CommandsDock = () => {
     return () => { clearInterval(timer); window.removeEventListener('resize', measure); };
   }, [shown]);
 
+  // Escape (and the Android back button, which sends one) closes the panel.
+  useEffect(() => {
+    if (!open) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setOpen(false); };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [open]);
+
   if (!shown) return null;
   return (
     <div ref={dock} className={`commands-dock ${open ? 'is-open' : ''}`} style={lift ? { bottom: `${lift}px`, '--dock-bottom': `${lift}px` } : undefined}>

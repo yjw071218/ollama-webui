@@ -277,9 +277,20 @@ export const spanLabel = (text, limit = 60) => {
  * sentence around it is the artifact panel's job, and offering both for the
  * same message is two buttons that do different things with the same name.
  */
+/* Asked of every answer in the chat on every render, and the answers do not
+   change: remembered by text (see estimateTokens in App.jsx for the measurement). */
+const documentCache = new Map();
 export const looksLikeDocument = (text, { minWords = 120 } = {}) => {
-  const prose = String(text ?? '')
+  const source = String(text ?? '');
+  const key = minWords === 120 ? source : null;
+  if (key !== null && documentCache.has(key)) return documentCache.get(key);
+  const prose = source
     .replace(/<think>[\s\S]*?(?:<\/think>|$)/gi, '')
     .replace(/^[ \t]{0,3}(`{3,}|~{3,})[\s\S]*?^[ \t]{0,3}\1[^\n]*$/gm, '');
-  return prose.trim().split(/\s+/).filter(Boolean).length >= minWords;
+  const answer = prose.trim().split(/\s+/).filter(Boolean).length >= minWords;
+  if (key !== null) {
+    if (documentCache.size > 2000) documentCache.clear();
+    documentCache.set(key, answer);
+  }
+  return answer;
 };
