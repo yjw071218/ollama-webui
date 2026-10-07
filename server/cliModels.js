@@ -538,6 +538,18 @@ export const AGY_AGENTS = {
   chatMcp: 'ollama-webui-chat-mcp', visionMcp: 'ollama-webui-vision-mcp',
   plan: 'ollama-webui-plan', planMcp: 'ollama-webui-plan-mcp',
 };
+/* With full access (fullAccessOf): the same agent with agy's file and command
+   tools. A chat agent with `tools: []` was told in the message that it could
+   write to the PC and found nothing to write with, so it answered "I have no
+   permission to modify your files" and pasted the file into the chat instead.
+   Named apart so that a server switching between the two never runs one with
+   the other's file. Names checked against agy: an unknown one ("command_status")
+   stops it before it starts. */
+const AGY_FULL_SUFFIX = '-full';
+export const AGY_FULL_TOOLS = [
+  'view_file', 'list_dir', 'grep_search', 'find_by_name',
+  'write_to_file', 'replace_file_content', 'multi_replace_file_content', 'run_command',
+];
 
 /* The servers in agy's own spelling (`serverUrl`, `enabledTools`), as a YAML
    flow mapping -- which JSON is, so no value needs YAML's quoting rules. A
@@ -627,19 +639,22 @@ export const ensureAgyPlanAgent = (env = {}, { servers = null } = {}) => {
   return name;
 };
 
-export const agyAgentFile = ({ name, vision, servers = null }) => {
+export const agyAgentFile = ({ name, vision, servers = null, full = false }) => {
   const mcp = servers && Object.keys(servers).length ? agyMcpServers(servers) : null;
   return [
     '---',
     `name: ${name}`,
-    `description: Plain chat answers for Ollama WebUI${vision ? ', able to look at attached images' : ''}. Not for coding work.`,
+    full
+      ? "description: Chat answers for Ollama WebUI, with read and write access to the user's files."
+      : `description: Plain chat answers for Ollama WebUI${vision ? ', able to look at attached images' : ''}. Not for coding work.`,
     'mainAgent: true',
     'subagent: false',
     'hidden: true',
     'excludeDefaultComponents: true',
     'inheritCustomizations: false',
-    'commandExecutionPolicy: off',
-    ...(vision ? ['tools:', '  - view_file'] : ['tools: []']),
+    // Left out with full access: agy's default runs the command, as a project run does.
+    ...(full ? [] : ['commandExecutionPolicy: off']),
+    ...(full ? ['tools:', ...AGY_FULL_TOOLS.map(t => `  - ${t}`)] : vision ? ['tools:', '  - view_file'] : ['tools: []']),
     // Only these servers, never the reader's own agy ones: those are for their
     // coding sessions, as their rules are.
     ...(mcp ? ['inheritMcp: false', `mcpServers: ${JSON.stringify(mcp)}`] : []),
@@ -647,10 +662,14 @@ export const agyAgentFile = ({ name, vision, servers = null }) => {
     '',
     '# System Prompt',
     '',
-    'You are the model answering in a chat app. You are not working in a code repository and have no task beyond the conversation.',
+    full
+      ? "You are the model answering in a chat app, on the user's own PC."
+      : 'You are the model answering in a chat app. You are not working in a code repository and have no task beyond the conversation.',
     'If the user message begins with <instructions>, treat what is inside as your system prompt and follow it: it sets who you are, how you speak and what language you answer in.',
     'Answer directly, in Markdown where it helps.',
-    vision
+    full
+      ? `You have read and write access to the user's files and can run commands, with these tools: ${AGY_FULL_TOOLS.join(', ')}. When the user asks you to create, edit or fix a file, do it with them -- write_to_file for a new file or a full rewrite, replace_file_content / multi_replace_file_content for an edit -- using absolute paths, and then say briefly what you changed. Read a file with view_file before you edit it. Never paste a whole file into the answer instead of writing it, and never say you cannot modify files. Do not run destructive commands (deleting data, formatting) unless explicitly asked.${vision ? ' When the message names image files, open each with view_file.' : ''}`
+      : vision
       ? 'When the message names image files, open each with view_file and answer about what it actually shows. That is the only built-in tool you have.'
       : 'You have no built-in tools.',
     ...(mcp ? [`You do have tools from MCP servers (${Object.keys(mcp).join(', ')}). Call them yourself whenever they would help answer.`] : []),
@@ -693,8 +712,8 @@ export const splitAgyInput = (text, env = {}) => {
 };
 
 /** This run's agent: the usual one, with the head of the message in its system prompt. */
-export const agyLongAgentFile = ({ name, vision, servers = null, head }) => [
-  agyAgentFile({ name, vision, servers }).trimEnd(),
+export const agyLongAgentFile = ({ name, vision, servers = null, head, full = false }) => [
+  agyAgentFile({ name, vision, servers, full }).trimEnd(),
   '',
   "# The user's message, first part",
   '',
@@ -706,7 +725,7 @@ export const agyLongAgentFile = ({ name, vision, servers = null, head }) => [
   '',
 ].join('\n');
 
-export const writeAgyLongAgent = (env = {}, { base, vision, servers, head }) => {
+export const writeAgyLongAgent = (env = {}, { base, vision, servers, head, full = false }) => {
   const root = agyAgentsDir(env);
   // Left over by a server that stopped mid-answer.
   try {
@@ -720,7 +739,7 @@ export const writeAgyLongAgent = (env = {}, { base, vision, servers, head }) => 
   const dir = path.join(root, name);
   try {
     fs.mkdirSync(dir, { recursive: true });
-    fs.writeFileSync(path.join(dir, 'agent.md'), agyLongAgentFile({ name, vision, servers, head }), { encoding: 'utf8', mode: 0o600 });
+    fs.writeFileSync(path.join(dir, 'agent.md'), agyLongAgentFile({ name, vision, servers, head, full }), { encoding: 'utf8', mode: 0o600 });
     return { name, dir, base };
   } catch {
     try { fs.rmSync(dir, { recursive: true, force: true }); } catch { /* gone */ }
@@ -733,14 +752,14 @@ export const writeAgyLongAgent = (env = {}, { base, vision, servers, head }) => 
    reads agents from elsewhere): it runs as itself from then on. */
 let agyAgentUnavailable = false;
 
-export const ensureAgyAgent = (env = {}, { vision = false, servers = null } = {}) => {
+export const ensureAgyAgent = (env = {}, { vision = false, servers = null, full = false } = {}) => {
   if (!flag(env.CLI_AGY_AGENT, true) || agyAgentUnavailable) return '';
   const withMcp = !!(servers && Object.keys(servers).length);
-  const name = withMcp
+  const name = (withMcp
     ? (vision ? AGY_AGENTS.visionMcp : AGY_AGENTS.chatMcp)
-    : (vision ? AGY_AGENTS.vision : AGY_AGENTS.chat);
+    : (vision ? AGY_AGENTS.vision : AGY_AGENTS.chat)) + (full ? AGY_FULL_SUFFIX : '');
   const file = path.join(agyAgentsDir(env), name, 'agent.md');
-  const text = agyAgentFile({ name, vision, servers: withMcp ? servers : null });
+  const text = agyAgentFile({ name, vision, servers: withMcp ? servers : null, full });
   try {
     let current = null;
     try { current = fs.readFileSync(file, 'utf8'); } catch { /* not there yet */ }
@@ -886,7 +905,8 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
     /* Pictures as files, in the directory this run starts in -- its
        workspace, where reading needs no permission -- named by absolute
        path, with leave to open those and nothing else. */
-    const agent = ensureAgyAgent(env, { vision: images.length > 0, servers: hasServers ? servers : null });
+    const full = fullAccessOf(env);
+    const agent = ensureAgyAgent(env, { vision: images.length > 0, servers: hasServers ? servers : null, full });
     const args = [
       '--input-format', 'stream-json',
       '--output-format', 'stream-json',
@@ -944,7 +964,7 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
     const split = agent ? splitAgyInput(text, env) : null;
     let extra = {};
     if (split) {
-      const long = writeAgyLongAgent(env, { base: agent, vision: images.length > 0, servers: hasServers ? servers : null, head: split.head });
+      const long = writeAgyLongAgent(env, { base: agent, vision: images.length > 0, servers: hasServers ? servers : null, head: split.head, full });
       if (long) {
         args[args.indexOf(agent)] = long.name;
         text = split.message;
@@ -1066,7 +1086,8 @@ const buildProjectInvocation = (provider, model, { system, prompt, images = [] }
       try { agent = ensureAgyPlanAgent(env, { servers: hasServers ? servers : null }); }
       catch (e) { throw new Error(`Could not prepare agy's read-only plan agent: ${e.message}`); }
     } else if (hasServers) {
-      agent = ensureAgyAgent(env, { vision: images.length > 0, servers });
+      // The chat agent has no file tools of its own; an editing run needs them.
+      agent = ensureAgyAgent(env, { vision: images.length > 0, servers, full: true });
     }
     const pictures = images.map((data, i) => {
       const file = path.join(files, `image-${i + 1}.${imageMime(data).split('/')[1] || 'png'}`);

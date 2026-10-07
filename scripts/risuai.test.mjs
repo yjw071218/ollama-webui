@@ -12,6 +12,7 @@ process.env.WEBUI_DATA_DIR = mkdtempSync(path.join(os.tmpdir(), 'risuai-test-dat
 import { createRisuRoutes } from '../server/risuai.js';
 import { assetMime } from '../integrations/risuai/asset-mime.js';
 import { defaultVariant } from '../integrations/risuai/asset-fallback.js';
+import { hideThoughts, hideLeadingThoughts } from '../integrations/risuai/thoughts.js';
 
 test('an expression a card does not ship falls back to the default of the same character', () => {
   const paths = Object.fromEntries([
@@ -228,4 +229,28 @@ test('dev and production RisuAI routes serve the same bytes without SPA fallback
     assert.equal((await fetch(base + prefix + '/%5csecret')).status, 403);
     assert.equal((await fetch(base + prefix + '/%00')).status, 403);
   }
+});
+
+test('hiding the thinking takes the model reasoning and leaves the boxes a module draws', () => {
+  const N = String.fromCharCode(10);
+  const t = (s) => s.replaceAll('|', N);
+  // The model's closed reasoning goes; the answer stays.
+  assert.equal(hideThoughts(t('<Thoughts>plan</Thoughts>|답변입니다.')), '답변입니다.');
+  assert.equal(hideThoughts(t('<think>a|b</think>|본문')), '본문');
+  // Unclosed, with a response heading: up to the heading.
+  assert.equal(hideThoughts(t('<Thoughts>|생각 중...|# 응답|본문')), t('# 응답|본문'));
+  // Unclosed with no heading: no telling where it ends, so nothing is hidden.
+  assert.equal(hideThoughts(t('<Thoughts>|인사말 전체')), t('<Thoughts>|인사말 전체'));
+  // A box a module draws further down (after the scripts) is not the leading one.
+  const ui = t('본문|<Thoughts>챕터 1</Thoughts>|계속');
+  assert.equal(hideLeadingThoughts(ui), ui);
+  // The closed box a message opens with is the reasoning a module drew.
+  assert.equal(hideLeadingThoughts(t('<Thoughts>생각<Thoughts>안</Thoughts>끝</Thoughts>|답')), '답');
+  // A module's chapter title drawn as the first box is not reasoning.
+  const chapter = t('<Thoughts>||### Chapter 3||</Thoughts>|본문');
+  assert.equal(hideLeadingThoughts(chapter), chapter);
+  // The shape the 소악마 module gives a message: reasoning box, then the answer.
+  assert.equal(hideLeadingThoughts(t('<Thoughts>||||생각 정리|</Thoughts>||## 챕터 1|본문')), t('|## 챕터 1|본문'));
+  // Left open, it holds the whole message: kept.
+  assert.equal(hideLeadingThoughts('<Thoughts>전부'), '<Thoughts>전부');
 });

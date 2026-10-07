@@ -145,16 +145,19 @@ export async function getFileSrc(loc: string) {
           code = replaceOnce(code,
             "data = (await processScriptFull(char, data, 'editdisplay', chatID, cbsConditions)).data",
             "data = (await processScriptFull(char, data, 'editdisplay', chatID, cbsConditions)).data\n        if (/\\{\\{#(?:if|when)\\b/.test(data)) {\n            data = risuChatParser(data, { chara: char, chatID, rmVar: true, visualize: true, cbsConditions });\n        }", file);
-          // The host toolbar's 사고과정 switch (webuiHideThinking): thought
-          // blocks are left out of the display, not out of the saved message,
-          // so turning it back on shows them again. An unclosed one -- still
-          // streaming -- is hidden to its end.
+          // The host toolbar's 사고과정 switch (webuiHideThinking): the model's
+          // reasoning is left out of the display, not out of the saved message.
+          // Taken out before the display scripts run, so the boxes modules draw
+          // with the same tag stay (see thoughts.js).
+          // And after them, the closed box a message opens with -- how a module
+          // that draws the reasoning itself shows it (hideLeadingThoughts).
+          code = "import { hideThoughts, hideLeadingThoughts } from '../../webui-thoughts.js';\n" + code;
           code = replaceOnce(code,
-            "                result += `<details><summary>${language.cot}</summary>${data.substring(i + 10, j - 1)}</details>`\n",
-            "                if (!DBState.db.webuiHideThinking) result += `<details><summary>${language.cot}</summary>${data.substring(i + 10, j - 1)}</details>`\n", file);
+            "    let firstParsed = ''\n    const additionalAssetMode",
+            "    if (DBState.db.webuiHideThinking) data = hideThoughts(data)\n    let firstParsed = ''\n    const additionalAssetMode", file);
           code = replaceOnce(code,
-            "                i = j + 10\n                continue\n            }\n",
-            "                i = j + 10\n                continue\n            }\n            if (DBState.db.webuiHideThinking) break\n", file);
+            "function parseThoughtsAndTools(data:string){\n",
+            "function parseThoughtsAndTools(data:string){\n    if (DBState.db.webuiHideThinking) data = hideLeadingThoughts(data)\n", file);
           // The blob has the actual type. A hard-coded MP4/MP3 <source> type
           // prevents the browser from trying WAV, Ogg and WebM assets.
           code = code.replaceAll(' type="video/mp4"', '').replaceAll(' type="audio/mpeg"', '');

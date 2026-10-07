@@ -33,6 +33,7 @@ await fs.copyFile(path.join(integration, 'webui-entry.js'), path.join(source, 's
 await fs.copyFile(path.join(integration, 'webui-bridge.ts'), path.join(source, 'src/webui-bridge.ts'));
 await fs.copyFile(path.join(integration, 'asset-mime.js'), path.join(source, 'src/webui-asset-mime.js'));
 await fs.copyFile(path.join(integration, 'asset-fallback.js'), path.join(source, 'src/webui-asset-fallback.js'));
+await fs.copyFile(path.join(integration, 'thoughts.js'), path.join(source, 'src/webui-thoughts.js'));
 await fs.copyFile(path.join(integration, 'local-model.js'), path.join(source, 'src/webui-local-model.js'));
 await fs.copyFile(path.join(integration, 'webui-sync.ts'), path.join(source, 'src/webui-sync.ts'));
 await fs.copyFile(path.join(integration, 'sync-merge.js'), path.join(source, 'src/webui-sync-merge.js'));

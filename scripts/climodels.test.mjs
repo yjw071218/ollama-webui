@@ -228,6 +228,27 @@ try {
   fs.rmSync(scratch, { recursive: true, force: true });
 }
 
+/* ----------------------------------------------- agy with full access
+
+   The chat agent had `tools: []` while the message said it could write to the
+   PC; it found nothing to write with and pasted the file into the chat. */
+{
+  const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'climodels-agyfull-'));
+  const full = C.buildInvocation(C.PROVIDERS.agy, 'gemini-3.1-pro-high', { system: '', prompt: 'edit the html file', images: [] }, { files: scratch, env: AGY_ENV });
+  const name = full.args[full.args.indexOf('--agent') + 1];
+  eq('with full access agy runs as an agent of its own', name, 'ollama-webui-chat-full');
+  const text = fs.readFileSync(path.join(AGY_DIR, name, 'agent.md'), 'utf8');
+  check('  which has the file and command tools', ['write_to_file', 'replace_file_content', 'run_command', 'view_file'].every(t => text.includes(`\n  - ${t}\n`)), text);
+  check('  with commands not switched off', !text.includes('commandExecutionPolicy: off'));
+  check('  and is told to write files rather than paste them', text.includes('Never paste a whole file') && !text.includes('You have no built-in tools'));
+  const mcp = C.buildInvocation(C.PROVIDERS.agy, 'x', { system: '', prompt: 'hi', images: [] }, { files: scratch, env: { ...AGY_ENV, CLI_AGY_MCP: 'on' }, tools: { servers: { files: { type: 'stdio', command: 'npx', args: [] } } } });
+  eq('  and so does the one with MCP servers', mcp.args[mcp.args.indexOf('--agent') + 1], 'ollama-webui-chat-mcp-full');
+  const plain = fs.readFileSync(path.join(AGY_DIR, 'ollama-webui-chat', 'agent.md'), 'utf8');
+  check('the sandboxed chat agent is left as it was', plain.includes('\ntools: []\n') && plain.includes('commandExecutionPolicy: off'));
+  check('every tool name is one agy knows', !C.AGY_FULL_TOOLS.includes('command_status'));
+  fs.rmSync(scratch, { recursive: true, force: true });
+}
+
 /* ----------------------------------------------- agy and a long message
 
    agy keeps the first 192,000 bytes of a message and silently drops the rest:
