@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { Sparkles, Mail, Lock, User, TriangleAlert, RefreshCcw, KeyRound } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
-import { socialConfig, renderGoogleButton, signInWithKakao } from './auth.jsx';
+import { socialConfig, renderGoogleButton } from './auth.jsx';
 import { registerAccount, loginWithPassword, loginWithGoogle } from './session.jsx';
 import { signInWithPasskey, isPasskeySupported, supportsAutofill } from './passkey.js';
 import { ProfileAvatar } from './ProfileDialog.jsx';
@@ -12,12 +12,6 @@ const GoogleMark = () => (
     <path fill="#4285F4" d="M46.5 24.5c0-1.6-.1-3.2-.4-4.7H24v9h12.7c-.6 3-2.3 5.5-4.8 7.2l7.5 5.8c4.4-4 7.1-10 7.1-17.3z" />
     <path fill="#FBBC05" d="M10.3 28.7a14.6 14.6 0 010-9.4l-7.8-6.1a24 24 0 000 21.6l7.8-6.1z" />
     <path fill="#34A853" d="M24 48c6.5 0 11.9-2.1 15.9-5.8l-7.5-5.8c-2.1 1.4-4.8 2.3-8.4 2.3-6.4 0-11.8-3.8-13.7-9.1l-7.8 6.1C6.4 42.6 14.6 48 24 48z" />
-  </svg>
-);
-
-const KakaoMark = () => (
-  <svg width="16" height="16" viewBox="0 0 24 24" aria-hidden="true">
-    <path fill="#191600" d="M12 3C6.9 3 2.8 6.3 2.8 10.3c0 2.6 1.7 4.9 4.3 6.2-.2.7-.7 2.6-.8 3-.1.5.2.5.4.4.2-.1 2.7-1.8 3.7-2.6.5.1 1.1.1 1.6.1 5.1 0 9.2-3.3 9.2-7.3S17.1 3 12 3z" />
   </svg>
 );
 
@@ -46,7 +40,7 @@ export const AuthScreen = ({ onSignedIn, onGuest, accounts = [], onUse }) => {
   const [error, setError] = useState('');
   const [busy, setBusy] = useState('');
 
-  const { googleClientId, kakaoRestKey } = socialConfig();
+  const { googleClientId } = socialConfig();
 
   const [passkeyReady, setPasskeyReady] = useState(false);
   const googleBtnRef = useRef(null);
@@ -75,7 +69,20 @@ export const AuthScreen = ({ onSignedIn, onGuest, accounts = [], onUse }) => {
         try {
           // The token is verified by the server against Google. Nothing here
           // reads it, because nothing here could tell a real one from a forgery.
-          onSignedIn(await loginWithGoogle(credential));
+          // A dropped connection (offline, or a gateway answering for an
+          // unreachable server) is tried again: the token stays valid for
+          // minutes, and losing the whole sign-in to one request is the
+          // tablet bug this guards against.
+          let session;
+          for (let tries = 0; ; tries += 1) {
+            try { session = await loginWithGoogle(credential); break; }
+            catch (e) {
+              const transient = e?.code === 'offline' || (e?.status >= 500 && e?.status < 600);
+              if (!transient || tries >= 2 || cancelled) throw e;
+              await new Promise(resolve => setTimeout(resolve, 1500));
+            }
+          }
+          onSignedIn(session);
         } catch (e) {
           report(e);
         } finally {
@@ -152,28 +159,6 @@ export const AuthScreen = ({ onSignedIn, onGuest, accounts = [], onUse }) => {
     }
   };
 
-  const kakao = async () => {
-    setError('');
-    stopAutofill();
-    setBusy('kakao');
-    try {
-      const result = await signInWithKakao({ onOpened: () => setBusy('') });
-      if (result.error) {
-        const base = t(result.error, { uri: result.detail || '' });
-        const detail = typeof result.detail === 'string' ? result.detail : '';
-        setError(detail && !base.includes(detail) ? `${base} — ${detail}` : base);
-        return;
-      }
-      // Kakao leaves for its consent screen and the page that returns is
-      // already signed in, so there is no session to hand over here — and the
-      // spinner should stay up until the navigation happens.
-    } catch (err) {
-      setError(err.message || String(err));
-    } finally {
-      if (!window.location.href.includes('kauth.kakao.com')) setBusy('');
-    }
-  };
-
   const working = !!busy;
 
   return (
@@ -238,18 +223,7 @@ export const AuthScreen = ({ onSignedIn, onGuest, accounts = [], onUse }) => {
             </button>
           )}
 
-          <button
-            type="button"
-            className="auth-social-btn kakao"
-            onClick={kakao}
-            disabled={working || !kakaoRestKey}
-            title={kakaoRestKey ? undefined : t('auth.notConfigured')}
-          >
-            {busy === 'kakao' ? <RefreshCcw size={16} className="spin" /> : <KakaoMark />}
-            {t('auth.kakao')}
-          </button>
-
-          {(!googleClientId || !kakaoRestKey) && (
+          {!googleClientId && (
             <div className="auth-hint">{t('auth.notConfigured')}</div>
           )}
         </div>
@@ -318,9 +292,6 @@ export const AuthScreen = ({ onSignedIn, onGuest, accounts = [], onUse }) => {
                 {error}
                 {/(invalid_client|origin|401)/i.test(error) && (
                   <div className="auth-error-hint">{t('auth.originHint', { origin: window.location.origin })}</div>
-                )}
-                {/(KOE|Redirect URI|Kakao)/i.test(error) && (
-                  <div className="auth-error-hint">{t('auth.kakaoChecklist')}</div>
                 )}
               </span>
             </div>

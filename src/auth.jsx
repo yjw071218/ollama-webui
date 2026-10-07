@@ -6,8 +6,7 @@
 // it belongs, and the client's side of it lives in session.jsx.
 //
 // What is left is genuinely browser work: loading Google's script, rendering
-// its button, starting Kakao's redirect, and reading what the redirect left in
-// the address bar. Each of these ends by handing a credential to the server,
+// its button, and handing what it returns on. Each of these ends by handing a credential to the server,
 // which decides what it means. Nothing here decides who anybody is.
 
 import { api } from './session.jsx';
@@ -19,12 +18,11 @@ import { api } from './session.jsx';
 // Filled in from /api/config at boot. Serving the identifiers at runtime is
 // what lets a phone — a different origin, with its own empty localStorage — get
 // a working sign-in button without anyone pasting keys in.
-let serverProvided = { googleClientId: '', kakaoRestKey: '' };
+let serverProvided = { googleClientId: '' };
 
 export const setServerSocialConfig = (config) => {
   serverProvided = {
     googleClientId: config?.googleClientId || '',
-    kakaoRestKey: config?.kakaoRestKey || '',
   };
 };
 
@@ -32,19 +30,12 @@ export const socialConfig = () => ({
   googleClientId: localStorage.getItem('googleClientId')
     || serverProvided.googleClientId
     || import.meta.env?.VITE_GOOGLE_CLIENT_ID || '',
-  // Kakao's code exchange needs the REST API key; the JavaScript key cannot be
-  // used for it. An older stored JS key is ignored rather than silently
-  // producing an invalid_client error.
-  kakaoRestKey: localStorage.getItem('kakaoRestKey')
-    || serverProvided.kakaoRestKey
-    || import.meta.env?.VITE_KAKAO_REST_KEY || '',
 });
 
 // What is in effect without anything stored in this browser — which is what a
 // settings box should show as the placeholder rather than as a value.
 export const socialDefaults = () => ({
   googleClientId: serverProvided.googleClientId || import.meta.env?.VITE_GOOGLE_CLIENT_ID || '',
-  kakaoRestKey: serverProvided.kakaoRestKey || import.meta.env?.VITE_KAKAO_REST_KEY || '',
 });
 
 /* =========================================================================
@@ -125,17 +116,47 @@ export const renderGoogleButton = async (container, { onCredential, onError, loc
     button.onclick = async () => {
       const currentAttempt = ++attempt;
       button.disabled = true;
+      /* Read as text and parsed here: the app's loopback proxy answers a
+         server it cannot reach with a plain sentence, and `response.json()` on
+         that was "Unexpected token '서'" -- the whole sign-in abandoned over
+         one dropped request. A failure that may pass (no connection, a
+         gateway error, a body that is not JSON) is marked `transient`; the
+         poll below waits it out rather than giving up. */
       const post = async (action, body) => {
-        const response = await fetch('/api/auth/native/' + action, {
-          method: 'POST', headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(body), signal: AbortSignal.timeout(15000),
-        });
-        const result = await response.json();
-        if (!response.ok) throw new Error(result.error || 'Google 로그인 연결 실패');
+        let response;
+        try {
+          response = await fetch('/api/auth/native/' + action, {
+            method: 'POST', headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body), signal: AbortSignal.timeout(15000),
+          });
+        } catch (e) {
+          throw Object.assign(new Error('서버에 연결하지 못했습니다. 네트워크를 확인하세요.'), { transient: true });
+        }
+        const text = await response.text().catch(() => '');
+        let result = null;
+        try { result = JSON.parse(text); } catch { /* below */ }
+        if (!result || typeof result !== 'object') {
+          throw Object.assign(new Error((text || `HTTP ${response.status}`).slice(0, 160)), {
+            transient: response.status >= 500 || response.status === 0 || !response.ok,
+          });
+        }
+        if (!response.ok) {
+          throw Object.assign(new Error(result.error || 'Google 로그인 연결 실패'), { transient: response.status >= 500 });
+        }
         return result;
       };
+      // A start that met a dropped connection is simply asked again.
+      const startWithRetry = async () => {
+        for (let tries = 0; ; tries += 1) {
+          try { return await post('start', {}); }
+          catch (e) {
+            if (!e.transient || tries >= 2) throw e;
+            await new Promise(resolve => setTimeout(resolve, 1200));
+          }
+        }
+      };
       try {
-        const { id, secret } = await post('start', {});
+        const { id, secret } = await startWithRetry();
         if (currentAttempt !== attempt || !button.isConnected) return;
         /* Straight to Google's account chooser when the app can take the answer
            on loopback and the server has seen that redirect URI registered with
@@ -151,14 +172,25 @@ export const renderGoogleButton = async (container, { onCredential, onError, loc
         window.location.assign('/__native/auth#' + (direct ? 'google:' + id + ':' + googleClientId : id));
         button.disabled = false; // Closing the browser must not lock out another attempt.
         const deadline = Date.now() + 300000;
+        let lastTransient = null;
         while (Date.now() < deadline && button.isConnected) {
           await new Promise(resolve => setTimeout(resolve, 1500));
           if (!button.isConnected || currentAttempt !== attempt) return;
-          const result = await post('poll', { id, secret });
+          /* While the Google page is in front the app is in the background,
+             and a tablet in particular may drop its connection for a moment.
+             Those polls fail and the next one usually works. */
+          let result;
+          try { result = await post('poll', { id, secret }); }
+          catch (e) {
+            if (!e.transient) throw e;
+            lastTransient = e;
+            continue;
+          }
+          lastTransient = null;
           if (currentAttempt !== attempt) return;
           if (result.credential) { onCredential?.(result.credential); return; }
         }
-        if (button.isConnected) throw new Error('로그인 시간이 만료되었습니다. 다시 시도하세요.');
+        if (button.isConnected) throw lastTransient || new Error('로그인 시간이 만료되었습니다. 다시 시도하세요.');
       } catch (error) { if (currentAttempt === attempt) onError?.({ error: 'auth.googleFailed', detail: error.message }); }
       finally { if (currentAttempt === attempt) { button.disabled = false; } }
     };
@@ -210,148 +242,6 @@ export const forgetGoogleAutoSelect = () => {
     window.google?.accounts?.id?.disableAutoSelect?.();
   } catch (e) {
     // Signing out must succeed even if a provider SDK misbehaves.
-  }
-};
-
-/* =========================================================================
-   Kakao
-   ========================================================================= */
-
-export const kakaoRedirectUri = () => `${window.location.origin}/kakao/callback`;
-
-/**
- * Kakao Login, authorization-code grant.
- *
- * The JS SDK v2 removed `Kakao.Auth.login()`, and Kakao's token endpoint
- * neither allows browser calls (no CORS) nor accepts the JavaScript key — it
- * wants the REST API key. So the server starts it, the server exchanges the
- * code, and the browser comes back already holding a session.
- */
-let kakaoAttempt = 0;
-export const signInWithKakao = async ({ onOpened } = {}) => {
-  const attempt = ++kakaoAttempt;
-  try {
-    const info = await fetch('/__native/info', { cache: 'no-store' });
-    const native = info.ok && info.headers.get('content-type')?.includes('application/json')
-      && (await info.json()).nativeKakao === true;
-    if (native) {
-      const post = async (action, body) => {
-        try {
-          return await api('/api/auth/native/kakao/' + action, {
-            method: 'POST', body, signal: AbortSignal.timeout(15000),
-          });
-        } catch (error) {
-          // No IDs, polling secrets or server addresses in the error message.
-          if (error.status === 404) error.message = 'HTTP 404 · /api/auth/native/kakao/' + action
-            + ' — 실행 중인 서버의 앱 로그인 경로를 확인하세요. 설치 파일만 교체한 경우 서버 재시작이 필요합니다.';
-          throw error;
-        }
-      };
-      let started = null;
-      try { started = await post('start', {}); }
-      catch (e) {
-        // A server older than the app has no handoff route (404): sign in
-        // inside the app instead, the way those servers always have.
-        if (e.status !== 404) throw e;
-      }
-      if (attempt !== kakaoAttempt) return { superseded: true };
-      if (started) {
-        const { id, secret } = started;
-        window.location.assign('/__native/auth#kakao:' + id);
-        onOpened?.(); // A closed browser must not lock the button for five minutes.
-        const deadline = Date.now() + 300000;
-        while (Date.now() < deadline && attempt === kakaoAttempt) {
-          await new Promise(resolve => setTimeout(resolve, 1500));
-          if (attempt !== kakaoAttempt) return { superseded: true };
-          const result = await post('poll', { id, secret });
-          if (attempt !== kakaoAttempt) return { superseded: true };
-          if (result.sessionId) {
-            window.location.assign('/?kakao=ok&sid=' + encodeURIComponent(result.sessionId));
-            return { redirecting: true };
-          }
-        }
-        if (attempt !== kakaoAttempt) return { superseded: true };
-        throw new Error('로그인 시간이 만료되었습니다. 다시 시도하세요.');
-      }
-    }
-  } catch (e) {
-    if (attempt !== kakaoAttempt) return { superseded: true };
-    return { error: 'auth.kakaoFailed', detail: e.message };
-  }
-  const redirectUri = kakaoRedirectUri();
-
-  // The state has to be issued by whoever will verify it — a value this page
-  // invents and this page checks says nothing about a forged callback.
-  let start;
-  try {
-    // Through `api` for the session header: the state issued here remembers
-    // which tab started the sign-in, and the callback uses that to replace this
-    // tab's session rather than whichever one another tab is holding.
-    start = await api(`/kakao/start?redirect_uri=${encodeURIComponent(redirectUri)}`);
-  } catch (e) {
-    // 501 is the server saying Kakao was never set up here, which is a
-    // different thing to tell someone than "it failed".
-    return e.status === 501
-      ? { error: 'auth.notConfigured', detail: e.message }
-      : { error: 'auth.kakaoFailed', detail: e.message };
-  }
-
-  // A full navigation, not a popup. Popups are blocked by default in plenty of
-  // browsers and are miserable on a phone, and a redirect is what both Kakao's
-  // documentation and the redirect URI itself describe.
-  window.location.assign(start.authorizeUrl);
-  return { redirecting: true };
-};
-
-/**
- * What the callback left in the address bar, if anything.
- *
- * The login finishes on the server and ends in a redirect, so its outcome
- * arrives as a query parameter rather than a return value. Reading it clears
- * it, so a refresh does not report the same thing twice.
- */
-export const readKakaoOutcome = () => {
-  const params = new URLSearchParams(window.location.search);
-  const outcome = params.get('kakao');
-  if (!outcome) return null;
-
-  const detail = params.get('detail') || '';
-  params.delete('kakao');
-  params.delete('detail');
-  const query = params.toString();
-  window.history.replaceState({}, '', window.location.pathname + (query ? `?${query}` : ''));
-
-  return { outcome, detail };
-};
-
-/**
- * Sever the connection between this app and the Kakao account.
- *
- * Distinct from logging out, and what 연결 끊기 means: the app's permission is
- * withdrawn and the next sign-in asks for consent again. Signing out already
- * ends the Kakao session server-side, so there is no separate call for that.
- */
-export const kakaoUnlink = async () => {
-  try {
-    return await api('/kakao/unlink', { method: 'POST' });
-  } catch (e) {
-    return { success: false, error: e.message };
-  }
-};
-
-/**
- * Whether this account still holds a live Kakao connection.
- *
- * Through `api` rather than a bare fetch, so it carries the header naming which
- * of this browser's sessions is asking. A raw fetch would be answered for
- * whichever account signed in most recently — which, with two tabs open, is
- * frequently not the one on this screen.
- */
-export const kakaoStatus = async () => {
-  try {
-    return await api('/kakao/status');
-  } catch (e) {
-    return { success: false, connected: false };
   }
 };
 

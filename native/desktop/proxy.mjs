@@ -48,7 +48,7 @@ export async function startProxy(value, port = 0) {
     if (req.url === '/__native/info' && req.method === 'GET') {
       res.writeHead(200, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
       // googleLoopback: this app can take Google's answer on 127.0.0.1:47615 (googleLoopback.mjs).
-      res.end(JSON.stringify({ nativeGoogle: true, nativeKakao: true, googleLoopback: 47615 })); return;
+      res.end(JSON.stringify({ nativeGoogle: true, googleLoopback: 47615 })); return;
     }
     const transport = target.protocol === 'https:' ? https : http;
     const upstream = transport.request(target, {
@@ -65,7 +65,13 @@ export async function startProxy(value, port = 0) {
       response.on('error', () => res.destroy());
     });
     upstream.setTimeout(0); // Generation may remain silent indefinitely; cancellation still destroys the request.
-    upstream.on('error', () => { if (!res.headersSent) res.writeHead(502, {'content-type':'text/plain; charset=utf-8'}); res.end('서버에 연결할 수 없습니다. 서버 주소와 실행 상태를 확인하고 새로고침하세요.'); });
+    // API calls parse JSON, so they get JSON; a page gets the sentence.
+    upstream.on('error', () => {
+      const message = '서버에 연결할 수 없습니다. 서버 주소와 실행 상태를 확인하고 새로고침하세요.';
+      const api = String(req.url || '').startsWith('/api/');
+      if (!res.headersSent) res.writeHead(502, { 'content-type': `${api ? 'application/json' : 'text/plain'}; charset=utf-8` });
+      res.end(api ? JSON.stringify({ error: message, code: 'offline' }) : message);
+    });
     req.on('aborted', () => upstream.destroy());
     res.on('close', () => upstream.destroy());
     req.pipe(upstream);

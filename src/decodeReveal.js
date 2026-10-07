@@ -1,6 +1,6 @@
 /**
- * "Decoding" reveal for streamed words: a new word first shows as random
- * symbols that settle, left to right, into its real letters.
+ * "Decoding" reveal for streamed text: a new character first shows as a
+ * random symbol that settles into the real one.
  *
  * The words are <span class="tok"> nodes that React owns, so their text is
  * never touched -- React would later write over it, or we over React. The
@@ -10,7 +10,7 @@
  * takes its own width the whole time.
  */
 const GLYPHS = '!<>-_\\/[]{}=+*^?#%&@$~:;01';
-const DURATION = 420;   // ms for a word to settle
+const DURATION = 160;   // ms for a character to settle (one character per span now)
 const MAX_ACTIVE = 80;  // a burst of text should not cost a frame per word
 
 const active = new Map(); // span -> { text, start }
@@ -61,8 +61,11 @@ export const installDecodeReveal = () => {
         if (node.nodeType !== 1) continue;
         // Only while an answer is arriving; history and reloads appear at once.
         if (!node.closest?.('.markdown-body.is-streaming')) continue;
-        if (node.classList?.contains('tok')) start(node);
-        else node.querySelectorAll?.('.tok').forEach(start);
+        /* Only characters shown for the first time. A re-parse (a closing
+           `*` making an <em>) re-creates spans for text already on screen,
+           and scrambling those again is the "animation plays twice". */
+        if (node.classList?.contains('tok')) { if (node.hasAttribute('data-fresh')) start(node); }
+        else node.querySelectorAll?.('.tok[data-fresh]').forEach(start);
       }
     }
   });

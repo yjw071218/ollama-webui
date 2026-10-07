@@ -30,8 +30,15 @@ export PATH
 "$NODE" server/setup-env.mjs --network
 PORT=$("$NODE" server/setup-env.mjs --print-port 2>/dev/null || echo 5173)
 [ -n "$PORT" ] || PORT=5173
+# The one address every device uses (PUBLIC_ORIGIN), as the project does.
 URL=$("$NODE" server/setup-env.mjs --print-origin 2>/dev/null)
 [ -n "$URL" ] || URL="http://localhost:$PORT"
+
+# Ollama, as start_ollama_webui.bat starts it when it is not running.
+if command -v ollama >/dev/null 2>&1 && ! curl -s -o /dev/null -m 2 http://127.0.0.1:11434/ 2>/dev/null; then
+  echo "Starting Ollama..."
+  nohup ollama serve >/dev/null 2>&1 &
+fi
 
 open_browser() {
   if [ "$(uname -s)" = "Darwin" ]; then open "$URL" >/dev/null 2>&1

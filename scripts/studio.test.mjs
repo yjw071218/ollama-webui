@@ -219,10 +219,22 @@ eq('while the chosen ones are on', stackerPrompt['5'].inputs.lora_name_1_toggle,
    still in there" was a fair reading of a job that used none. */
 eq('and the name is cleared too', stackerPrompt['5'].inputs.lora_name_3, 'None');
 eq('while a chosen slot keeps its name', stackerPrompt['5'].inputs.lora_name_1, 'mine-a');
-// Asking for more than there are slots is capped rather than dropped silently.
-eq('more than fits is capped at the ceiling',
+// Extra selections chain additional stackers instead of truncating.
+eq('more than fits adds a stacker',
   W.applyLoras(stackerPrompt, stackerSpec,
-    [{ name: 'a' }, { name: 'b' }, { name: 'c' }, { name: 'd' }]).applied, 3);
+    [{ name: 'a' }, { name: 'b' }, { name: 'c' }, { name: 'd' }]).applied, 4);
+const many = Array.from({length: 40}, (_, i) => ({name: 'lora-' + i, weight: i / 40, enabled: i !== 7}));
+const largeStack = {'5': {class_type:'LoRA Stacker', inputs:{}, _meta:{source:'1380'}},
+  '6': {class_type:'Consumer', inputs:{stack:['5',0]}}};
+const unlimited = W.applyLoras(largeStack, stackerSpec, many);
+eq('disabled entries excluded without truncating others', unlimited.applied, 39);
+const readStack = key => {
+  const input = largeStack[key].inputs;
+  const own = Array.from({length:input.lora_count}, (_,i) => input['lora_name_' + (i+1)]);
+  return own.concat(input.lora_stack ? readStack(input.lora_stack[0]) : []);
+};
+eq('ED own-before-upstream order preserves all 39 selections',
+  readStack(largeStack['6'].inputs.stack[0]).join(','), many.filter(x=>x.enabled).map(x=>x.name).join(','));
 
 /* A chain: one loader, so a second LoRA is a second *node*. */
 const chainPrompt = {
@@ -280,8 +292,8 @@ check('the panel offers a list rather than one picker', /LoraStack/.test(panelSo
    one row. */
 check('and its updates do not capture a stale list',
   /onChange\(current =>/.test(panelSource));
-check('with the ceiling enforced where the row is added',
-  /current\.length >= slots/.test(panelSource));
+check('rows have no artificial selection ceiling and have individual switches',
+  !/current\.length >= slots/.test(panelSource) && /role="switch"/.test(panelSource));
 
 /* ------------------------------------------------------- patching a graph */
 

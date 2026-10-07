@@ -633,8 +633,7 @@ export const applyLoras = (prompt, definition, loras = []) => {
   if (!spec) return { applied: 0, capacity: 0 };
 
   const chosen = (loras || [])
-    .filter(entry => entry && entry.name)
-    .slice(0, spec.max || 1)
+    .filter(entry => entry && entry.name && entry.enabled !== false)
     .map(entry => ({
       name: entry.name,
       weight: Number.isFinite(Number(entry.weight)) ? Number(entry.weight) : 1,
@@ -645,27 +644,39 @@ export const applyLoras = (prompt, definition, loras = []) => {
 
   /* ---- a stacker: nine slots already there ---- */
   if (spec.style === 'slots') {
-    for (let i = 1; i <= spec.slots; i += 1) {
-      const picked = chosen[i - 1];
-      if (picked) {
-        node.inputs[slotName(spec.name, i)] = picked.name;
-        node.inputs[slotName(spec.weight, i)] = picked.weight;
+    // Each stacker has finite sockets, but stackers can chain through LORA_STACK.
+    // Build batches rather than inventing unsupported socket names above slot 9.
+    const baseKey = keyOf(prompt, spec.node);
+    const consumers = [];
+    for (const [key, other] of Object.entries(prompt)) {
+      for (const [input, value] of Object.entries(other.inputs || {})) {
+        if (Array.isArray(value) && value[0] === baseKey && value[1] === 0) consumers.push({key,input});
       }
-      // The toggle is what decides whether a slot is read, so every unused one
-      // is switched off — otherwise the workflow author's own LoRAs stay on
-      // underneath whatever was chosen here.
-      if (spec.toggle) node.inputs[slotName(spec.toggle, i)] = !!picked;
-      /* And emptied, not just switched off. A slot still naming
-         `BlueArchiveStyleB1` is one toggle away from applying it, it is what
-         the graph reports when anything asks what ran, and it is the reason
-         "the workflow's own LoRAs are still in there" is a fair reading of a
-         job that used none. `None` is the stacker's own word for an empty
-         slot, not an invented one. */
-      if (!picked) node.inputs[slotName(spec.name, i)] = 'None';
     }
-    if (spec.count) node.inputs[spec.count] = Math.max(chosen.length, 1);
+    const batches = Math.max(1, Math.ceil(chosen.length / spec.slots));
+    let previous = baseKey;
+    const template = structuredClone(node);
+    for (let batch = 0; batch < batches; batch++) {
+      const key = batch === 0 ? baseKey : nextKey(prompt);
+      const part = batch === 0 ? node : (prompt[key] = structuredClone(template));
+      if (batch > 0) {
+        part.inputs.lora_stack = [previous, 0];
+        part._meta = { ...part._meta, source: spec.node + '#' + batch };
+      }
+      // ED prepends its own entries before the upstream stack: build tail first.
+      const offset = (batches - 1 - batch) * spec.slots;
+      for (let i = 1; i <= spec.slots; i++) {
+        const picked = chosen[offset + i - 1];
+        part.inputs[slotName(spec.name, i)] = picked?.name || 'None';
+        part.inputs[slotName(spec.weight, i)] = picked?.weight ?? 0;
+        if (spec.toggle) part.inputs[slotName(spec.toggle, i)] = !!picked;
+      }
+      if (spec.count) part.inputs[spec.count] = Math.max(1, Math.min(spec.slots, chosen.length - offset));
+      previous = key;
+    }
+    if (previous !== baseKey) for (const {key,input} of consumers) prompt[key].inputs[input] = [previous, 0];
     if (chosen.length) for (const extra of spec.also || []) applyBinding(prompt, extra, extra.value);
-    return { applied: chosen.length, capacity: spec.max, used: chosen };
+    return { applied: chosen.length, capacity: null, used: chosen };
   }
 
   /* ---- a chain: one loader, cloned ---- */
@@ -713,7 +724,7 @@ export const applyLoras = (prompt, definition, loras = []) => {
       for (const { key, input } of consumers) prompt[key].inputs[input] = [previous, 0];
     }
     for (const extra of spec.also || []) applyBinding(prompt, extra, extra.value);
-    return { applied: chosen.length, capacity: spec.max, used: chosen };
+    return { applied: chosen.length, capacity: null, used: chosen };
   }
 
   return { applied: 0, capacity: spec.max || 0 };

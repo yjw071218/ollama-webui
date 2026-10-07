@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Gauge } from 'lucide-react';
+import { agyQuotaForModel, agyQuotaGroup } from './agyQuota.js';
 import { useI18n } from './i18n.jsx';
 import { notify, unattended } from './notify.js';
 import './cliTurn.css';
@@ -228,12 +229,12 @@ export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
   const wasBlocked = useRef(null);
   useEffect(() => {
     if (!all || !cli) return;
-    const blockedNow = all[cli]?.status === 'rejected';
-    if (wasBlocked.current?.cli === cli && wasBlocked.current.blocked && !blockedNow && notifyBack && unattended()) {
+    const blockedNow = (cli === 'agy' ? agyQuotaForModel(all[cli], model) : all[cli])?.status === 'rejected';
+    if (wasBlocked.current?.cli === cli && wasBlocked.current?.group === agyQuotaGroup(model) && wasBlocked.current.blocked && !blockedNow && notifyBack && unattended()) {
       notify(t('notify.cliReset', { name: cliLabel(cli) }), { tag: 'ollama-webui-cli-reset' });
     }
-    wasBlocked.current = { cli, blocked: blockedNow };
-  }, [all, cli, notifyBack, t]);
+    wasBlocked.current = { cli, group: agyQuotaGroup(model), blocked: blockedNow };
+  }, [all, cli, model, notifyBack, t]);
   const [open, setOpen] = useState(false);
   const [now, setNow] = useState(Date.now());
   const [place, setPlace] = useState(null);
@@ -268,7 +269,7 @@ export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
   }, [cli]);
   if (!cli || !all) return null;
 
-  const limits = all[cli];
+  const limits = cli === 'agy' ? agyQuotaForModel(all[cli], model, now) : all[cli];
   const windows = (limits?.windows || []).filter(w => Number.isFinite(w.usedPercent));
   const blocked = limits?.status === 'rejected';
   const tightest = pickBadgeWindow(windows, blocked, now);

@@ -520,7 +520,7 @@ export const applyLocal = async (scope, records) => {
  */
 const applyTouched = (a) => Object.values(a || {}).some(n => Number(n) > 0);
 
-export const syncOnce = async (scope, { full = false } = {}) => {
+export const syncOnce = async (scope, { full = false, limit = 500, onPhase } = {}) => {
   const ownerId = ownerOfScope(scope);
   if (!ownerId) throw new Error('There is no signed-in account to sync with.');
 
@@ -536,14 +536,16 @@ export const syncOnce = async (scope, { full = false } = {}) => {
   }
 
   const since = readRev(scope);
+  onPhase?.({ phase: 'preparing' });
   const { changed: pendingChanges, local } = full ? { changed: [], local: [] } : await localChanges(scope);
   const { batch: changed, refused: oversized, remaining } = uploadBatch(pendingChanges);
 
   let result;
+  onPhase?.({ phase: changed.length ? 'uploading' : 'downloading', sending: changed.length });
   try {
     result = await api('/api/auth/sync', {
       method: 'POST',
-      body: { since, ownerId, records: changed, limit: 500 },
+      body: { since, ownerId, records: changed, limit },
     });
   } catch (e) {
     if (e instanceof ApiError && e.code === 'owner-mismatch') {
@@ -559,6 +561,7 @@ export const syncOnce = async (scope, { full = false } = {}) => {
     throw new OwnerMismatch(ownerId, result.ownerId);
   }
 
+  onPhase?.({ phase: 'applying', received: (result.records || []).length, remaining: result.remaining });
   const applied = await applyLocal(scope, result.records || []);
 
   // Record where we got to only after the writes landed. Doing it first means a
@@ -610,6 +613,9 @@ export const syncOnce = async (scope, { full = false } = {}) => {
     rev: result.rev || since,
     complete: result.complete !== false && remaining === 0,
     received: (result.records || []).length,
+    // Records still waiting above the cursor, when the server says (older
+    // servers do not, and the caller falls back to revisions).
+    remaining: Number.isFinite(result.remaining) ? result.remaining : null,
     // Whether anything the user would notice actually changed here.
     changedLocally: applied.chats + applied.settings + applied.documents
       + applied.memories + applied.lists + applied.studio,
@@ -624,11 +630,27 @@ export const syncOnce = async (scope, { full = false } = {}) => {
  * enough to be in step. The page cap is what keeps a slow connection from
  * having to hold one enormous request open.
  */
-export const syncFully = async (scope, { full = false, maxRounds = 20, onProgress } = {}) => {
+export const syncFully = async (scope, { full = false, maxRounds = 20, limit = 500, onProgress } = {}) => {
   let total = null;
+  let receivedSoFar = 0;
   for (let round = 0; round < maxRounds; round++) {
-    const result = await syncOnce(scope, { full: full && round === 0 });
-    onProgress?.({ rev: result.rev, complete: result.complete, received: result.received });
+    const result = await syncOnce(scope, {
+      full: full && round === 0,
+      limit,
+      // Said as it happens, not after the round: a round on a phone can take
+      // many seconds, and silence for that long reads as a hang.
+      onPhase: (p) => onProgress?.({ ...p, round, receivedSoFar: receivedSoFar + (p.received || 0) }),
+    });
+    receivedSoFar += result.received;
+    onProgress?.({
+      phase: result.complete ? 'done' : 'downloading',
+      round,
+      rev: result.rev,
+      complete: result.complete,
+      received: result.received,
+      receivedSoFar,
+      remaining: result.remaining,
+    });
     total = total ? {
       ...result,
       applied: {
@@ -680,10 +702,38 @@ export const markInitialSync = (scope, pending) => {
  * Revisions are a cursor that only moves forward and ends at the account's
  * current one, so where the cursor stands against that target is the progress.
  */
-export const syncPercent = (rev, target, complete) => {
+export const syncPercent = (rev, target, complete, counts = null) => {
   if (complete) return 100;
+  // Counted records, when the server reports what is left. Revisions are not
+  // spread evenly over records, so a revision-based bar sat at 0% and leapt.
+  const done = Number(counts?.receivedSoFar);
+  const left = Number(counts?.remaining);
+  if (Number.isFinite(done) && Number.isFinite(left) && done + left > 0 && counts.remaining !== null) {
+    return Math.max(0, Math.min(99, Math.floor(done / (done + left) * 100)));
+  }
   if (!(target > 0)) return 0;
   return Math.max(0, Math.min(99, Math.floor((Number(rev) || 0) / target * 100)));
+};
+
+/**
+ * Where a first sync is, in words the screen can show.
+ *
+ * Returns an i18n key and its values; `counts` is the latest progress report.
+ */
+export const syncStage = (p = {}) => {
+  const done = Number(p.receivedSoFar) || 0;
+  const left = Number.isFinite(p.remaining) ? p.remaining : null;
+  switch (p.phase) {
+    case 'connecting': return { key: 'sync.stage.connecting' };
+    case 'preparing': return { key: 'sync.stage.preparing' };
+    case 'uploading': return { key: 'sync.stage.uploading', values: { count: p.sending || 0 } };
+    case 'applying': return { key: 'sync.stage.applying', values: { done, total: left === null ? '?' : done + left } };
+    case 'done': return { key: 'sync.stage.finishing' };
+    case 'downloading':
+    default:
+      if (done > 0 && left !== null) return { key: 'sync.stage.downloadingCount', values: { done, total: done + left } };
+      return { key: 'sync.stage.downloading' };
+  }
 };
 
 /* ------------------------------------------------------------ live changes */

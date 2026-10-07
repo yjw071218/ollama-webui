@@ -72,6 +72,6 @@ test('native metadata requires gateway authentication', async () => {
   try {
     assert.equal((await fetch(gateway.origin + '/__native/info')).status, 403);
     const response = await fetch(gateway.origin + '/__native/info', {headers:{'X-Native-Gateway':gateway.token}});
-    assert.deepEqual(await response.json(), {nativeGoogle:true,nativeKakao:true,googleLoopback:47615});
+    assert.deepEqual(await response.json(), {nativeGoogle:true,googleLoopback:47615});
   } finally {await gateway.close();}
 });

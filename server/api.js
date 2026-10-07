@@ -35,11 +35,6 @@ import { verifyGoogleIdToken } from './social.js';
 import { createGoogleHandoffs, nativeGooglePage } from './nativeGoogle.js';
 import { googleNativeRedirect, nativeGoogleDirectPage, nativeGoogleCallbackPage, createRedirectProbe, GOOGLE_LOOPBACK_REDIRECT } from './nativeGoogleDirect.js';
 import {
-  issueState, consumeState, authorizeUrl, exchangeCode, fetchProfile,
-  validAccessToken, readTokens, writeTokens, clearTokens,
-  logout as kakaoLogout, unlink as kakaoUnlink,
-} from './kakao.js';
-import {
   changesSince, applyChanges, accountStats, sweepTombstones,
   OwnerMismatch, MAX_RECORD_BYTES, MAX_BATCH_RECORDS,
 } from './records.js';
@@ -49,7 +44,6 @@ import {
 } from './shares.js';
 import { addListener, publishRev, dropListeners } from './liveSync.js';
 import { normaliseOrigin } from './origin.js';
-import { kakaoCallbackUri, oauthStateCookie, matchingStateCookie } from './oauthOrigin.js';
 import {
   fetchWithTimeout, fetchPageResponse, blockReason,
   htmlToText, decodeEntities, mainContent, readAsText, textOf,
@@ -1138,42 +1132,6 @@ export const createApiRoutes = (env = {}, options = {}) => {
       res.setHeader('X-Frame-Options', 'DENY');
       res.end(nativeGoogleCallbackPage());
     });
-    // A separate store prevents a Kakao completion being redeemed as Google.
-    const kakaoHandoffs = createGoogleHandoffs();
-    for (const action of ['start', 'poll']) route('/api/auth/native/kakao/' + action, async (req, res) => {
-      res.setHeader('Cache-Control', 'no-store');
-      if (req.method !== 'POST') return sendJson(res, { error: 'POST required.' }, 405);
-      if (!String(req.headers['content-type'] || '').startsWith('application/json'))
-        return sendJson(res, { error: 'JSON required.' }, 415);
-      try {
-        if (!kakaoCreds().restKey) return sendJson(res, { error: 'Kakao is not configured.' }, 501);
-        const body = await jsonBody(req);
-        if (action === 'start') return sendJson(res, kakaoHandoffs.start());
-        const result = kakaoHandoffs.poll(body.id, body.secret);
-        if (result.pending) return sendJson(res, result);
-        if (result.credential.error) return sendJson(res, { error: result.credential.error }, 400);
-        const user = result.credential.user;
-        const started = startSession(req, res, user);
-        sendJson(res, { success: true, sessionId: started.sessionId });
-      } catch (error) { sendError(res, error, 400); }
-    });
-    route('/api/auth/native/kakao', (req, res) => {
-      res.setHeader('Cache-Control', 'no-store');
-      if (req.method !== 'GET') return sendJson(res, { error: 'GET required.' }, 405);
-      try {
-        const id = new URL(req.url, 'http://localhost').searchParams.get('id');
-        if (!/^[a-f0-9]{64}$/.test(id || '')) throw new Error('Invalid login request.');
-        kakaoHandoffs.assertPending(id);
-        const { restKey } = kakaoCreds();
-        if (!restKey) throw new Error('Kakao is not configured.');
-        const redirectUri = kakaoCallbackUri(req, env);
-        const state = issueState({ redirectUri, nativeId: id });
-        res.setHeader('Set-Cookie', oauthStateCookie(state, isSecureRequest(req)));
-        res.setHeader('Referrer-Policy', 'no-referrer');
-        res.writeHead(302, { Location: authorizeUrl({ restKey, redirectUri, state }) });
-        res.end();
-      } catch (error) { sendError(res, error, 400); }
-    });
     /* Whether the apps may open Google's account chooser directly, through
        their loopback listener (nativeGoogleDirect.js). No means the page below. */
     const googleRedirectProbe = createRedirectProbe();
@@ -1714,14 +1672,14 @@ export const createApiRoutes = (env = {}, options = {}) => {
     // build time. A client ID is meant to be public — it names the app, not the
     // user — and serving it means any origin this backend answers on gets a
     // working sign-in button without anyone pasting keys into a settings box.
-    // The Kakao *client secret* is not here; it never leaves the server.
     route('/api/config', (req, res) => {
       res.setHeader('Content-Type', 'application/json');
       res.setHeader('Cache-Control', 'no-store');
       res.end(JSON.stringify({
         googleClientId: env.VITE_GOOGLE_CLIENT_ID || env.GOOGLE_CLIENT_ID || '',
-        kakaoRestKey: env.VITE_KAKAO_REST_KEY || env.KAKAO_REST_KEY || '',
-        kakaoSecretConfigured: !!env.KAKAO_CLIENT_SECRET,
+        // Kakao sign-in was removed; an empty key keeps older clients from
+        // offering a button that no longer has a server behind it.
+        kakaoRestKey: '',
         accounts: true,
         // So the sign-in screen offers the passkey button only where this
         // server can actually verify one.
@@ -1896,175 +1854,6 @@ export const createApiRoutes = (env = {}, options = {}) => {
       } catch (e) {
         json({ ok: false, error: e.message }, 500);
       }
-    });
-
-    // ---- Kakao Login ----
-    // The JS SDK v2 dropped Kakao.Auth.login(); the supported flow is the
-    // OAuth authorization code grant, and the token endpoint neither works
-    // from a browser (no CORS) nor accepts the JavaScript key. So the popup
-    // relays the code back here and the exchange happens server-side.
-
-    /**
-     * Where Kakao sends the browser back, and where the login finishes.
-     *
-     * This used to be an HTML page that posted the authorization code to the
-     * opener so a popup could exchange it. That put the code through the
-     * browser for no reason, needed a popup — which is blocked often and is
-     * miserable on a phone — and made the redirect URI a page rather than an
-     * endpoint. The documented flow is a plain redirect: the code arrives here,
-     * is exchanged here, and the browser leaves with a session cookie having
-     * never seen it.
-     */
-    route('/kakao/callback', async (req, res) => {
-      const url = new URL(req.url, 'http://localhost');
-      let context;
-      const back = async (params) => {
-        if (context?.nativeId) {
-          try {
-            await kakaoHandoffs.finish(context.nativeId, { error: params.detail || '로그인이 취소되었습니다. 다시 시도하세요.' }, async () => {});
-          } catch {}
-          res.setHeader('Content-Type', 'text/html; charset=utf-8');
-          res.setHeader('Cache-Control', 'no-store');
-          res.end('<!doctype html><meta charset="utf-8"><p>로그인이 취소되었거나 실패했습니다. 앱에서 다시 시도하세요.</p>');
-          return;
-        }
-        res.writeHead(302, { Location: `/?${new URLSearchParams(params)}` });
-        res.end();
-      };
-
-      const state = url.searchParams.get('state') || '';
-      if (!matchingStateCookie(req, state)) return back({ kakao: 'error', detail: 'Sign-in browser could not be verified. Start again in the same browser.' });
-      context = consumeState(state);
-      res.setHeader('Set-Cookie', oauthStateCookie('', isSecureRequest(req), true));
-      if (!context?.redirectUri) return back({ kakao: 'error', detail: 'That sign-in expired or was already used. Start it again.' });
-      const error = url.searchParams.get('error');
-      if (error) {
-        // Cancelling at the consent screen is not a failure worth shouting about.
-        const description = url.searchParams.get('error_description') || error;
-        return back(error === 'access_denied'
-          ? { kakao: 'cancelled' }
-          : { kakao: 'error', detail: description });
-      }
-
-      const code = url.searchParams.get('code') || '';
-      if (!code) return back({ kakao: 'cancelled' });
-
-      const { restKey, clientSecret } = kakaoCreds();
-      if (!restKey) return back({ kakao: 'error', detail: 'Kakao is not configured on this server.' });
-
-      // Preserve the exact URI used at authorization, including external HTTPS
-      // when TLS terminates before this server. Never rebuild from callback Host.
-      const redirectUri = context.redirectUri;
-
-      try {
-        const tokens = await exchangeCode({ code, restKey, redirectUri, clientSecret });
-        const identity = await fetchProfile(tokens.accessToken);
-        const user = findOrCreateSocialUser(identity);
-
-        writeTokens(user.id, tokens);
-        if (context.nativeId) {
-          await kakaoHandoffs.finish(context.nativeId, { user }, async () => {});
-          res.setHeader('Content-Type', 'text/html; charset=utf-8');
-          res.setHeader('Cache-Control', 'no-store');
-          res.setHeader('Referrer-Policy', 'no-referrer');
-          res.end('<!doctype html><meta charset="utf-8"><p>로그인되었습니다. 이 탭을 닫고 앱으로 돌아가세요.</p><script>window.close()</script>');
-          return;
-        }
-        // Arrives as a top-level redirect from Kakao, so this is the one
-        // sign-in that cannot carry a CSRF header; the `state` parameter
-        // checked above is what stands in for it.
-        startSession(req, res, user);
-        res.writeHead(302, { Location: '/?kakao=ok' });
-        res.end();
-      } catch (e) {
-        const raw = e.message || 'Sign-in failed';
-        let hint = '';
-        if (!clientSecret && /client_secret|invalid_client|KOE010/i.test(raw)) {
-          hint = ' — Client Secret is enabled on this app. Turn it off in the Kakao console '
-            + 'or set KAKAO_CLIENT_SECRET in .env and restart.';
-        } else if (/redirect|KOE006|KOE320/i.test(raw)) {
-          hint = ` — ${redirectUri} must be registered verbatim under 카카오 로그인 → Redirect URI.`;
-        }
-        back({ kakao: 'error', detail: raw + hint });
-      }
-    });
-
-    // ---- Kakao Login ----
-    //
-    // The documented flow: authorize, exchange, profile, logout, unlink. The
-    // exchange and everything after it happen here because they need the REST
-    // key and the client secret, and because `state` is only worth checking
-    // somewhere the browser cannot reach.
-
-    const kakaoCreds = () => ({
-      restKey: env.VITE_KAKAO_REST_KEY || env.KAKAO_REST_KEY || '',
-      clientSecret: env.KAKAO_CLIENT_SECRET || '',
-    });
-
-    // Step 1. The browser asks for a state rather than inventing one, so the
-    // value it later returns is one this server actually issued.
-    route('/kakao/start', (req, res) => {
-      const { restKey } = kakaoCreds();
-      if (!restKey) {
-        return sendJson(res, { success: false, error: 'Kakao is not configured on this server.' }, 501);
-      }
-      const url = new URL(req.url, 'http://localhost');
-      let redirectUri;
-      try { redirectUri = kakaoCallbackUri(req, env); }
-      catch { return sendJson(res, { success: false, error: '서버 OAuth 콜백 주소 설정을 확인하세요.' }, 503); }
-      const scope = url.searchParams.get('scope') || '';
-      const state = issueState({ redirectUri });
-      res.setHeader('Set-Cookie', oauthStateCookie(state, isSecureRequest(req)));
-      res.setHeader('Cache-Control', 'no-store');
-      sendJson(res, {
-        success: true,
-        state,
-        authorizeUrl: authorizeUrl({ restKey, redirectUri, state, scope }),
-      });
-    });
-
-    // Step 4. Signing out of this app should not leave the Kakao session up.
-    route('/kakao/logout', async (req, res) => {
-      const user = currentUser(req);
-      if (!user) return sendJson(res, { success: false, error: 'Not signed in.' }, 401);
-      try {
-        const token = await validAccessToken(user.id, kakaoCreds());
-        if (token) await kakaoLogout(token);
-        clearTokens(user.id);
-        sendJson(res, { success: true });
-      } catch (e) {
-        // The local session still ends; the Kakao one may already have.
-        clearTokens(user.id);
-        sendJson(res, { success: true, warning: e.message });
-      }
-    });
-
-    // Step 5. What "연결 끊기" means, and what deleting an account should do.
-    route('/kakao/unlink', async (req, res) => {
-      const user = currentUser(req);
-      if (!user) return sendJson(res, { success: false, error: 'Not signed in.' }, 401);
-      try {
-        const token = await validAccessToken(user.id, kakaoCreds());
-        if (!token) return sendJson(res, { success: false, error: 'This account has no Kakao connection.' }, 400);
-        await kakaoUnlink(token);
-        clearTokens(user.id);
-        sendJson(res, { success: true });
-      } catch (e) {
-        sendJson(res, { success: false, error: e.message }, 400);
-      }
-    });
-
-    // Whether this account still has a live Kakao connection.
-    route('/kakao/status', (req, res) => {
-      const user = currentUser(req);
-      const tokens = user ? readTokens(user.id) : null;
-      sendJson(res, {
-        success: true,
-        connected: !!tokens?.accessToken,
-        scope: tokens?.scope || '',
-        expiresAt: tokens?.accessTokenExpiresAt || null,
-        refreshable: !!tokens?.refreshToken,
-      });
     });
 
     /* The engines this app runs: GPT-SoVITS for speech, ACE-Step for songs.

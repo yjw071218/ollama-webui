@@ -29,6 +29,7 @@ import crypto from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { createApiRoutes } from './api.js';
 import { backendOf } from './llamacpp.js';
+import { ffmpegDir, enginesFor } from './engines.js';
 import { cliInterceptor, describeProviders } from './cliModels.js';
 import { inferenceHook, isInference, vramGuard } from './vram.js';
 import { isPrivateAddress, localAddresses, routedAddress } from './net.js';
@@ -69,6 +70,13 @@ const loadDotEnv = () => {
 };
 
 const env = loadDotEnv();
+/* The bundled FFmpeg (runtime/ffmpeg or engines/ffmpeg) first on PATH, so every
+   `ffmpeg` this server runs -- video joins, music, voice -- finds it on a PC
+   that never installed one. */
+{
+  const dir = ffmpegDir(env);
+  if (dir && !String(process.env.PATH || '').includes(dir)) process.env.PATH = `${dir}${path.delimiter}${process.env.PATH || ''}`;
+}
 await ensureManagedOllama(env);
 
 // 5173, not an arbitrary 8080: localStorage and IndexedDB are scoped per
@@ -463,7 +471,14 @@ const dispatch = (req, res, url) => {
   // machine without tripping over CORS and mixed content, so it goes through
   // here and inherits the origin the app is already trusted on.
   if (url.pathname.startsWith('/stt-api')) {
-    return proxy(STT, req, res, p => p.replace(/^\/stt-api/, '') || '/');
+    /* The bundled Whisper (engines.js "stt") is started on the first request
+       that needs it. Not installed, or another STT server configured: the
+       proxy goes ahead and the browser recogniser stays the fallback. */
+    const stt = enginesFor(env);
+    const toStt = () => proxy(STT, req, res, p => p.replace(/^\/stt-api/, '') || '/');
+    if (!stt.resolve('stt')?.installed) return toStt();
+    req.pause(); // the body waits while the engine starts
+    return stt.ensure('stt').catch(() => {}).then(toStt); // piping resumes it
   }
   /* Whatever the routes above did not claim.
    *
@@ -620,7 +635,7 @@ server.listen(PORT, HOST, async () => {
     const lan = usable[0]?.address;
     if (lan && !PUBLIC_ORIGIN) {
       console.log('');
-      console.log('  For Google / Kakao sign-in, use this hostname instead of the');
+      console.log('  For Google sign-in, use this hostname instead of the');
       console.log('  bare IP, and register it in their consoles. Putting it in');
       console.log('  PUBLIC_ORIGIN in .env makes it the address everything uses,');
       console.log('  which is what keeps the desktop and the phone on one login:');

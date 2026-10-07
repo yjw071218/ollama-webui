@@ -1,4 +1,4 @@
-﻿; Inno Setup script for the Windows installer.
+; Inno Setup script for the Windows installer.
 ; Built by .github/workflows/release.yml:  iscc /DAppVersion=1.2.3 installer\ollama-webui.iss
 ; Expects installer\stage\ to hold app\ (dist, server, assets...) and runtime\node.exe.
 ; Installs per user (no admin prompt) so the server can write its data and .env.
@@ -42,6 +42,9 @@ Source: "app.ico"; DestDir: "{app}"; Flags: ignoreversion
 [Dirs]
 ; Kept on uninstall-then-reinstall upgrades: chats and settings live here.
 Name: "{app}\app\server\data"; Flags: uninsneveruninstall
+; Voice and ComfyUI downloaded on first run (install-engines.mjs): many GB,
+; not to be fetched again after every upgrade.
+Name: "{app}\app\engines"; Flags: uninsneveruninstall
 
 [Icons]
 Name: "{group}\Ollama WebUI"; Filename: "{app}\OllamaWebUI.cmd"; WorkingDir: "{app}"; IconFilename: "{app}\app.ico"

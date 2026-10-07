@@ -1,5 +1,5 @@
 import React, { useEffect, useRef, useState } from 'react';
-import { X, Camera, Trash2, Check, RefreshCcw, TriangleAlert, Lock, LogOut, UserPlus, Unlink } from 'lucide-react';
+import { X, Camera, Trash2, Check, RefreshCcw, TriangleAlert, Lock, LogOut, UserPlus } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
 import { prepareAvatar } from './auth.jsx';
 import { updateProfile, changePassword } from './session.jsx';
@@ -30,7 +30,7 @@ export const ProfileAvatar = ({ user, size = 40, className = '' }) => {
   );
 };
 
-export const ProfileDialog = ({ user, onClose, onUpdated, onSignOut, onSwitch, onDelete, onUnlinkKakao }) => {
+export const ProfileDialog = ({ user, onClose, onUpdated, onSignOut, onSwitch, onDelete }) => {
   const { t } = useI18n();
   const fileRef = useRef(null);
 
@@ -231,11 +231,6 @@ export const ProfileDialog = ({ user, onClose, onUpdated, onSignOut, onSwitch, o
             <button className="icon-btn bordered" onClick={onSignOut}>
               <LogOut size={14} /> {t('auth.signOut')}
             </button>
-            {user.provider === 'kakao' && onUnlinkKakao && (
-              <button className="icon-btn bordered" onClick={onUnlinkKakao}>
-                <Unlink size={14} /> {t('auth.kakaoUnlink')}
-              </button>
-            )}
             <button className="icon-btn bordered" style={{ color: 'var(--danger)' }} onClick={onDelete}>
               <Trash2 size={14} /> {t('auth.deleteAccount')}
             </button>

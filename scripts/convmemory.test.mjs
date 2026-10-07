@@ -247,6 +247,14 @@ eq('an uncompressed conversation saves nothing',
 const app = fs.readFileSync(path.join(ROOT, 'src/App.jsx'), 'utf8').replace(/\r\n/g, '\n');
 const code = app.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/.*$/gm, '');
 
+const taskSummary = M.summaryPrompt([], '', 'Korean');
+check('summary keeps exact task paths and next steps', taskSummary.includes('exact active project paths') && taskSummary.includes('next unfinished step'));
+check('summary separates promises from evidence', taskSummary.includes('A promise to act is not completed work'));
+check('summary excludes credentials', taskSummary.includes('Never preserve secrets'));
+check('manual compaction also preserves execution state', app.includes('a promise is not execution'));
+const cliGuide = app.slice(app.indexOf('${cliTurn && mcpEnabled ?'), app.indexOf('if (mcpEnabled && !cliTurn'));
+check('native tool guide no longer tells the model to emit one tag and stop',
+  cliGuide.includes('native tools actually available') && !cliGuide.includes('emit exactly one and then stop'));
 check('the send path builds the context', /buildContext\(/.test(code));
 check('with the window it is actually sending into', /numCtx,/.test(code));
 check('the summary is kept on the chat, not recomputed every turn',

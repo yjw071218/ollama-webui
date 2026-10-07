@@ -5,9 +5,10 @@ import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { normalizeServer, startProxy } from './proxy.mjs';
 import { createUpdater } from './updater.mjs';
-import { loadTrustedPage, kakaoAuthURL } from './navigation.mjs';
+import { loadTrustedPage } from './navigation.mjs';
 import { createClientWindow, chromeOptions } from './chrome.mjs';
 import { appDialog } from './dialog.mjs';
+import { loadGrants, rememberGrant } from './permissions.mjs';
 import { parseGoogleHandoff, googleAuthorizeUrl, startGoogleLoopback } from './googleLoopback.mjs';
 const showError = (title, message) => appDialog(clientWindow && !clientWindow.isDestroyed() ? clientWindow : setupWindow, { title, message });
 
@@ -61,7 +62,9 @@ async function connect(value) {
     catch (error) { if (error.code === 'EADDRINUSE') throw new Error('저장된 앱 포트가 사용 중입니다. 다른 앱 인스턴스를 종료한 후 다시 시도하세요.'); throw error; }
     const current = gateway;
     const ses = session.fromPartition('persist:server-' + key);
-    const grants = new Set();
+    const supportedPermissions = ['media', 'notifications', 'clipboard-read', 'clipboard-sanitized-write', 'fullscreen', 'pointerLock', 'idle-detection', 'speaker-selection'];
+    // What this server was told it may always have (다시 묻지 않기) starts out granted.
+    const grants = loadGrants(app.getPath('userData'), key, supportedPermissions);
     const winGone = () => !clientWindow || clientWindow.isDestroyed() || clientWindow.clientContents.isDestroyed();
     const trusted = (wc, url) => wc === clientWindow?.clientContents && sameOrigin(wc?.getURL(), current.origin) && sameOrigin(url, current.origin);
     ses.webRequest.onBeforeSendHeaders((details, callback) => {
@@ -72,15 +75,17 @@ async function connect(value) {
     ses.setPermissionCheckHandler((wc, permission, requestingOrigin) =>
       trusted(wc, requestingOrigin) && grants.has(permission));
     ses.setPermissionRequestHandler(async (wc, permission, callback, details) => {
-      const supported = ['media', 'notifications', 'clipboard-read', 'clipboard-sanitized-write', 'fullscreen', 'pointerLock', 'idle-detection', 'speaker-selection'];
+      const supported = supportedPermissions;
       const requestingURL = details.requestingUrl || details.securityOrigin || wc?.getURL();
       if (!trusted(wc, requestingURL) || details.isMainFrame === false || !supported.includes(permission)) { callback(false); return; }
       if (grants.has(permission)) { callback(true); return; }
       const labels = { media: '마이크 / 카메라 (' + (details.mediaTypes || []).join(', ') + ')', notifications: '알림', 'clipboard-read': '클립보드 읽기', 'clipboard-sanitized-write': '클립보드 쓰기', fullscreen: '전체 화면', pointerLock: '마우스 제어' };
       try {
-        const result = await appDialog(clientWindow, { type: 'question', title: '권한 요청', message: (labels[permission] || permission) + ' 권한을 허용하시겠습니까?', detail: server + '\n현재 앱 실행 동안만 허용됩니다.', buttons: ['거부', '허용'], defaultId: 0, cancelId: 0 });
-        const allowed = result.response === 1 && trusted(wc, requestingURL);
+        const result = await appDialog(clientWindow, { type: 'question', title: '권한 요청', message: (labels[permission] || permission) + ' 권한을 허용하시겠습니까?', detail: server + '\n"이번만 허용"은 앱을 다시 시작하면 다시 묻습니다. "항상 허용"을 고르면 이 서버에는 다시 묻지 않습니다.', buttons: ['거부', '이번만 허용', '항상 허용 (다시 묻지 않기)'], defaultId: 0, cancelId: 0 });
+        const allowed = (result.response === 1 || result.response === 2) && trusted(wc, requestingURL);
         if (allowed) grants.add(permission);
+        // 다시 묻지 않기: remembered for this server across restarts.
+        if (allowed && result.response === 2) rememberGrant(app.getPath('userData'), key, permission);
         callback(allowed);
       } catch { callback(false); }
     });
@@ -122,13 +127,9 @@ async function connect(value) {
           if (google) void googleDirect(google).catch(() => {});
           else if (/^#[a-f0-9]{64}$/.test(u.hash))
             void shell.openExternal(server + '/api/auth/native/page' + u.hash).catch(() => {});
-          else if (/^#kakao:[a-f0-9]{64}$/.test(u.hash))
-            void shell.openExternal(server + '/api/auth/native/kakao?id=' + u.hash.slice(7)).catch(() => {});
         }
         return;
       }
-      // Kakao login finishes in this window so the state cookie on the app origin matches.
-      if (kakaoAuthURL(url)) return;
       event.preventDefault();
       if (sameOrigin(url, server)) {
         const u = new URL(url); void win.loadClientURL(current.origin + u.pathname + u.search + u.hash).catch(() => {}); // loadTrustedPage observes completion/failure.

@@ -29,6 +29,7 @@
 // genuinely per-tab, and it lives in the only per-tab store there is.
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { ServerOffline, ConnectionBanner } from './ServerOffline.jsx';
 
 const SessionContext = createContext(null);
 
@@ -226,19 +227,38 @@ export const SessionProvider = ({ children, fallback = null }) => {
     return next;
   }, []);
 
+  const statusRef = useRef(status);
+  statusRef.current = status;
+  // Chose to carry on without the server; the banner re-reads the session when it is back.
+  const [offlineChosen, setOfflineChosen] = useState(false);
+
   /** Ask the server who this is. The only way anything here learns that. */
   const refresh = useCallback(async () => {
     try {
       const data = await api('/api/auth/session');
       setError(null);
+      setOfflineChosen(false);
       return apply(data);
     } catch (e) {
-      // No backend, or it is down. Signed out is the truthful answer: without a
-      // server there is no account, and the app runs as the guest. What must
-      // not happen is staying in `loading` forever with a blank screen.
       setError(e);
+      /* The server cannot be reached at all -- not "signed out", but nobody
+         there to ask. At start-up that is a screen of its own (ServerOffline)
+         rather than quietly running as the guest, which showed somebody
+         signed in an empty app and filed what they typed under the guest. */
+      const unreachable = e?.code === 'offline' || [502, 504].includes(e?.status);
+      if (unreachable && (statusRef.current === 'loading' || statusRef.current === 'offline')) {
+        setStatus('offline');
+        return null;
+      }
+      // Answered, but not with a session: signed out is the truthful answer.
+      // What must not happen is staying in `loading` forever with a blank screen.
       return apply(EMPTY);
     }
+  }, [apply]);
+
+  const continueOffline = useCallback(() => {
+    setOfflineChosen(true);
+    apply(EMPTY);
   }, [apply]);
 
   useEffect(() => { refresh(); }, [refresh]);
@@ -345,8 +365,16 @@ export const SessionProvider = ({ children, fallback = null }) => {
   }), [status, session, error, refresh, adopt, signOut, addAccount, switchTo]);
 
   if (status === 'loading') return fallback;
+  if (status === 'offline') return <ServerOffline onRetry={refresh} onContinue={continueOffline} />;
 
-  return <SessionContext.Provider value={value}>{children}</SessionContext.Provider>;
+  return (
+    <SessionContext.Provider value={value}>
+      {/* Carried on offline: the session is read again once the server is
+          back, and the app is remounted for whoever is signed in. */}
+      <ConnectionBanner onBack={offlineChosen ? refresh : undefined} />
+      {children}
+    </SessionContext.Provider>
+  );
 };
 
 export const useSession = () => {

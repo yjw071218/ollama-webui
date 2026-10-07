@@ -25,6 +25,19 @@ const MESSAGE_PARTS = new RegExp(
 /* Whether a tag sits in code: see src/codeAware.js. */
 export { insideCode };
 
+/**
+ * Thinking text, made safe to put between `<think>` and `</think>`.
+ *
+ * A coding CLI working on this very app greps and edits files that contain
+ * the string `</think>`, and its tool output and `[input: …]` notes land in
+ * the thinking verbatim. The first such `</think>` closed the block early:
+ * everything after it -- `[at: …]`, `[tool: …]`, `[/output]` and the rest of
+ * the reasoning -- was shown as answer text instead of as timeline steps.
+ * A zero-width space inside the tag keeps it readable but no longer a tag.
+ */
+const ZWSP = String.fromCharCode(0x200B);
+export const fenceThinking = (text) => String(text || '').replace(/<(\/?)think>/gi, (_, slash) => `<${slash}think${ZWSP}>`);
+
 /** One tool call as a block, from its name, attribute text and body. */
 const toolCallBlock = (tool, attrText, body = '', extra = {}) => {
   const name = String(tool).toUpperCase();

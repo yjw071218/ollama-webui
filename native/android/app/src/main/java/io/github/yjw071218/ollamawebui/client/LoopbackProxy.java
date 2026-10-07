@@ -77,13 +77,14 @@ public final class LoopbackProxy implements Closeable {
         while ((n = in.read(buffer)) != -1) { out.write(buffer, 0, n); out.flush(); }
     }
     private void serve(Socket client) {
-        Socket upstream = null; boolean responseStarted = false;
+        Socket upstream = null; boolean responseStarted = false; String requestPath = null;
         try {
             client.setSoTimeout(300000);
             InputStream input = new BufferedInputStream(client.getInputStream());
             String request = line(input);
             if (request == null) return;
             String[] parts = request.split(" ", 3);
+            if (parts.length > 1) requestPath = parts[1];
             List<String[]> h = headers(input);
             boolean authenticated = Arrays.stream(header(h, "cookie").split(";"))
                 .anyMatch(v -> v.trim().equals(COOKIE + "=" + token));
@@ -95,7 +96,7 @@ public final class LoopbackProxy implements Closeable {
                 write(client.getOutputStream(), "HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\nConnection: close\r\n\r\n"); return;
             }
             if ("GET".equals(parts[0]) && "/__native/info".equals(parts[1])) {
-                byte[] body = "{\"nativeGoogle\":true,\"nativeKakao\":true,\"googleLoopback\":47615}".getBytes(StandardCharsets.UTF_8); // GoogleLoopback.PORT
+                byte[] body = "{\"nativeGoogle\":true,\"googleLoopback\":47615}".getBytes(StandardCharsets.UTF_8); // GoogleLoopback.PORT
                 write(client.getOutputStream(), "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nCache-Control: no-store\r\nContent-Length: " + body.length + "\r\nConnection: close\r\n\r\n");
                 client.getOutputStream().write(body); return;
             }
@@ -162,8 +163,12 @@ public final class LoopbackProxy implements Closeable {
             pump(response, client.getOutputStream());
         } catch (Exception ignored) {
             if (!responseStarted) try {
-                byte[] body = "서버 연결에 실패했습니다. 주소와 서버 실행 상태를 확인하고 상단 새로고침을 누르세요.".getBytes(StandardCharsets.UTF_8);
-                write(client.getOutputStream(), "HTTP/1.1 502 Bad Gateway\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: " + body.length + "\r\nConnection: close\r\n\r\n");
+                // The page's own API calls parse JSON, so they are answered in JSON:
+                // a plain sentence there surfaced as "Unexpected token '서'".
+                String message = "서버 연결에 실패했습니다. 주소와 서버 실행 상태를 확인하고 상단 새로고침을 누르세요.";
+                boolean api = requestPath != null && requestPath.startsWith("/api/");
+                byte[] body = (api ? "{\"error\":\"" + message + "\",\"code\":\"offline\"}" : message).getBytes(StandardCharsets.UTF_8);
+                write(client.getOutputStream(), "HTTP/1.1 502 Bad Gateway\r\nContent-Type: " + (api ? "application/json" : "text/plain") + "; charset=utf-8\r\nContent-Length: " + body.length + "\r\nConnection: close\r\n\r\n");
                 client.getOutputStream().write(body);
             } catch (IOException alsoIgnored) { }
         } finally {

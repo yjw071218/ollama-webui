@@ -2168,3 +2168,26 @@
   overflow-wrap: anywhere;
   min-width: 0;
 }
+
+/* Mobile cards must own their entire action row, including inherited button min-width. */
+.studio-job, .studio-job-info, .studio-job-caption { min-width: 0; }
+.studio-lora-row { grid-template-columns: 42px minmax(0, 1fr) 64px 32px; min-width: 0; }
+.studio-lora-toggle { min-width: 0; min-height: 36px; padding: 4px; border: 1px solid var(--border-color); border-radius: 8px; background: var(--bg-secondary); color: var(--text-secondary); cursor: pointer; }
+.studio-lora-toggle[aria-checked="true"] { color: var(--btn-active); border-color: currentColor; }
+.studio-lora-row.is-disabled .studio-picker, .studio-lora-row.is-disabled input { opacity: .55; }
+@media (hover: none), (max-width: 939px) {
+ .studio-job-actions { position: static; display: flex; flex-wrap: wrap; justify-content: flex-start; gap: 4px; width: 100%; max-width: 100%; min-width: 0; margin: 4px 0 0; box-sizing: border-box; }
+ .studio-job-actions .icon-btn { flex: 0 0 36px; width: 36px; min-width: 36px; height: 40px; min-height: 40px; padding: 0; margin: 0; }
+ .studio-job-actions .icon-btn svg { width: 16px; height: 16px; }
+ .studio-table, .studio-form, .studio-gallery, .studio-tools { min-width: 0; max-width: 100%; box-sizing: border-box; }
+ .studio-gallery.is-density-s { grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr)); }
+ .studio-gallery.is-density-l { grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); }
+ .studio-job-menu { position: fixed; left: 12px; right: 12px; top: auto; bottom: max(12px, env(safe-area-inset-bottom)); min-width: 0; max-height: 60dvh; overflow-y: auto; z-index: 1000; }
+ .studio-tools { flex-wrap: wrap; gap: 8px; position: static; }
+ .studio-tools > * { min-width: 0; max-width: 100%; }
+ .studio-tools input, .studio-tools select { max-width: 100%; box-sizing: border-box; }
+ .studio-job-prompt, .studio-job-meta { overflow-wrap: anywhere; }
+ .studio-form .settings-input { min-width: 0; max-width: 100%; }
+ .studio-footer { padding-bottom: max(12px, env(safe-area-inset-bottom)); }
+}
+@media (max-width: 380px) { .studio-lora-row { grid-template-columns: 40px minmax(0,1fr) 32px; } .studio-lora-row .studio-picker { grid-column: 2 / -1; } .studio-lora-weight { grid-column: 2; } }

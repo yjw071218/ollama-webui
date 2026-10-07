@@ -76,58 +76,7 @@ test('direct page config cannot terminate the inline script', () => {
   assert.ok(!nativeGoogleDirectPage('</script><script>bad()', callback).includes('</script><script>bad()'));
 });
 
-test('Kakao native retry cancels old polling and claims the app session', async () => {
+test('Kakao sign-in is gone from the client', () => {
   const source = readFileSync(new URL('../src/auth.jsx', import.meta.url), 'utf8');
-  const block = source.slice(source.indexOf('let kakaoAttempt = 0;'), source.indexOf('export const readKakaoOutcome'));
-  const timers = [], urls = [], posts = [];
-  let count = 0, opened = 0;
-  const context = {
-    AbortSignal, Date, Promise, encodeURIComponent,
-    fetch: async () => ({ok:true, headers:{get:()=> 'application/json'}, json:async()=>({nativeKakao:true})}),
-    api: async (url, options) => {
-      posts.push({url, options});
-      return url.endsWith('/start') ? {id: 'id-'+ ++count,secret:'secret'} : {sessionId:'session-1'};
-    },
-    window: {location:{assign:url=>urls.push(url)}},
-    setTimeout: fn => timers.push(fn),
-  };
-  vm.runInNewContext(block.replace('export const signInWithKakao', 'globalThis.signInWithKakao'), context);
-  const first = context.signInWithKakao({onOpened:()=>opened++});
-  for (let i=0;i<15;i++) await Promise.resolve();
-  const second = context.signInWithKakao({onOpened:()=>opened++});
-  for (let i=0;i<15;i++) await Promise.resolve();
-  assert.equal(opened, 2);
-  assert.equal(urls[0], '/__native/auth#kakao:id-1');
-  timers.shift()(); await first;
-  assert.equal(posts.filter(p=>p.url.endsWith('/poll')).length, 0);
-  timers.shift()(); await second;
-  assert.equal(urls.at(-1), '/?kakao=ok&sid=session-1');
-});
-
-test('Kakao in the app falls back to the in-app sign-in when the server predates the handoff (404)', async () => {
-  const source = readFileSync(new URL('../src/auth.jsx', import.meta.url), 'utf8');
-  const block = source.slice(source.indexOf('let kakaoAttempt = 0;'), source.indexOf('export const readKakaoOutcome'));
-  const urls = [], calls = [];
-  const fail = (status) => Object.assign(new Error('HTTP ' + status), { status });
-  const context = (startStatus) => ({
-    AbortSignal, Date, Promise, encodeURIComponent,
-    kakaoRedirectUri: () => 'http://app/kakao/callback',
-    fetch: async () => ({ok:true, headers:{get:()=> 'application/json'}, json:async()=>({nativeKakao:true})}),
-    api: async (url) => {
-      calls.push(url);
-      if (url.endsWith('/native/kakao/start')) throw fail(startStatus);
-      return { authorizeUrl: 'https://kauth.kakao.com/oauth/authorize?x=1' };
-    },
-    window: {location:{assign:url=>urls.push(url), origin:'http://app'}},
-    setTimeout: fn => fn(),
-  });
-  const old = context(404);
-  vm.runInNewContext(block.replace('export const signInWithKakao', 'globalThis.signInWithKakao'), old);
-  assert.equal((await old.signInWithKakao()).redirecting, true);
-  assert.equal(urls.at(-1), 'https://kauth.kakao.com/oauth/authorize?x=1');
-  assert.ok(calls.some(u => u.startsWith('/kakao/start')));
-  const broken = context(500);
-  vm.runInNewContext(block.replace('export const signInWithKakao', 'globalThis.signInWithKakao'), broken);
-  const result = await broken.signInWithKakao();
-  assert.equal(result.error, 'auth.kakaoFailed');
+  assert.doesNotMatch(source, /signInWithKakao|kakaoRedirectUri|readKakaoOutcome/);
 });

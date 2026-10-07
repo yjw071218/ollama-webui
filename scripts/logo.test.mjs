@@ -200,7 +200,9 @@ check('the sidebar draws the mark rather than a stock icon',
 
 const digest = crypto.createHash('sha256');
 for (const f of ['public/favicon.svg', 'public/icon-maskable.svg', 'public/icons.svg', 'public/manifest.webmanifest']) {
-  digest.update(fs.readFileSync(path.join(ROOT, f)));
+  // Hashed with LF newlines, as git stores them, so a Windows checkout in CRLF
+  // and a Linux one in LF give the same digest.
+  digest.update(fs.readFileSync(path.join(ROOT, f), 'utf8').replace(/\r\n/g, '\n'));
 }
 const iconsRev = digest.digest('hex').slice(0, 8);
 

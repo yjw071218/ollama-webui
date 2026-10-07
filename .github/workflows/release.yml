@@ -61,6 +61,24 @@ jobs:
           New-Item -ItemType Directory -Force "$stage/runtime/node_modules" | Out-Null
           Copy-Item -Recurse "node-tmp/node-v$env:NODE_RUNTIME-win-x64/node_modules/npm" "$stage/runtime/node_modules/"
           Copy-Item "node-tmp/node-v$env:NODE_RUNTIME-win-x64/npm.cmd", "node-tmp/node-v$env:NODE_RUNTIME-win-x64/npx.cmd" "$stage/runtime/"
+          # FFmpeg ships inside (about 100 MB): video joins and voice need it,
+          # and server/engines.js ffmpegDir finds it in runtime/ffmpeg/bin.
+          # GPT-SoVITS and ComfyUI are too big for a release file; the first
+          # run downloads them (server/install-engines.mjs).
+          Invoke-WebRequest 'https://www.gyan.dev/ffmpeg/builds/ffmpeg-release-essentials.zip' -OutFile ffmpeg.zip
+          Expand-Archive ffmpeg.zip -DestinationPath ffmpeg-tmp
+          $ff = Get-ChildItem ffmpeg-tmp -Directory | Select-Object -First 1
+          New-Item -ItemType Directory -Force "$stage/runtime/ffmpeg" | Out-Null
+          Copy-Item -Recurse "$($ff.FullName)/bin" "$stage/runtime/ffmpeg/"
+          Copy-Item "$($ff.FullName)/LICENSE" "$stage/runtime/ffmpeg/" -ErrorAction SilentlyContinue
+          # The default voice (about 290 MB), from the voice-model-v1 release.
+          # install-engines.mjs copies it into GPT-SoVITS once that is installed
+          # and points tts_infer.yaml at it. The reference audio is not shipped:
+          # whoever installs the app picks it in Settings -> Voice.
+          New-Item -ItemType Directory -Force "$stage/runtime/voice-model" | Out-Null
+          foreach ($f in 'ai-voice.ckpt', 'ai-voice.pth') {
+            Invoke-WebRequest "https://github.com/${{ github.repository }}/releases/download/voice-model-v1/$f" -OutFile "$stage/runtime/voice-model/$f"
+          }
           # Started with the node.exe that ships, the way the installed copy runs.
           $env:CHECK_NODE = (Resolve-Path "$stage/runtime/node.exe").Path
           node scripts/desktop/stage.mjs $stage --check

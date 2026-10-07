@@ -97,7 +97,8 @@ check('small controls get a thumb-sized hit area on touch',
   /@media \(pointer: coarse\), \(max-width: 640px\) \{[\s\S]*?\.composer-model-trigger::after,\s*\.studio-describe::after \{[\s\S]*?inset: -8px -4px;[\s\S]*?\.settings-modal input\[type='range'\] \{ min-height: 32px; \}/.test(css));
 check('icon-only buttons in settings are named',
   /className="pull-btn" onClick=\{handleDownload\}[^>]*aria-label=\{t\('models\.pull'\)\}/.test(app)
-  && (app.match(/copyToClipboard\((registerableOrigin|kakaoRedirectUri\(\))\);[^\n]*\n\s*aria-label=\{t\('common\.copy'\)\}/g) || []).length === 2);
+  // One copy button left (the origin); the Kakao redirect one went with Kakao sign-in.
+  && (app.match(/copyToClipboard\(registerableOrigin\);[^\n]*\n\s*aria-label=\{t\('common\.copy'\)\}/g) || []).length === 1);
 
 /* ------------------------------------------- roleplay place */
 {

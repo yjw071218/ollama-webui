@@ -499,8 +499,8 @@ check('.env.example documents the switch',
   const vramSource = fs.readFileSync(path.join(ROOT, 'server/vram.js'), 'utf8');
   check('Ollama generation has no default silence deadline',
     /export const OLLAMA_IDLE_MS = 0;/.test(vramSource)
-    && /out\.setTimeout\(idleMs,/.test(vramSource)
-    && !/out\.setTimeout\(120000/.test(vramSource));
+    && /request\.setTimeout\(idleMs,/.test(vramSource)
+    && !/\.setTimeout\(120000/.test(vramSource));
   check('  and .env can say otherwise', /env\.OLLAMA_IDLE_TIMEOUT_MS/.test(vramSource));
 }
 

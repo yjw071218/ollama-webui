@@ -20,7 +20,9 @@ const check = (name, cond, detail = '') => {
 };
 const eq = (name, got, want) => check(name, JSON.stringify(got) === JSON.stringify(want),
   `got ${JSON.stringify(got)} want ${JSON.stringify(want)}`);
-const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8');
+// LF either way: `core.autocrlf=true` checks out CRLF on Windows, which also
+// pushes text past the fixed-size windows sliced out below.
+const read = (file) => fs.readFileSync(path.join(ROOT, file), 'utf8').replace(/\r\n/g, '\n');
 
 /* ================================================================= the spec
 

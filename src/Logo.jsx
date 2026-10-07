@@ -10,19 +10,21 @@
  * about a third. See the favicon for why they are graded rather than
  * concentric, and why the spacing is what it is.
  */
-export const Logo = ({ size = 16, className = '' }) => (
+/* `spinning` turns the two arcs at different speeds (and directions) around
+   the centre -- see `.logo-spinning` in extras.css. */
+export const Logo = ({ size = 16, className = '', spinning = false }) => (
   <svg
     width={size}
     height={size}
     viewBox="0 0 32 32"
-    className={className}
+    className={`${className}${spinning ? ' logo-spinning' : ''}`.trim()}
     aria-hidden="true"
     focusable="false"
   >
     {/* currentColor, so the mark takes the colour of whatever it sits in. */}
     <g fill="none" stroke="currentColor" strokeLinecap="round">
-          <path d="M15 4.54A11.5 11.5 0 1 1 6.58 9.4" strokeWidth={2.6} />
-          <path d="M15.44 9.62A6.4 6.4 0 0 1 20.53 20.53" strokeWidth={2.8} />
+          <g className="logo-ring logo-ring-outer"><path d="M15 4.54A11.5 11.5 0 1 1 6.58 9.4" strokeWidth={2.6} /></g>
+          <g className="logo-ring logo-ring-inner"><path d="M15.44 9.62A6.4 6.4 0 0 1 20.53 20.53" strokeWidth={2.8} /></g>
         </g>
         <circle cx="16" cy="16" r={2.3} fill="currentColor" />
   </svg>

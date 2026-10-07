@@ -85,6 +85,31 @@ const toRecord = (row) => ({
 export const currentRev = (userId) =>
   database().prepare('SELECT rev FROM users WHERE id = ?').get(userId)?.rev ?? 0;
 
+/* A page is capped by size as well as by count. Five hundred records of chats
+   carrying pictures is tens of megabytes, and on a phone that one response is
+   a long silence -- the first-sync bar sat at 0% for its whole download and
+   then jumped. Smaller pages keep the bar moving and a dropped connection
+   costs one page rather than the lot. At least one record always goes, so a
+   single large record still makes progress. */
+export const PAGE_BYTES = 2 * 1024 * 1024;
+
+const pageOf = (rows, limit, maxBytes = PAGE_BYTES) => {
+  let bytes = 0;
+  let end = 0;
+  for (; end < rows.length && end < limit; end++) {
+    bytes += rows[end].payload ? rows[end].payload.length : 0;
+    if (end > 0 && bytes > maxBytes) break;
+  }
+  return { page: rows.slice(0, end), complete: end === rows.length };
+};
+
+/* How many records are still above the cursor -- what lets a client show
+   "120 of 1,350" instead of guessing from revision numbers, which are spread
+   unevenly (a chat edited a hundred times holds one record at its latest
+   revision) and made the bar leap from 0% to 87%. */
+const remainingAbove = (handle, userId, cursor) =>
+  handle.prepare('SELECT COUNT(*) AS n FROM records WHERE user_id = ? AND rev > ?').get(userId, cursor)?.n ?? 0;
+
 /**
  * Everything that changed above `since`.
  *
@@ -97,7 +122,7 @@ export const currentRev = (userId) =>
  * so a first sync of a large account arrives in pages rather than in one
  * request that times out.
  */
-export const changesSince = (userId, since = 0, limit = 500) => {
+export const changesSince = (userId, since = 0, limit = 500, maxBytes = PAGE_BYTES) => {
   const rows = database().prepare(`
     SELECT kind, id, rev, updated_at, deleted, payload
       FROM records
@@ -106,16 +131,17 @@ export const changesSince = (userId, since = 0, limit = 500) => {
      LIMIT ?
   `).all(userId, since, limit + 1);
 
-  const complete = rows.length <= limit;
-  const page = complete ? rows : rows.slice(0, limit);
+  const { page, complete } = pageOf(rows, limit, maxBytes);
+  // The revision actually reached. Not the account's current one: a client
+  // that recorded the latter after a partial page would skip everything it
+  // had not been sent.
+  const rev = complete ? currentRev(userId) : page[page.length - 1].rev;
 
   return {
     records: page.map(toRecord),
-    // The revision actually reached. Not the account's current one: a client
-    // that recorded the latter after a partial page would skip everything it
-    // had not been sent.
-    rev: complete ? currentRev(userId) : page[page.length - 1].rev,
+    rev,
     complete,
+    remaining: complete ? 0 : remainingAbove(database(), userId, rev),
   };
 };
 
@@ -150,7 +176,7 @@ const validate = (record) => {
  * the session rather than trusted, because a client that has got confused about
  * who is signed in will otherwise file one person's chats under another's.
  */
-export const applyChanges = (userId, { since = 0, records = [], ownerId = null, limit = 500 } = {}) => {
+export const applyChanges = (userId, { since = 0, records = [], ownerId = null, limit = 500, maxBytes = PAGE_BYTES } = {}) => {
   if (ownerId && ownerId !== userId) throw new OwnerMismatch(userId, ownerId);
   if (!Array.isArray(records)) throw new Error('Changes must be a list.');
   if (records.length > MAX_BATCH_RECORDS) {
@@ -280,11 +306,11 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
        LIMIT ?
     `).all(userId, since, limit + 1);
 
-    const complete = rows.length <= limit;
-    const page = complete ? rows : rows.slice(0, limit);
+    const { page, complete } = pageOf(rows, limit, maxBytes);
     const rev = handle.prepare('SELECT rev FROM users WHERE id = ?').get(userId)?.rev ?? 0;
     // Fixed before anything is appended below: the cursor is the page's.
     const cursor = complete ? rev : page[page.length - 1].rev;
+    const remaining = complete ? 0 : remainingAbove(handle, userId, cursor);
 
     /* The winning copy of every rejected record, even when its revision is at
        or below `since`. The comment above used to promise this, but the
@@ -318,6 +344,7 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
       records: page.map(toRecord),
       rev: cursor,
       complete,
+      remaining,
     };
   });
 };

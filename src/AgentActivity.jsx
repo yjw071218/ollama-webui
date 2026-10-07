@@ -244,10 +244,19 @@ const Step = ({ step }) => {
   );
 };
 
-export const AgentActivity = ({ text, live = false, markdownProps = {} }) => {
+/* `stepsOnly`: the steps alone, folded under their summary line. The chat
+   shows the reasoning in the "생각하는 중" fold and the steps here, below it;
+   with both in the one fold, every 실행/수정 appeared inside the thinking.
+   Running commands are followed by the pill in the corner (CommandsDock), so
+   the fold stays shut unless a step is waiting on an approval. */
+export const AgentActivity = ({ text, live = false, markdownProps = {}, stepsOnly = false }) => {
   const { t } = useI18n();
-  const segments = useMemo(() => activityOf(text, { live }), [text, live]);
+  const all = useMemo(() => activityOf(text, { live }), [text, live]);
+  const segments = useMemo(() => (stepsOnly ? all.filter(s => s.type === 'step') : all), [all, stepsOnly]);
   const summary = activitySummary(segments);
+  const waiting = segments.some(s => s.status === 'waiting');
+  const [opened, setOpened] = useState(null);
+  const open = !stepsOnly || (opened ?? waiting);
   const stepsTimed = segments.filter(s => s.type === 'step' && s.at);
   const total = stepsTimed.length > 1 ? (stepsTimed[stepsTimed.length - 1].endAt || stepsTimed[stepsTimed.length - 1].at) - stepsTimed[0].at : 0;
 
@@ -260,8 +269,16 @@ export const AgentActivity = ({ text, live = false, markdownProps = {} }) => {
   }
 
   return (
-    <div className="agent-activity">
-      <div className="agent-summary">
+    <div className={`agent-activity${stepsOnly ? ' is-steps-only' : ''}`}>
+      <div
+        className={`agent-summary${stepsOnly ? ' is-toggle' : ''}`}
+        {...(stepsOnly ? {
+          role: 'button', tabIndex: 0, 'aria-expanded': open,
+          onClick: () => setOpened(!open),
+          onKeyDown: (e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setOpened(!open); } },
+        } : {})}
+      >
+        {stepsOnly && <ChevronDown size={12} className={`agent-step-chevron ${open ? 'is-open' : ''}`} aria-hidden="true" />}
         <Activity size={12} aria-hidden="true" />
         <span>{t('agent.summary', { steps: summary.steps })}</span>
         {total > 0 && <span className="agent-chip"><Clock size={11} />{duration(total)}</span>}
@@ -270,7 +287,7 @@ export const AgentActivity = ({ text, live = false, markdownProps = {} }) => {
         {summary.failed > 0 && <span className="agent-chip is-failed"><X size={11} />{summary.failed}</span>}
         {summary.running && <span className="agent-chip is-running"><Loader2 size={11} className="spin" />{t('agent.working')}</span>}
       </div>
-      {groups.map((group, n) => (group.type === 'steps'
+      {open && groups.map((group, n) => (group.type === 'steps'
         ? (
           <ol key={n} className="agent-steps">
             {group.steps.map((step, k) => <Step key={k} step={step} />)}

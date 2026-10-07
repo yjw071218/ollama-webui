@@ -83,7 +83,7 @@ if (usable.length === 0) {
 const lan = usable[0]?.address;
 if (lan) {
   note('');
-  note(`For Google/Kakao sign-in use http://${lan}.nip.io:${PORT} — Google refuses`);
+  note(`For Google sign-in use http://${lan}.nip.io:${PORT} — Google refuses`);
   note('a bare IP as an origin, and nip.io resolves straight back to this address.');
 }
 

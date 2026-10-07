@@ -39,6 +39,8 @@ import https from 'node:https';
 import { beginChatJob, appendChatChunk, finishChatJob, attachChatController } from './chatJobs.js';
 import { ownerOfRequest } from './session.js';
 import { backendOf } from './llamacpp.js';
+import { createModelMemory, isOutOfMemory, requestedModel } from './modelMemory.js';
+import os from 'node:os';
 
 const trimmed = (url) => String(url).replace(/\/$/, '');
 
@@ -441,7 +443,7 @@ const STOPPED = 'Stopped: the graphics card was needed for a picture or video. A
  * while it does. `track` registers it with the guard, which can stop it when
  * ComfyUI needs the card (see `releaseLlm`).
  */
-const forward = (target, req, res, body, track, completed, idleMs = OLLAMA_IDLE_MS) => {
+const forward = (target, req, res, body, track, completed, idleMs = OLLAMA_IDLE_MS, retry = null) => {
   const upstream = new URL(target);
   const jobId = String(req.headers['x-chat-job-id'] || '').trim();
   if (jobId) {
@@ -484,12 +486,42 @@ const forward = (target, req, res, body, track, completed, idleMs = OLLAMA_IDLE_
     }
     finish();
     answer?.destroy();
-    out.destroy();
+    out?.destroy();
   };
-  const out = client.request({
+  let out = null;
+  let retried = false;
+  /* One attempt. A second is made only when Ollama refused to load the model
+     for lack of memory and `retry` has made room (see server/modelMemory.js);
+     the refusal is read before anything is passed on, so the browser sees
+     one answer either way. */
+  const send = () => {
+  const request = client.request({
     hostname: upstream.hostname, port: upstream.port, path: req.url,
     method: req.method, headers,
   }, incoming => {
+    if (request !== out) { incoming.resume(); return; }
+    if (retry && !retried && body !== undefined && (incoming.statusCode || 0) >= 400) {
+      let text = '';
+      incoming.setEncoding('utf8');
+      incoming.on('data', (chunk) => { if (text.length < 65536) text += chunk; });
+      incoming.on('end', async () => {
+        if (done || request !== out) return;
+        if (isOutOfMemory(text)) {
+          retried = true;
+          out = null;
+          try { await retry(); } catch { /* the second attempt says what is wrong */ }
+          if (!done) send();
+          return;
+        }
+        if (!res.destroyed && !res.writableEnded) {
+          res.writeHead(incoming.statusCode || 502, incoming.headers);
+          res.end(text);
+        }
+        if (jobId) appendChatChunk(jobId, `\n${JSON.stringify({ error: text.slice(0, 2000), done: true })}\n`);
+        finish();
+      });
+      return;
+    }
     answer = incoming;
     if (!res.destroyed) res.writeHead(incoming.statusCode || 502, incoming.headers);
     incoming.on('data', chunk => {
@@ -514,12 +546,21 @@ const forward = (target, req, res, body, track, completed, idleMs = OLLAMA_IDLE_
       finish();
     });
   });
+  out = request;
+  if (jobId) attachChatController(jobId, request);
+  request.setTimeout(idleMs, () => { if (request === out) fail(new Error(`Model sent nothing for ${Math.round(idleMs / 1000)} seconds`), 504); });
+  request.on('error', (error) => { if (request === out) fail(error); });
+  request.on('close', () => {
+    if (request === out && !done) fail(new Error('Model connection closed before completion'));
+  });
+  if (body === undefined) req.pipe(request);
+  else request.end(body);
+  };
   const memoryCheck = setInterval(() => {
     if (memoryPressure(true)) fail(new Error('Generation stopped: system RAM is critically low'), 503);
   }, 2000);
   memoryCheck.unref?.();
   untrack = track ? track(() => fail(new Error(STOPPED), 503)) : () => {};
-  if (jobId) attachChatController(jobId, out);
   /* How long Ollama may send nothing before this gives up on it.
 
      It was two minutes, and two minutes of silence is ordinary: a 20GB model
@@ -530,11 +571,6 @@ const forward = (target, req, res, body, track, completed, idleMs = OLLAMA_IDLE_
      Ollama logged `500 | 2m0s | POST /api/chat` with the model 427 tokens in,
      the answer was thrown away, and the browser sent the same request again.
      There is no wall-clock ceiling; cancellation, connection errors and RAM protection remain. */
-  out.setTimeout(idleMs, () => fail(new Error(`Model sent nothing for ${Math.round(idleMs / 1000)} seconds`), 504));
-  out.on('error', fail);
-  out.on('close', () => {
-    if (!done) fail(new Error('Model connection closed before completion'));
-  });
   res.on('drain', () => answer?.resume());
   res.on('error', () => {
     if (!jobId) fail(new Error('Chat subscriber disconnected'));
@@ -545,8 +581,7 @@ const forward = (target, req, res, body, track, completed, idleMs = OLLAMA_IDLE_
     else answer?.resume();
   });
   req.on('aborted', () => fail(new Error('Chat request aborted')));
-  if (body === undefined) req.pipe(out);
-  else out.end(body);
+  send();
 };
 
 /**
@@ -562,6 +597,7 @@ const forward = (target, req, res, body, track, completed, idleMs = OLLAMA_IDLE_
  */
 export const inferenceHook = (env = {}, options) => {
   const vram = vramGuard(env, options);
+  const memory = createModelMemory(env, { fetchImpl: options?.fetchImpl, freemem: options?.freemem || os.freemem });
   const ollama = trimmed(env.OLLAMA_URL || 'http://127.0.0.1:11434');
   const onOllama = backendOf(env) === 'ollama';
   const idleMs = Number(env.OLLAMA_IDLE_TIMEOUT_MS) > 0 ? Number(env.OLLAMA_IDLE_TIMEOUT_MS) : OLLAMA_IDLE_MS;
@@ -590,7 +626,15 @@ export const inferenceHook = (env = {}, options) => {
       const body = await readBody(req);
       if (vram.isSwitching()) throw Object.assign(new Error('GPU is switching to ComfyUI. Try again after generation finishes.'), { statusCode: 503 });
       if (res.destroyed) { release(); return; }
-      forward(ollama, req, res, body, vram.track, release, idleMs);
+      /* Idle models that would crowd this one out go first, and an
+         out-of-memory refusal gets one more try with everything idle gone.
+         See server/modelMemory.js. */
+      const model = requestedModel(body);
+      await memory.makeRoom(model);
+      if (res.destroyed) { release(); return; }
+      const unhold = memory.hold(model);
+      forward(ollama, req, res, body, vram.track, () => { unhold(); release(); }, idleMs,
+        memory.enabled ? () => memory.makeRoom(model, { all: true }) : null);
     } catch (e) {
       release();
       if (res.destroyed || res.writableEnded) return;

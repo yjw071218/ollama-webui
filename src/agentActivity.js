@@ -169,6 +169,13 @@ export const activityOf = (text, { live = false } = {}) => {
 /** Whether a thinking text has any step in it, so plain reasoning keeps its old look. */
 export const hasActivity = (text) => String(text || '').split(/\r?\n/).some(line => MARKER.test(line.trim()));
 
+/** Only the reasoning, without the steps: what the "생각하는 중" fold shows,
+    since the steps are drawn under it as their own fold (src/App.jsx). */
+export const proseOf = (text) => activityOf(text)
+  .filter(s => s.type === 'prose')
+  .map(s => s.text)
+  .join('\n\n');
+
 /** Counts for the summary line: `{ steps, commands, edits, failed, running }`. */
 export const activitySummary = (segments) => {
   const steps = segments.filter(s => s.type === 'step');

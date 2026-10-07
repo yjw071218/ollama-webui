@@ -1,4 +1,4 @@
-﻿import { flushSync } from 'react-dom';
+import { flushSync } from 'react-dom';
 import { resumableChatReader } from './chatStream.js';
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, useCallback } from 'react';
 import localforage from 'localforage';
@@ -110,18 +110,22 @@ function LiveWorkStatus({ text, answer = '', startedAt }) {
   const tokens = estimateTokens(text);
 
   /* The average since the start kept showing "~21 tok/s" through a stall, so a
-     frozen answer looked busy. The rate is now over the last few seconds, and
+     frozen answer looked busy. The rate is now over the last second, and
      when nothing has arrived for a while the line says so. */
   const samples = useRef([]);
   const lastGrowth = useRef(start);
   const prevTokens = useRef(tokens);
   if (tokens !== prevTokens.current) { prevTokens.current = tokens; lastGrowth.current = Date.now(); }
+  /* Over the last second: one sample per clock tick (250 ms), and the oldest
+     is dropped once the next one is itself a second old, so the window stays
+     between 1 and 1.25 s. Six seconds smoothed bursts away but lagged a speed
+     change by several seconds; one second follows it as it happens. */
   const list = samples.current;
-  if (!list.length || now - list[list.length - 1].at >= 1000) list.push({ at: now, tokens });
-  while (list.length > 2 && now - list[1].at > 6000) list.shift();
+  if (!list.length || now > list[list.length - 1].at) list.push({ at: now, tokens });
+  while (list.length > 2 && now - list[1].at >= 1000) list.shift();
   const first = list[0];
   const span = (now - first.at) / 1000;
-  const recent = span >= 2 ? Math.max(0, Math.round((tokens - first.tokens) / span)) : null;
+  const recent = span >= 0.75 ? Math.max(0, Math.round((tokens - first.tokens) / span)) : null;
   const rate = recent ?? (secs > 1 && tokens > 0 ? Math.round(tokens / secs) : null);
   const idle = Math.floor((now - lastGrowth.current) / 1000);
   const stalled = idle >= 8;
@@ -157,7 +161,7 @@ function LiveWorkStatus({ text, answer = '', startedAt }) {
 import { FileChanges } from './FileChanges.jsx';
 import { fileChangesIn, answerPartsOf } from './fileChanges.js';
 import { AgentActivity, LiveCommands, CommandsDock } from './AgentActivity.jsx';
-import { hasActivity } from './agentActivity.js';
+import { hasActivity, proseOf } from './agentActivity.js';
 import { CanvasPanel } from './CanvasPanel.jsx';
 import { FitNote } from './FitNote.jsx';
 import { WatchedFolders } from './WatchedFolders.jsx';
@@ -183,6 +187,7 @@ import { deriveScope, ownerOfScope } from './profileScope.js';
 import { applyLiveSettings } from './liveSettings.js';
 import { NewbieGuide, guideSeen } from './NewbieGuide.jsx';
 import { stamped, conversationTime } from './sessionEdit.js';
+import { writeJournal, takeJournal, withJournal } from './unloadJournal.js';
 import { fileMarker, indexedMarker, pathMarker, extractAttachments, stripAttachments } from './attachMarkers.js';
 import { forHistory, isToolResult, turnStart, wireText } from './wireHistory.js';
 import { isDraft, newDraft, promoted, withoutStaleDrafts, persistable, nextSessionId } from './draftChat.js';
@@ -211,8 +216,8 @@ import { copyText } from './clipboard.js';
 import { buildSelectionPrompt, selectionTarget, SELECTION_ACTIONS } from './selection.js';
 import { promptsFrom, stepHistory, wantsHistory, NOT_BROWSING } from './promptHistory.js';
 import { canShare, shareText, shareBody, sharePicture, whyNoSheet } from './share.js';
-import { DRAWING_TAGS, schemasFor, toolCallsIn, nativeCallToTag, tagAttrs, TAG_ATTRS, canonicalToolTags, MCP_TAG, mcpFileRoute } from './tools.js';
-import { parseAssistantMessage } from './messageParts.js';
+import { DRAWING_TAGS, schemasFor, toolCallsIn, nativeCallToTag, tagAttrs, TAG_ATTRS, canonicalToolTags, MCP_TAG, mcpFileRoute, holdAfterDrawing, drawingCallEnd } from './tools.js';
+import { parseAssistantMessage, fenceThinking } from './messageParts.js';
 import { localSttAvailable, recordAndTranscribe, whisperLanguage, transcribeFile, transcribe } from './stt.js';
 import { VAD_DEFAULTS, BARGE_IN, withSensitivity, listenForUtterance } from './vad.js';
 import { wantsNavigation, NAV_KEYS, step } from './messageNav.js';
@@ -226,7 +231,7 @@ import { notify, notifyState, askToNotify, unattended, subscribeToPush, unsubscr
 import { recordRun, loadRuns, clearRuns, summarise, promptCostTrend } from './perf.js';
 import {
   syncFully, createSyncScheduler, accountStamp, resetSyncPosition, OwnerMismatch, withoutPictureBytes,
-  subscribeToAccount, needsInitialSync, markInitialSync, syncPercent,
+  subscribeToAccount, needsInitialSync, markInitialSync, syncPercent, syncStage,
 } from './syncEngine.js';
 import {
   useSession, deleteAccount as deleteServerAccount, signOutOtherDevices,
@@ -276,10 +281,7 @@ import {
   sessionStorageKeyFor,
   setServerSocialConfig,
   forgetGoogleAutoSelect,
-  kakaoUnlink,
-  readKakaoOutcome,
   socialDefaults,
-  kakaoRedirectUri,
 } from './auth.jsx';
 import { stripThinking } from './codeAware.js';
 
@@ -617,22 +619,45 @@ const STARTER_PROMPTS = [
   { labelKey: 'empty.brainstorm', Icon: Sparkles, prompt: 'Give me 10 varied ideas for ' },
 ];
 
-// Wraps each word of a text node in a span so newly streamed words can fade
-// in on their own. React reuses the DOM node for a span whose position is
-// unchanged, so only genuinely new words animate — the settled text stays put.
-// Applied to the streaming message only; long transcripts never carry it.
-const rehypeAnimateTokens = () => (tree) => {
+/* Wraps each newly shown character of the streaming answer in a span so it
+   can fade in on its own -- one character after another, not a word at a time.
+
+   Which characters are new is decided by *when each was first shown*
+   (`ageOf`, from LiveAnswerMarkdown), never by whether React happened to
+   mount a fresh element. Markdown is re-parsed as text arrives, and a closing
+   `*` turns the words before it into an <em>: new elements for old text. Keyed
+   on mounting, every such re-parse played the reveal again over text that had
+   been on screen for seconds. Here a character older than the fade is plain
+   text, and a younger one's animation is started part-way through (a negative
+   delay), so a re-parse continues the fade instead of restarting it. Only
+   characters shown in this very render carry `data-fresh`, which is what the
+   decoding effect (src/decodeReveal.js) starts from. */
+const REVEAL_MS = 360;
+const graphemes = (() => {
+  const segmenter = typeof Intl !== 'undefined' && Intl.Segmenter
+    ? new Intl.Segmenter(undefined, { granularity: 'grapheme' }) : null;
+  return (value) => (segmenter ? Array.from(segmenter.segment(value), x => x.segment) : Array.from(value));
+})();
+
+const rehypeAnimateTokens = ({ ageOf } = {}) => (tree) => {
   const SKIP = new Set(['pre', 'style', 'script', 'math']);
+  const age = typeof ageOf === 'function' ? ageOf : () => 0;
 
   const walk = (node) => {
     if (!node || !Array.isArray(node.children)) return;
     if (node.tagName && SKIP.has(node.tagName)) return;
-    /* Inline code (`/api/tags`) fades in as one piece with the words around
-       it. It used to be skipped, so it popped in at full strength while the
-       words before it were still fading -- and read as arriving first. */
+    /* Inline code fades in as one piece, by the age of its first character. */
     if (node.tagName === 'code') {
-      const cls = node.properties?.className;
-      node.properties = { ...(node.properties || {}), className: [...(Array.isArray(cls) ? cls : cls ? [cls] : []), 'tok-code'] };
+      const at = node.position?.start?.offset;
+      const a = Number.isFinite(at) ? age(at) : null;
+      if (a !== null) {
+        const cls = node.properties?.className;
+        node.properties = {
+          ...(node.properties || {}),
+          className: [...(Array.isArray(cls) ? cls : cls ? [cls] : []), 'tok-code'],
+          style: `animation-delay:-${Math.round(a)}ms`,
+        };
+      }
       return;
     }
 
@@ -641,21 +666,29 @@ const rehypeAnimateTokens = () => (tree) => {
 
     for (const child of node.children) {
       if (child.type === 'text' && child.value) {
-        // Keep the whitespace in the split so spacing survives the wrapping.
-        const pieces = child.value.split(/(\s+)/);
-        for (const piece of pieces) {
-          if (!piece) continue;
-          if (/^\s+$/.test(piece)) {
-            next.push({ type: 'text', value: piece });
-          } else {
-            next.push({
-              type: 'element',
-              tagName: 'span',
-              properties: { className: ['tok'] },
-              children: [{ type: 'text', value: piece }],
-            });
-          }
+        const base = child.position?.start?.offset;
+        const end = child.position?.end?.offset;
+        // Escapes and entities make the source longer than the text; the
+        // offset never runs past the node's own end.
+        let settled = '';
+        let offset = Number.isFinite(base) ? base : 0;
+        const limit = Number.isFinite(end) ? end : Infinity;
+        for (const piece of graphemes(child.value)) {
+          const a = age(Math.min(offset, limit - 1));
+          offset += piece.length;
+          if (a === null || /^\s+$/.test(piece)) { settled += piece; continue; }
+          if (settled) { next.push({ type: 'text', value: settled }); settled = ''; }
+          next.push({
+            type: 'element',
+            tagName: 'span',
+            properties: {
+              className: ['tok'],
+              ...(a > 0 ? { style: `animation-delay:-${Math.round(a)}ms` } : { dataFresh: '' }),
+            },
+            children: [{ type: 'text', value: piece }],
+          });
         }
+        if (settled) next.push({ type: 'text', value: settled });
         changed = true;
       } else {
         walk(child);
@@ -1141,20 +1174,23 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
    `components` was a new object each time. On a phone that was the lag. */
 const ANSWER_REMARK = [remarkGfm, remarkMath];
 const AnswerLink = ({ node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />;
-const AnswerMarkdown = memo(({ text, basePlugins, citations, onOpenArtifact }) => {
+const AnswerMarkdown = memo(({ text, basePlugins, citations, onOpenArtifact, ageOf }) => {
   const openRef = useRef(onOpenArtifact);
   openRef.current = onOpenArtifact;
   const open = useCallback((...args) => openRef.current?.(...args), []);
   const citeKey = citations?.length ? citations.map(c => (c.url ? 'url' : 'passage')).join(',') : '';
-  const plugins = useMemo(() => (citeKey
-    ? [...basePlugins, createCitationLinker(citeKey.split(',').length, citeKey.split(','))]
-    : basePlugins), [basePlugins, citeKey]);
+  const plugins = useMemo(() => {
+    const cited = citeKey
+      ? [...basePlugins, createCitationLinker(citeKey.split(',').length, citeKey.split(','))]
+      : basePlugins;
+    return ageOf ? [...cited, [rehypeAnimateTokens, { ageOf }]] : cited;
+  }, [basePlugins, citeKey, ageOf]);
   const components = useMemo(() => ({
     pre: (props) => <MarkdownCodeBlock {...props} onOpenArtifact={open} />,
     a: AnswerLink,
   }), [open]);
   return <ReactMarkdown remarkPlugins={ANSWER_REMARK} rehypePlugins={plugins} components={components}>{text}</ReactMarkdown>;
-}, (a, b) => a.text === b.text && a.basePlugins === b.basePlugins
+}, (a, b) => a.text === b.text && a.basePlugins === b.basePlugins && a.ageOf === b.ageOf
   && (a.citations?.length || 0) === (b.citations?.length || 0));
 
 /* Typewriter for the answer being streamed. A model sends text in bursts --
@@ -1200,8 +1236,9 @@ const useTypewriter = (text, live) => {
         const code = textRef.current.charCodeAt(next - 1);
         if (code >= 0xd800 && code <= 0xdbff && next < target) next += 1;
         pos.current = next;
-        // Re-parsing markdown every frame is wasted work; ~30 fps is smooth.
-        if (now - painted >= 30 || next >= target) { painted = now; setShown(next); }
+        // Re-parsing markdown every frame is wasted work; ~40 fps is smooth
+        // and lets one or two characters out at a time rather than a clump.
+        if (now - painted >= 24 || next >= target) { painted = now; setShown(next); }
       }
       raf = requestAnimationFrame(step);
     };
@@ -1223,13 +1260,44 @@ const closeOpenMarks = (s) => {
   if (ticks % 2 && !/`$/.test(line)) out += '`';
   const bare = line.replace(/`[^`]*`?/g, '');
   if ((bare.match(/\*\*/g) || []).length % 2 && !/\*\*$/.test(line)) out += '**';
+  /* A single `*` too, so italics are italic from their first letter rather
+     than snapping into shape when closed. Only an opener markdown would
+     honour (followed by a non-space), never a bullet or the `*` of "2 * 3". */
+  const singles = bare.replace(/^\s*\*\s/, '').replace(/\*\*/g, '');
+  const stars = [...singles.matchAll(/\*/g)];
+  if (stars.length % 2) {
+    const at = stars[stars.length - 1].index;
+    if (/\S/.test(singles[at + 1] || '') && !/\*$/.test(line)) out += '*';
+  }
   return out;
+};
+
+/* When each character of the streaming answer was first shown, as a list of
+ * (length, time) steps. `ageOf(offset)` is how long ago that character
+ * appeared, or null once its fade is over and it is ordinary text. */
+const useRevealClock = (length, live) => {
+  const steps = useRef(live ? [] : [{ len: length, at: -Infinity }]);
+  const now = performance.now();
+  const last = steps.current[steps.current.length - 1];
+  if (!last || length > last.len) steps.current.push({ len: length, at: now });
+  else if (length < last.len) steps.current = [...steps.current.filter(st => st.len < length), { len: length, at: now }];
+  // A step whose successor has finished fading tells nothing more.
+  while (steps.current.length > 1 && now - steps.current[0].at > REVEAL_MS
+    && now - steps.current[1].at > REVEAL_MS) steps.current.shift();
+  const snapshot = steps.current.slice();
+  return useMemo(() => (live ? (offset) => {
+    const step = snapshot.find(st => st.len > offset);
+    if (!step) return 0;
+    const age = now - step.at;
+    return age >= REVEAL_MS ? null : age;
+  } : null), [live, length]); // eslint-disable-line react-hooks/exhaustive-deps
 };
 
 const LiveAnswerMarkdown = ({ text, live, ...rest }) => {
   const typed = useTypewriter(text, live);
   const shownText = typed.length < text.length ? closeOpenMarks(typed) : typed;
-  return <AnswerMarkdown text={shownText} {...rest} />;
+  const ageOf = useRevealClock(typed.length, live);
+  return <AnswerMarkdown text={shownText} ageOf={ageOf} {...rest} />;
 };
 
 // Decided before React renders anything, because the useState initialisers
@@ -1538,10 +1606,8 @@ function App() {
   const [showProfileMenu, setShowProfileMenu] = useState(false);
   const [showProfileDialog, setShowProfileDialog] = useState(false);
   const [googleClientId, setGoogleClientId] = useState(() => getSetting('googleClientId') || '');
-  const [kakaoRestKey, setKakaoRestKey] = useState(() => getSetting('kakaoRestKey') || '');
 
   useEffect(() => { setSetting('googleClientId', googleClientId); }, [googleClientId]);
-  useEffect(() => { setSetting('kakaoRestKey', kakaoRestKey); }, [kakaoRestKey]);
 
   // Whatever the old browser-local login left on disk that was never safe to
   // keep. Those accounts cannot authenticate anything any more; their password
@@ -2409,6 +2475,15 @@ function App() {
       return;
     }
 
+    /* The installed voice (ai-voice) ships without a reference: the person who
+       installed the app chooses it, since the voice mostly follows it. Without
+       one GPT-SoVITS only answers 400, so say what is missing instead. */
+    if (ttsEngine === 'gpt-sovits' && !String(ttsRefAudio || '').trim()) {
+      toast(t('voice.needRef'), 'info', 8000);
+      speechQueueRef.current = []; // once, not once per piece of the answer
+      return;
+    }
+
     setSpeakingIndex(index);
     setIsSynthesizing(true);
 
@@ -2549,8 +2624,15 @@ function App() {
     let cancelled = false;
     setIsStorageLoaded(false);
 
-    localforage.getItem(storageKey).then(async saved => {
+    localforage.getItem(storageKey).then(async stored => {
       if (cancelled) return;
+      /* What the last page was still writing when it went away -- see
+         src/unloadJournal.js. Laid over storage, and written into it, so one
+         refresh shows what was on screen before it. */
+      const saved = withJournal(stored, takeJournal(storageKey));
+      if (saved !== stored) {
+        localforage.setItem(storageKey, saved).catch(() => {});
+      }
 
       // Nothing is copied between buckets here. This used to adopt whatever the
       // local profile had when the account's bucket looked empty, which sounds
@@ -2649,7 +2731,18 @@ function App() {
        recent. The draft was not stale; it was never going to be there. */
     const drafts = (sessionsRef.current || []).filter(isDraft);
     const held = new Set(drafts.map(d => String(d.id)));
-    setSessions([...drafts, ...saved.filter(x => !held.has(String(x.id)))]);
+    /* Storage can be behind the screen. An answer that has just finished is
+       written by the save timer a moment later, and a sync landing in that
+       moment (the end of a turn is exactly when one runs) re-read the older
+       stored copy over it: part of the answer vanished, and came back only if
+       a later write happened to carry it. A chat on screen with a newer stamp
+       than its stored copy is kept. */
+    const onScreen = new Map((sessionsRef.current || []).map(x => [String(x.id), x]));
+    const merged = saved.filter(x => !held.has(String(x.id))).map((x) => {
+      const mine = onScreen.get(String(x.id));
+      return mine && (mine.updatedAt || 0) > (x.updatedAt || 0) ? mine : x;
+    });
+    setSessions([...drafts, ...merged]);
 
     // Where you were is where you stay: a draft you are holding counts as
     // much as a conversation storage can confirm.
@@ -2848,8 +2941,8 @@ function App() {
       let buffer = '', thinking = '', content = '', metrics = null, terminal = false;
       const commit = () => {
         const restoredContent = (saved.prefix || '') + (thinking
-          ? (terminal || content ? `<think>\n${decodeByteFallback(thinking)}\n</think>\n\n`
-            : `<think>\n${decodeByteFallback(thinking)}`) : '') + decodeByteFallback(content);
+          ? (terminal || content ? `<think>\n${fenceThinking(decodeByteFallback(thinking))}\n</think>\n\n`
+            : `<think>\n${fenceThinking(decodeByteFallback(thinking))}`) : '') + decodeByteFallback(content);
         const measured = metrics;
         reviseSession(saved.sessionId, session => {
           const messages = [...session.messages];
@@ -3181,8 +3274,8 @@ function App() {
          spinning while the model is still in it. */
       const compose = () => (thinking
         ? (terminal || content
-          ? `<think>\n${decodeByteFallback(thinking)}\n</think>\n\n`
-          : `<think>\n${decodeByteFallback(thinking)}`)
+          ? `<think>\n${fenceThinking(decodeByteFallback(thinking))}\n</think>\n\n`
+          : `<think>\n${fenceThinking(decodeByteFallback(thinking))}`)
         : '') + decodeByteFallback(content);
       try {
         for (;;) {
@@ -4933,7 +5026,15 @@ ${data.text}` : data.text));
   // is, by definition, nothing of its own to write.
   useEffect(() => {
     if (!isStorageLoaded) return undefined;
-    const flush = () => {
+    const flush = (event) => {
+      /* Leaving for good: the asynchronous write -- this one, or one the save
+         timer started a moment ago and is still in flight -- can lose the race
+         with the next page's read, so a synchronous copy goes first. It only
+         ever wins where it is newer (see `withJournal`), so a tab holding an
+         out-of-date list cannot put it over another tab's. */
+      if (event?.type === 'beforeunload' || event?.type === 'pagehide') {
+        writeJournal(storageKeyRef.current, persistable(sessionsRef.current), withoutPictureBytes);
+      }
       if (!saveTimerRef.current) return;
       clearTimeout(saveTimerRef.current);
       saveTimerRef.current = null;
@@ -6675,7 +6776,7 @@ ${data.text}` : data.text));
       let target = 0;
       if (first) {
         markInitialSync(profileScope, true);
-        setInitialSync({ percent: 0, error: '' });
+        setInitialSync({ percent: 0, error: '', stage: syncStage({ phase: 'connecting' }) });
         target = (await accountStamp())?.rev || 0;
       }
       // One exchange, both directions: what this device has that the account
@@ -6683,9 +6784,17 @@ ${data.text}` : data.text));
       // down. There is no "push or pull" decision to get wrong any more, and no
       // window in which one side's copy replaces the other's wholesale.
       const result = await syncFully(profileScope, first ? {
-        // A first download is paged at 500 records; keep going until it ends.
+        // A first download is paged (by count and by size); keep going until
+        // it ends. Smaller pages than an ordinary sync, so the bar moves.
         maxRounds: 10000,
-        onProgress: ({ rev, complete }) => setInitialSync({ percent: syncPercent(rev, target, complete), error: '' }),
+        limit: 200,
+        // Never backwards: a phase report mid-round may know less than the
+        // round before it did.
+        onProgress: (p) => setInitialSync((s) => ({
+          percent: Math.max(s?.percent || 0, syncPercent(p.rev, target, p.complete, p)),
+          error: '',
+          stage: syncStage(p),
+        })),
       } : {});
       if (first && !result.complete) throw new Error('동기화가 아직 완료되지 않았습니다. 다시 시도하여 이어 받으세요.');
       syncStampRef.current = result.rev;
@@ -6699,7 +6808,7 @@ ${data.text}` : data.text));
       }
       if (first) {
         markInitialSync(profileScope, false);
-        setInitialSync({ percent: 100, error: '' });
+        setInitialSync({ percent: 100, error: '', stage: syncStage({ phase: 'done' }) });
         // Apply supported preferences in place before revealing the app.
         // Lists and unsupported settings still use the guarded reload path.
         if (!applySyncedSettings(result.applied) || result.applied.lists > 0) {
@@ -6743,7 +6852,7 @@ ${data.text}` : data.text));
   };
 
   const retryInitialSync = () => {
-    setInitialSync({ percent: 0, error: '' });
+    setInitialSync({ percent: 0, error: '', stage: syncStage({ phase: 'connecting' }) });
     reconcileWithAccount();
   };
 
@@ -6978,17 +7087,6 @@ ${data.text}` : data.text));
     addLog('Account deleted.', 'info');
   };
 
-  /** Sever the Kakao connection without deleting the account. */
-  const handleKakaoUnlink = async () => {
-    try {
-      const result = await kakaoUnlink();
-      if (result?.success) toast(t('auth.kakaoUnlinked'), 'success');
-      else toast(result?.error || t('auth.kakaoFailed'), 'error', 6000);
-    } catch (e) {
-      toast(e.message, 'error', 6000);
-    }
-  };
-
   // Settings always lands on General unless a caller asks for a specific tab,
   // so reopening never drops you back into whatever you last poked at.
   // ---- Memory ----
@@ -7070,6 +7168,9 @@ ${data.text}` : data.text));
               '',
               'Keep: decisions reached, facts established, constraints, names, file paths,',
               'numbers, and anything the user asked for. Drop pleasantries and repetition.',
+              'Preserve exact active project paths, user constraints, the current task and next unfinished step.',
+              'Separate requested/planned work from tool-confirmed edits, tests and uploads; a promise is not execution.',
+              'Keep actual blockers and errors, but omit secrets, credentials and tokens.',
               'Write it as compact notes, not prose. Same language as the conversation.',
               '',
               '---',
@@ -7671,15 +7772,6 @@ ${data.text}` : data.text));
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId, storageKey]);
-
-  // The login ends in a redirect, so its result arrives in the address bar.
-  useEffect(() => {
-    const result = readKakaoOutcome();
-    if (!result) return;
-    if (result.outcome === 'ok') toast(t('auth.kakaoSignedIn'), 'success');
-    else if (result.outcome === 'cancelled') toast(t('auth.kakaoCancelled'), 'info');
-    else toast(result.detail || t('auth.kakaoFailed'), 'error', 12000);
-  }, []);
 
   // ---- The account's state ----
   //
@@ -10292,10 +10384,12 @@ ${mcpTools.map(tool => `  ${tool.server} / ${tool.name}: ${firstLine(tool.descri
         const cliTurn = !!cliOf(activeModel);
         if ((!mcpEnabled || cliTurn) && !useNativeTools && mcpToolCallsInTurnForSystem === 0) {
           mcpPrompt = `[Tools]
-${cliTurn && mcpEnabled ? `For files, commands, the web and MCP servers use your own tools, not tags.
-` : ''}You can call a tool by emitting one tag. For a tool whose *answer* you need,
-emit exactly one and then stop; the result comes back in a <TOOL_RESULT> block
-and you continue from there. Pictures are the exception — see below.
+${cliTurn && mcpEnabled ? `For files, commands, the web and MCP servers use the native tools actually available, not text tags.
+Call the tool and wait for its real result, then continue the requested work.
+A progress message or promise to start is not a tool call and must not end an execution request.
+The picture tags below are a separate app protocol; their instructions to emit a tag do not apply to native tools.
+` : `The picture tags below are handled by the app. Emit the appropriate tag to request a picture.
+They do not provide filesystem or command access.`}
 
 ${drawPrompt}${chartGuide}`;
         }
@@ -10546,7 +10640,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
            into U+FFFD. Somewhere in the middle of an answer, only sometimes,
            with nothing in the log. Whatever produced it, it does not get to
            travel: a half-character was never a character to begin with. */
-        const thinkingText = stripLoneSurrogates(decodeByteFallback(rawThinkingText));
+        const thinkingText = fenceThinking(stripLoneSurrogates(decodeByteFallback(rawThinkingText)));
         const answerText = stripLoneSurrogates(decodeByteFallback(rawAnswerText));
         let out = initialAssistantContent;
         if (thinkingText) {
@@ -10581,10 +10675,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       const HIDDEN_COMMIT_MS = 250;
       let flushHandle = null;
       let lastCommitAt = 0;
+      /* Text after a drawing call waits for its picture -- see
+         `holdAfterDrawing`. Released once the tools have had their say. */
+      let holdDrawn = true;
       const flushNow = () => {
         flushHandle = null;
         lastCommitAt = Date.now();
-        const committedContent = assistantContent;
+        const committedContent = holdDrawn ? holdAfterDrawing(assistantContent) : assistantContent;
         reviseSession(currentSessionId, s => {
           const msgs = [...s.messages];
           msgs[newMessageIndex] = { ...msgs[newMessageIndex], content: committedContent, isMcpFetching: false };
@@ -10613,7 +10710,14 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       flushPartial = () => {
         cancelFlush();
         assistantContent = composeContent(true);
+        holdDrawn = false;
         flushNow();
+      };
+      // Everything the model wrote, on screen: no drawing is going to run.
+      const releaseHeld = () => {
+        if (!holdDrawn) return;
+        holdDrawn = false;
+        if (holdAfterDrawing(assistantContent) !== assistantContent) flushNow();
       };
 
       while (true) {
@@ -10922,6 +11026,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         addLog(`Response hit the ${maxTokens}-token limit.`, 'warning');
         if (autoContinue && continueDepthRef.current < MAX_AUTO_CONTINUE) {
           continueDepthRef.current += 1;
+          releaseHeld();
           setTruncatedIndex(null);
           setTimeout(() => continueResponse(truncationIndex), 120);
           return;
@@ -11600,6 +11705,9 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           .filter(match => DRAWING_TAGS.has(match[1]))
           .map(match => match.index);
 
+        // No drawing will run (none asked for, or refused), so nothing waits.
+        if (!invocations.some(invoked => DRAWING_TAGS.has(invoked.tool.name))) releaseHeld();
+
         if (invocations.length > 0) {
           /* What the turn has spent so far.
            *
@@ -11654,6 +11762,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
              enough to be worth that. */
           const results = [];
           const picturesBefore = turnImages.length;
+          // Which drawing call (by its place in the text) came back empty.
+          let firstFailedDrawing = -1;
           for (const invoked of running) {
             /* Nothing more after a stop. One leg can carry several calls, and
                pressing stop during the first of them should not leave the
@@ -11673,6 +11783,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                bottom of the message. One call can make several -- `count`. */
             if (DRAWING_TAGS.has(invoked.tool.name)) {
               const at = drawnHere.indexOf(invoked.match.index);
+              if (turnImages.length === picturesBeforeThisCall && turnSongs.length === songsBeforeThisCall
+                  && firstFailedDrawing === -1) {
+                firstFailedDrawing = at === -1 ? 0 : at;
+              }
               const call = drawCallsBefore + (at === -1 ? drawnHere.length : at);
               for (let n = picturesBeforeThisCall; n < turnImages.length; n += 1) {
                 turnImages[n] = { ...turnImages[n], call };
@@ -11750,6 +11864,16 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             addLog('[tool] picture delivered; the turn ends with it', 'info');
           } else {
             const remaining = Math.max(0, toolBudget - spent - running.length);
+            /* A drawing that failed takes with it what was written after it.
+               "I hope you like it" under a picture that does not exist is
+               wrong, and the next leg -- which says it failed, or tries again
+               -- is what comes after the call now. Without a failure the
+               whole text goes on, the picture now being there to follow. */
+            if (!nativeText && firstFailedDrawing !== -1) {
+              const end = drawingCallEnd(assistantContent, firstFailedDrawing);
+              if (end !== -1) assistantContent = assistantContent.slice(0, end).replace(/\s+$/, '');
+            }
+            holdDrawn = false;
             /* A picture ends the tool use, so the note after it says so rather
                than counting down a budget the model can no longer spend. Telling
                it to "cite any URLs you used" after drawing is worse than useless:
@@ -13253,11 +13377,9 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     return q ? [...base, createSearchHighlighter(q)] : base;
   }, [chatSearchQuery]);
 
-  // Same set plus the per-word wrapper, for the message currently streaming.
-  const streamingRehypePlugins = useMemo(
-    () => [...markdownRehypePlugins, rehypeAnimateTokens],
-    [markdownRehypePlugins]
-  );
+  // The streaming message adds the per-character wrapper itself (it needs the
+  // reveal clock; see LiveAnswerMarkdown), so its set is the same.
+  const streamingRehypePlugins = markdownRehypePlugins;
 
   const jumpToHit = (next) => {
     if (searchHits.length === 0) return;
@@ -13670,13 +13792,21 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       {initialSync && (
         <div className="initial-sync" role="dialog" aria-modal="true" aria-labelledby="initial-sync-title">
           <div className="initial-sync-card">
-            <Logo size={40} />
+            <Logo size={48} spinning={!initialSync.error} />
             <h2 id="initial-sync-title">{t('sync.initialTitle')}</h2>
             <p>{t('sync.initialBody')}</p>
-            <div className="initial-sync-bar" role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={initialSync.percent}>
+            <div
+              className={`initial-sync-bar${!initialSync.error && initialSync.percent < 100 ? ' is-working' : ''}`}
+              role="progressbar" aria-valuemin={0} aria-valuemax={100} aria-valuenow={initialSync.percent}
+            >
               <div style={{ width: `${initialSync.percent}%` }} />
             </div>
             <div className="initial-sync-percent">{initialSync.percent}%</div>
+            {initialSync.stage && !initialSync.error && (
+              <div className="initial-sync-stage" aria-live="polite">
+                {t(initialSync.stage.key, initialSync.stage.values)}
+              </div>
+            )}
             {initialSync.error && (
               <>
                 <p className="initial-sync-error">{t('sync.initialFailed', { error: initialSync.error })}</p>
@@ -15056,15 +15186,19 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                   <Collapsible open={thinkIsOpen}>
                                   <div className="think-body">
                                     {internalBlocks.map((part, idx) => {
+                                      /* Only the reasoning here. The steps (실행, 수정,
+                                         읽기...) are drawn under this fold as their own
+                                         one -- see below -- not inside the thinking. */
                                       if (part.type === 'think' && hasActivity(part.content)) {
-                                        return (
-                                          <AgentActivity
+                                        const prose = proseOf(part.content);
+                                        return prose ? (
+                                          <AnswerMarkdown
                                             key={`think-${idx}`}
-                                            text={part.content}
-                                            live={isStreamingRow && idx === lastThinkIdx}
-                                            markdownProps={{ rehypePlugins: markdownRehypePlugins }}
+                                            text={prose}
+                                            basePlugins={markdownRehypePlugins}
+                                            onOpenArtifact={handleOpenArtifact}
                                           />
-                                        );
+                                        ) : null;
                                       }
                                       if (part.type === 'think') {
                                         return (
@@ -15218,7 +15352,17 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
                               {/* Outside the fold: a build running for minutes
                                   is watched whether the thinking is open or not. */}
-                              {agentWorking && <LiveCommands live={isStreamingRow} />}
+                              {agentWorking && internalBlocks.map((part, idx) => (part.type === 'think' && hasActivity(part.content) ? (
+                                <AgentActivity
+                                  key={`steps-${idx}`}
+                                  text={part.content}
+                                  live={isStreamingRow && idx === lastThinkIdx}
+                                  stepsOnly
+                                />
+                              ) : null))}
+                              {/* A command running now is followed by the pill in the
+                                  bottom-left corner (CommandsDock), not by a terminal
+                                  opened here between the thinking and the answer. */}
 
                               <FileChanges changes={fileChanges} />
 
@@ -18422,10 +18566,6 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         <a href="https://console.cloud.google.com/apis/credentials" target="_blank" rel="noreferrer">Google Cloud Console → Credentials</a>
                         {' → OAuth client ID → Web application'}
                       </li>
-                      <li>
-                        <a href="https://developers.kakao.com/console/app" target="_blank" rel="noreferrer">Kakao Developers → 내 애플리케이션</a>
-                        {' → 앱 키 → REST API 키 · 카카오 로그인 → Redirect URI'}
-                      </li>
                       <li className="setup-origin">
                         <span>{t('auth.copyOrigin')}:</span>
                         <code>{registerableOrigin}</code>
@@ -18438,12 +18578,9 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         </button>
                       </li>
                       <li>
-                        <code>.env</code>: <code>VITE_GOOGLE_CLIENT_ID</code> / <code>VITE_KAKAO_REST_KEY</code>
+                        <code>.env</code>: <code>VITE_GOOGLE_CLIENT_ID</code>
                       </li>
                     </ol>
-
-                    <div className="setup-why">{t('auth.kakaoNote')}</div>
-                    <div className="setup-why">{t('auth.kakaoChecklist')}</div>
 
                     <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
                       {t('auth.socialHelp')}
@@ -18456,30 +18593,9 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       onChange={e => setGoogleClientId(e.target.value.trim())}
                       placeholder="123456789-abc.apps.googleusercontent.com"
                       spellCheck={false}
-                      style={{ marginBottom: '0.6rem' }}
                     />
-                    <label style={{ fontSize: '0.78rem' }}>{t('auth.kakaoRestKey')}</label>
-                    <input
-                      type="text"
-                      className="settings-input"
-                      value={kakaoRestKey}
-                      onChange={e => setKakaoRestKey(e.target.value.trim())}
-                      placeholder="0123456789abcdef0123456789abcdef"
-                      spellCheck={false}
-                    />
-                    <div className="setup-origin" style={{ marginTop: '0.4rem' }}>
-                      <span>{t('auth.kakaoRedirect')}:</span>
-                      <code>{kakaoRedirectUri()}</code>
-                      <button
-                        className="icon-btn bordered"
-                        onClick={() => { copyToClipboard(kakaoRedirectUri()); toast(t('common.copied'), 'success', 1500); }}
-                        aria-label={t('common.copy')} title={t('common.copy')}
-                      >
-                        <Copy size={13} />
-                      </button>
-                    </div>
                     <div style={{ fontSize: '0.72rem', color: 'var(--text-muted)', marginTop: '0.5rem' }}>
-                      {socialDefaults().googleClientId || socialDefaults().kakaoRestKey
+                      {socialDefaults().googleClientId
                         ? 'Values from .env are used unless overridden above.'
                         : 'Leave blank to use .env values instead.'}
                     </div>
@@ -19248,7 +19364,6 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               await handleAddAccount();
             }}
             onDelete={() => { setShowProfileDialog(false); handleDeleteAccount(); }}
-            onUnlinkKakao={handleKakaoUnlink}
           />
         )}
 

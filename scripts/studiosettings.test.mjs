@@ -176,9 +176,11 @@ eq('a negative is not restored where there is nowhere to put it',
 eq('but it is where there is',
   S.restoreForm({ ...MODEL, has: { negative: true } }, { negative: 'blurry' }).negative, 'blurry');
 
-// More LoRAs than the workflow can stack are cut to what it can.
-eq('saved LoRAs are capped at the workflow ceiling',
-  S.restoreForm({ ...MODEL, loraSlots: 2 }, { loras: NAMES.map(n => ({ name: n })) }).loras.length, 2);
+// Finite sockets no longer impose a selection cap.
+eq('all saved LoRAs survive restoring a form',
+  S.restoreForm({ ...MODEL, loraSlots: 2 }, { loras: NAMES.map(n => ({ name: n })) }).loras.length, NAMES.length);
+eq('disabled LoRA state survives restoring a form',
+  S.restoreForm(MODEL, {loras:[{name:NAMES[0],weight:0.7,enabled:false}]}).loras[0].enabled, false);
 
 /* --------------------------------------------------------- surviving rubbish */
 

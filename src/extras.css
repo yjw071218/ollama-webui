@@ -1,4 +1,4 @@
-﻿/* =========================================================
+/* =========================================================
    Design tokens that were referenced but never defined
    (--text-muted / --primary / --accent / --primary-rgb),
    plus an explicit light/dark override driven by data-theme.
@@ -1409,8 +1409,6 @@ mark.chat-hit.current {
 .auth-social-btn.native-google > svg { position: absolute; left: 12px; }
 .auth-social-btn.native-google:hover:not(:disabled) { background: #f8faff; border-color: #d2e3fc; }
 .auth-social-btn.native-google:focus-visible { outline: 2px solid #4285f4; outline-offset: 2px; }
-.auth-social-btn.kakao { min-height: 44px; background: #FEE500; color: #191600; border-color: #FEE500; }
-.auth-social-btn.kakao:hover:not(:disabled) { background: #f5dd00; border-color: #f5dd00; }
 
 .auth-hint { font-size: 0.72rem; color: var(--text-muted); text-align: center; line-height: 1.4; }
 
@@ -2077,9 +2075,11 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
   to { opacity: 1; }
 }
 
-/* Only words that just mounted animate; settled text is left alone because
-   React reuses the DOM node for an unchanged position. `backwards`, not
-   `both`: a held fill keeps every finished word an animated element. */
+/* Only characters still inside their fade are spans at all (see
+   rehypeAnimateTokens); each carries a negative delay for how long it has
+   already been on screen, so a span re-created by a markdown re-parse picks
+   up its fade where it was instead of starting over. `backwards`, not `both`:
+   a held fill keeps every finished character an animated element. */
 .markdown-body .tok {
   animation: token-in 360ms cubic-bezier(0.25, 0.1, 0.25, 1) backwards;
   display: inline;
@@ -9233,11 +9233,20 @@ body, .claude-main { background: var(--surface-sunken); }
    =========================================================
    Its steps as a timeline inside the thinking, and the commands it is
    running as small live terminals under it. */
-.agent-activity { display: grid; gap: 0.4rem; font-size: 0.8rem; }
+/* minmax(0, 1fr), not the implicit auto column: an auto column grows to the
+   longest unbroken line (a command in nowrap), and the steps then ran off the
+   right edge. Inside the thinking fold its overflow hid that; out of it, not. */
+.agent-activity { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.4rem; font-size: 0.8rem; min-width: 0; max-width: 100%; }
+.agent-activity > *, .agent-step-body > * { min-width: 0; }
 .agent-summary {
   display: flex; align-items: center; flex-wrap: wrap; gap: 0.4rem;
   color: var(--text-secondary); font-size: 0.75rem;
 }
+/* The steps folded on their own under the thinking (stepsOnly). */
+.agent-activity.is-steps-only { margin: 0.25rem 0 0.5rem; }
+.agent-summary.is-toggle { cursor: pointer; user-select: none; width: fit-content; border-radius: 6px; padding: 0.15rem 0.35rem; margin-left: -0.35rem; }
+.agent-summary.is-toggle:hover { background: var(--hover-bg); color: var(--text-primary); }
+.agent-summary.is-toggle:focus-visible { outline: 2px solid var(--accent, #6b8afd); outline-offset: 1px; }
 .agent-chip {
   display: inline-flex; align-items: center; gap: 0.2rem;
   padding: 0 0.4rem; border-radius: 999px;
@@ -9368,7 +9377,7 @@ body, .claude-main { background: var(--surface-sunken); }
 .ansi-cyan { color: #56d4dd; } .ansi-white { color: #f0f6fc; } .ansi-gray { color: #8b949e; }
 
 /* A step, opened: its arguments, result and output. */
-.agent-step-body { display: grid; gap: 0.3rem; margin-top: 0.2rem; }
+.agent-step-body { display: grid; grid-template-columns: minmax(0, 1fr); gap: 0.3rem; margin-top: 0.2rem; }
 .agent-step-label { font-size: 0.68rem; text-transform: uppercase; letter-spacing: 0.04em; color: var(--text-muted); }
 .agent-step-json {
   margin: 0.15rem 0 0; max-height: 220px; overflow: auto; padding: 0.4rem 0.55rem;
@@ -9653,6 +9662,12 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
    phone rules (which hide the advice) never fired and the advice wrapped onto
    two lines under the meter. On a desktop it now stays on one line and
    shortens with an ellipsis; the meter and switches keep their full width. */
+/* The footer is as wide as the composer above it, not the whole column. With
+   `nowrap` and the advice's long sentence it stretched across the entire chat
+   column, so the command dock (AgentActivity.jsx), which rides over any bar
+   under it, saw a bar under the bottom-left corner and floated up over the
+   transcript -- next to "생각하는 중" -- instead of staying a pill in the corner. */
+.input-footer { width: 100%; max-width: var(--content-width, 768px); box-sizing: border-box; }
 @media (min-width: 861px) {
   .input-footer { flex-wrap: nowrap; }
   .input-footer .composer-disclaimer {
@@ -9912,6 +9927,31 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 }
 .initial-sync-bar > div { height: 100%; background: var(--primary); border-radius: inherit; transition: width .25s ease; }
 .initial-sync-percent { font-variant-numeric: tabular-nums; font-weight: 600; font-size: 1.05rem; }
+/* Words for where the sync is, so a slow page reads as work rather than a hang. */
+.initial-sync-stage {
+  min-height: 1.4em; color: var(--text-secondary); font-size: .88rem;
+  font-variant-numeric: tabular-nums; overflow-wrap: anywhere;
+}
+/* A light sweep over the bar while a request is in flight. */
+.initial-sync-bar { position: relative; }
+.initial-sync-bar.is-working::after {
+  content: ''; position: absolute; inset: 0;
+  background: linear-gradient(90deg, transparent, color-mix(in srgb, var(--primary) 35%, transparent), transparent);
+  animation: initial-sync-sweep 1.4s ease-in-out infinite;
+}
+@keyframes initial-sync-sweep { from { transform: translateX(-100%); } to { transform: translateX(100%); } }
+
+/* The mark turning: each arc on its own clock, so the two rings slide past
+   each other instead of rotating as one piece. */
+.logo-spinning .logo-ring { transform-box: view-box; transform-origin: 16px 16px; }
+.logo-spinning .logo-ring-outer { animation: logo-ring-turn 2.4s linear infinite; }
+.logo-spinning .logo-ring-inner { animation: logo-ring-turn 1.1s linear infinite reverse; }
+@keyframes logo-ring-turn { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) {
+  .logo-spinning .logo-ring-outer { animation-duration: 6s; }
+  .logo-spinning .logo-ring-inner { animation-duration: 4s; }
+  .initial-sync-bar.is-working::after { animation: none; }
+}
 .initial-sync-card .initial-sync-error { color: #d14343; }
 .initial-sync-actions { display: flex; gap: 8px; margin-top: 4px; }
 .initial-sync-actions button {
@@ -9920,3 +9960,53 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 }
 .initial-sync-actions button.secondary { background: transparent; color: var(--text-primary); border-color: var(--border-color); }
 .profile-divider { height: 1px; margin: 0.25rem 0.4rem; background: var(--border-color); }
+
+/* Server unreachable (src/ServerOffline.jsx): the start-up screen, and the
+   strip over the app when a server that was there stops answering. */
+.server-offline {
+  position: fixed; inset: 0; z-index: 10001;
+  display: flex; align-items: center; justify-content: center;
+  padding: max(24px, env(safe-area-inset-top)) 16px max(24px, env(safe-area-inset-bottom));
+  background: var(--bg-main, #f7f5f0); color: var(--text-primary, #1f1e1d);
+  overflow-y: auto;
+}
+.server-offline-card {
+  width: min(420px, 100%); text-align: center;
+  display: flex; flex-direction: column; align-items: center; gap: 10px;
+}
+.server-offline-card > svg { color: var(--primary, #c96442); margin-bottom: 4px; }
+.server-offline-card h1 { margin: 0; font-size: 1.25rem; font-weight: 600; }
+.server-offline-card p { margin: 0; color: var(--text-secondary, #6b6a68); font-size: .92rem; line-height: 1.55; }
+.server-offline-checks {
+  margin: 4px 0 0; padding: 12px 14px 12px 30px; text-align: start; width: 100%; box-sizing: border-box;
+  border: 1px solid var(--border-color, #e5e3dc); border-radius: 12px;
+  color: var(--text-secondary, #6b6a68); font-size: .86rem; line-height: 1.6; overflow-wrap: anywhere;
+}
+.server-offline-status { min-height: 1.4em; font-size: .88rem; color: var(--text-secondary, #6b6a68); font-variant-numeric: tabular-nums; }
+.server-offline-actions { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 4px; }
+.server-offline-actions button {
+  display: inline-flex; align-items: center; gap: 6px;
+  min-height: 40px; padding: 8px 16px; border-radius: 10px; font: inherit; cursor: pointer;
+  border: 1px solid var(--primary, #c96442); background: var(--primary, #c96442); color: #fff;
+}
+.server-offline-actions button.secondary { background: transparent; color: var(--text-primary, #1f1e1d); border-color: var(--border-color, #e5e3dc); }
+.server-offline-actions button:disabled { opacity: .6; cursor: default; }
+
+.connection-banner {
+  position: fixed; z-index: 9999; left: 50%; transform: translateX(-50%);
+  top: max(8px, env(safe-area-inset-top));
+  width: max-content; max-width: calc(100vw - 32px); box-sizing: border-box;
+  display: flex; align-items: center; gap: 8px; flex-wrap: wrap;
+  padding: 8px 10px 8px 12px; border-radius: 12px;
+  background: #b42318; color: #fff; font-size: .86rem; line-height: 1.35;
+  box-shadow: 0 6px 24px rgba(0, 0, 0, .18);
+}
+.connection-banner.is-back { background: #2e7d32; }
+.connection-banner-text { flex: 1 1 auto; min-width: 0; overflow-wrap: anywhere; }
+.connection-banner-count { opacity: .85; font-variant-numeric: tabular-nums; }
+.connection-banner button {
+  display: inline-flex; align-items: center; gap: 4px; flex: none;
+  padding: 4px 10px; border-radius: 8px; border: 1px solid rgba(255, 255, 255, .55);
+  background: transparent; color: inherit; font: inherit; cursor: pointer;
+}
+.connection-banner button:disabled { opacity: .6; cursor: default; }

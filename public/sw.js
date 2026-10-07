@@ -44,7 +44,7 @@ const VERSION = 'v2';
  * from the files and fails if it disagrees, which makes changing an icon
  * without invalidating the cache impossible to do quietly.
  */
-const ICONS_REV = '920c86fa';
+const ICONS_REV = 'd4a865c2';
 
 const SHELL_CACHE = `webui-shell-${VERSION}-${ICONS_REV}`;
 const ASSET_CACHE = `webui-assets-${VERSION}`;

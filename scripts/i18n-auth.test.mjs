@@ -128,7 +128,7 @@ check('all other languages are LTR', LANGUAGES.filter(l => l.code !== 'ar').ever
 // provider configuration, and reading what a redirect handed back.
 const {
   sessionStorageKeyFor, decodeJwtPayload, socialConfig, socialDefaults,
-  setServerSocialConfig, kakaoRedirectUri,
+  setServerSocialConfig,
 } = auth;
 
 // The client no longer holds any machinery for deciding who someone is.
@@ -138,6 +138,8 @@ for (const gone of [
   'derivePasswordHash', 'registerWithPassword', 'signInWithPassword',
   'upsertSocialUser', 'loadUsers', 'saveSession', 'readSession', 'deleteUser',
   'verifyAssertion', 'registerPasskey', 'derToRawEcdsaSignature', 'changePassword',
+  // Kakao sign-in was removed.
+  'signInWithKakao', 'kakaoRedirectUri', 'readKakaoOutcome', 'kakaoUnlink',
 ]) {
   check(`the client no longer exports ${gone}`, auth[gone] === undefined);
 }
@@ -164,7 +166,7 @@ check('a malformed token throws instead of returning junk', threw);
 // empty localStorage — get a working sign-in button without anyone pasting keys.
 setServerSocialConfig({ googleClientId: 'from-server', kakaoRestKey: 'kakao-server' });
 check('the server supplies the client id', socialConfig().googleClientId === 'from-server');
-check('and the Kakao REST key', socialConfig().kakaoRestKey === 'kakao-server');
+check('and no Kakao key is offered any more', socialConfig().kakaoRestKey === undefined);
 check('defaults report what applies with nothing stored', socialDefaults().googleClientId === 'from-server');
 
 localStorage.setItem('googleClientId', 'typed-in-settings');
@@ -172,9 +174,6 @@ check('a value typed into settings overrides the server', socialConfig().googleC
 check('but the default still reports the server value', socialDefaults().googleClientId === 'from-server');
 localStorage.removeItem('googleClientId');
 
-globalThis.window.location = { origin: 'http://192.168.1.9:5173' };
-check('the Kakao redirect URI names this exact origin',
-  kakaoRedirectUri() === 'http://192.168.1.9:5173/kakao/callback');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

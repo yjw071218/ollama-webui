@@ -208,9 +208,10 @@ export const restoreForm = (model, saved = {}) => {
     form.loras = saved.loras
       .filter(row => row && typeof row.name === 'string' && row.name)
       .filter(row => stillThere(row.name, choices.lora))
-      .slice(0, model?.loraSlots || 0)
+      .filter(() => !!model?.loraSlots)
       .map(row => ({
         name: row.name,
+        enabled: row.enabled !== false,
         weight: Number.isFinite(Number(row.weight)) ? Number(row.weight) : 1,
       }));
   }

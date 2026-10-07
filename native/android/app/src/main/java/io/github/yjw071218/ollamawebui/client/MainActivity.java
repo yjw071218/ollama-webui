@@ -69,7 +69,7 @@ public class MainActivity extends Activity {
     /**
      * Sign-in pages open in a Custom Tab: a real browser shown over the app (as a
      * sheet where the browser supports it). Google refuses sign-in inside a
-     * WebView, and Kakao's "카카오톡으로 로그인" can only hand back to a browser.
+     * WebView.
      */
     private void openAuthTab(Uri uri) {
         Intent intent = new Intent(Intent.ACTION_VIEW, uri);
@@ -223,11 +223,6 @@ public class MainActivity extends Activity {
             return Objects.equals(u.getScheme(), origin.getScheme()) && Objects.equals(u.getRawAuthority(), origin.getRawAuthority());
         } catch (Exception e) { return false; }
     }
-    static boolean kakaoAuth(Uri uri) {
-        if (uri == null || !"https".equals(uri.getScheme()) || uri.getHost() == null || uri.getPort() != -1) return false;
-        String host = uri.getHost().toLowerCase(Locale.ROOT);
-        return host.equals("kauth.kakao.com") || host.equals("accounts.kakao.com") || host.equals("logins.kakao.com");
-    }
     /** Paint the system bars and the area behind them in the page's own background colour. */
     private void applyChrome(int color) {
         if (layout != null) layout.setBackgroundColor(color);
@@ -271,7 +266,6 @@ public class MainActivity extends Activity {
                         if (request.isForMainFrame() && google != null) googleDirect(server, google[0], google[1]);
                         else if (request.isForMainFrame() && id != null) {
                             if (id.matches("[a-f0-9]{64}")) openAuthTab(Uri.parse(server + "/api/auth/native/page#" + id + "&app=android"));
-                            else if (id.matches("kakao:[a-f0-9]{64}")) openAuthTab(Uri.parse(server + "/api/auth/native/kakao?app=android&id=" + id.substring(6)));
                         }
                         return true;
                     }
@@ -279,16 +273,7 @@ public class MainActivity extends Activity {
                 }
                 if (!request.isForMainFrame()) return true;
                 if (url.startsWith(server + "/") || url.equals(server)) { view.loadUrl(proxy.origin + url.substring(server.length())); return true; }
-                // Kakao login must finish in this WebView: the state cookie lives on the app origin.
-                if (kakaoAuth(request.getUrl())) return false;
-                if ("intent".equals(request.getUrl().getScheme())) {
-                    try {
-                        String fallback = Intent.parseUri(url, Intent.URI_INTENT_SCHEME).getStringExtra("browser_fallback_url");
-                        if (fallback != null && kakaoAuth(Uri.parse(fallback))) { view.loadUrl(fallback); return true; }
-                    } catch (Exception ignored) { }
-                    message("앱 안에서는 카카오계정(이메일/전화번호) 로그인을 사용하세요.");
-                    return true;
-                }
+                if ("intent".equals(request.getUrl().getScheme())) return true;
                 if ("http".equals(request.getUrl().getScheme()) || "https".equals(request.getUrl().getScheme()))
                     new AlertDialog.Builder(MainActivity.this).setTitle("외부 링크").setMessage(url).setNegativeButton("취소", null)
                         .setPositiveButton("브라우저로 열기", (d,w) -> { try { startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl())); } catch (Exception e) { message("링크를 열 앱이 없습니다."); } }).show();
@@ -397,14 +382,20 @@ public class MainActivity extends Activity {
                 case "clipboardWrite":
                     ((android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).setPrimaryClip(ClipData.newPlainText("Ollama WebUI", request.optString("text")));
                     reply(reply, id, true, null); break;
-                case "clipboardRead":
+                case "clipboardRead": {
+                    // "항상 허용" (다시 묻지 않기) is remembered per server, across restarts.
+                    String always = "always:clipboardRead:" + prefs.getString("server", "");
+                    Runnable readClip = () -> {
+                        ClipData clip = ((android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).getPrimaryClip();
+                        reply(reply, requestId, clip != null && clip.getItemCount() > 0 ? clip.getItemAt(0).coerceToText(this).toString() : "", null);
+                    };
+                    if (prefs.getBoolean(always, false)) { readClip.run(); break; }
                     new AlertDialog.Builder(this).setTitle("클립보드 읽기").setMessage("현재 서버가 클립보드의 텍스트를 읽도록 허용할까요?")
                         .setNegativeButton("거부", (d,w) -> reply(reply, requestId, null, "클립보드 읽기를 거부했습니다."))
                         .setOnCancelListener(d -> reply(reply, requestId, null, "취소했습니다."))
-                        .setPositiveButton("허용", (d,w) -> {
-                            ClipData clip = ((android.content.ClipboardManager) getSystemService(CLIPBOARD_SERVICE)).getPrimaryClip();
-                            reply(reply, requestId, clip != null && clip.getItemCount() > 0 ? clip.getItemAt(0).coerceToText(this).toString() : "", null);
-                        }).show(); break;
+                        .setNeutralButton("항상 허용", (d,w) -> { prefs.edit().putBoolean(always, true).apply(); readClip.run(); })
+                        .setPositiveButton("이번만 허용", (d,w) -> readClip.run()).show(); break;
+                }
                 case "notificationPermission":
                     if (permissionDone != null) throw new IllegalStateException("권한 요청이 진행 중입니다.");
                     new AlertDialog.Builder(this).setTitle("완료 알림").setMessage("이 서버에서 작업 완료 알림을 표시하도록 허용할까요?")

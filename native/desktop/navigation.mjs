@@ -1,10 +1,3 @@
-// Kakao's own sign-in pages, which must run inside the app window (exact hosts, HTTPS, default port).
-const KAKAO_AUTH_HOSTS = new Set(['kauth.kakao.com', 'accounts.kakao.com', 'logins.kakao.com']);
-export function kakaoAuthURL(value) {
-  try { const u = new URL(value); return u.protocol === 'https:' && !u.port && !u.username && KAKAO_AUTH_HOSTS.has(u.hostname); }
-  catch { return false; }
-}
-
 // A cancelled initial navigation is not success. Wait for a real trusted load.
 export function loadTrustedPage(win, url, origin, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {

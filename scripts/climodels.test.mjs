@@ -14,6 +14,11 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..');
 const C = await import(pathToFileURL(path.join(ROOT, 'server/cliModels.js')).href);
+/* These tests describe the sandboxed CLIs, which is CLI_FULL_ACCESS=false;
+   full access is the default and is checked on its own (see fullAccessOf). */
+const sandboxed = (provider, model, request, options = {}) => C.buildInvocation(provider, model, request,
+  { ...options, env: { CLI_FULL_ACCESS: 'false', ...(options.env || {}) } });
+
 
 // agy's chat agents are written here, never into the real ~/.gemini.
 const AGY_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'climodels-agyagents-'));
@@ -69,6 +74,21 @@ deep('CLI_MODELS=false offers none', C.availableProviders({ CLI_MODELS: 'false' 
   check('a trailing assistant turn asks to continue it', /Continue the last \[Assistant\] message/.test(cont.prompt));
 }
 {
+  const history = [
+    { role: 'user', content: 'Fix the build.' },
+    { role: 'assistant', content: 'I will check the files first.' },
+    { role: 'user', content: '알겠어' },
+  ];
+  const agent = C.toPrompt(history, { agentic: true });
+  check('with tools, the transcript asks for the work, not only text', /do that work now with your tools/.test(agent.prompt), agent.prompt);
+  check('and says earlier tool calls are not shown', /tool calls and results behind them are not shown/.test(agent.prompt));
+  check('not "only its text"', !/only its text/.test(agent.prompt));
+  check('without tools it stays a plain chat', /only its text/.test(C.toPrompt(history).prompt));
+  check('a continuation with tools still continues',
+    /Continue the last \[Assistant\] message/.test(C.toPrompt(history.slice(0, 2), { agentic: true }).prompt));
+  eq('a single message is still sent as itself', C.toPrompt([history[0]], { agentic: true }).prompt, 'Fix the build.');
+}
+{
   const img = C.toPrompt([
     { role: 'user', content: 'old', images: ['OLD'] },
     { role: 'assistant', content: 'ok' },
@@ -113,7 +133,7 @@ const scratch = fs.mkdtempSync(path.join(os.tmpdir(), 'climodels-test-'));
 try {
   const roleplay = C.toPrompt([{ role: 'system', content: '캐릭터 설정' }, { role: 'user', content: 'ROLEPLAY_TURN' }, { role: 'system', content: 'POST_HISTORY_TEST' }]);
   for (const provider of Object.values(C.PROVIDERS)) {
-    const invocation = C.buildInvocation(provider, provider.defaultModels[0], roleplay, { files: scratch, env: AGY_ENV });
+    const invocation = sandboxed(provider, provider.defaultModels[0], roleplay, { files: scratch, env: AGY_ENV });
     let text = invocation.stdin;
     if (provider.id === 'codex') {
       invocation.session.open();
@@ -124,7 +144,7 @@ try {
   }
   const request = { system: 'Be brief.', prompt: 'Hi & "bye"', images: ['iVBORw0KGgoAAA'] };
 
-  const claude = C.buildInvocation(C.PROVIDERS['claude-code'], 'haiku', request, { think: 'medium', files: scratch });
+  const claude = sandboxed(C.PROVIDERS['claude-code'], 'haiku', request, { think: 'medium', files: scratch });
   const tools = claude.args.indexOf('--tools');
   eq('Claude Code runs with no tools', claude.args[tools + 1], '');
   check('and no MCP servers', claude.args.includes('--strict-mcp-config'));
@@ -138,7 +158,7 @@ try {
   deep('with the image as a base64 block of the right type', claudeIn.message.content[1],
     { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgoAAA' } });
 
-  const codex = C.buildInvocation(C.PROVIDERS.codex, 'gpt-5.5', request, { think: false, files: scratch });
+  const codex = sandboxed(C.PROVIDERS.codex, 'gpt-5.5', request, { think: false, files: scratch });
   deep('Codex runs its app server', codex.args, ['app-server']);
   const opened = codex.session.open();
   eq('which is greeted first', opened[0].method, 'initialize');
@@ -157,7 +177,7 @@ try {
   const image = turn.params.input.find(i => i.type === 'localImage');
   check('the image is a file it can open', image && fs.existsSync(image.path), JSON.stringify(image));
 
-  const agy = C.buildInvocation(C.PROVIDERS.agy, 'gemini-3.1-pro-high', request, { files: scratch, env: AGY_ENV });
+  const agy = sandboxed(C.PROVIDERS.agy, 'gemini-3.1-pro-high', request, { files: scratch, env: AGY_ENV });
   eq('agy reads stdin with an empty --print', agy.args[agy.args.length - 1], '--print=');
   const agyIn = JSON.parse(agy.stdin);
   eq('as an `event: user` line', agyIn.event, 'user');
@@ -172,7 +192,7 @@ try {
 
   /* With the tools toggle on, the app's tags are how agy reaches MCP -- and
      it must not be told in the same breath to use no tools at all. */
-  const withAppTools = JSON.parse(C.buildInvocation(C.PROVIDERS.agy, 'x', { system: 'TOOLS: <TOOL_MCP server="files" tool="read_text_file">{}</TOOL_MCP>', prompt: 'read it', images: [] },
+  const withAppTools = JSON.parse(sandboxed(C.PROVIDERS.agy, 'x', { system: 'TOOLS: <TOOL_MCP server="files" tool="read_text_file">{}</TOOL_MCP>', prompt: 'read it', images: [] },
     { files: scratch, env: { ...AGY_ENV, CLI_AGY_MCP: 'off' }, tools: C.toolsFor(C.PROVIDERS.agy, { CLI_AGY_MCP: 'off' }, { wanted: true }) }).stdin).message.content[0].text;
   check('with the toggle on, agy is not told to use no tools', !withAppTools.includes('Do not use any tools'), withAppTools);
   check('but to use the tags its instructions describe', withAppTools.includes('use the tool tags your instructions describe'));
@@ -180,7 +200,7 @@ try {
   const body = C.agyAgentFile({ name: 'x', vision: false });
   check('the agent no longer says it has no tools at all, which made it refuse the tags', !body.includes('do not try to use any') && body.includes('<TOOL_MCP'), body);
   eq('it runs where the picture is', agy.cwd, scratch);
-  const agyPlain = C.buildInvocation(C.PROVIDERS.agy, 'gemini-3.1-pro-high', { system: '', prompt: 'hi', images: [] }, { files: scratch, env: AGY_ENV });
+  const agyPlain = sandboxed(C.PROVIDERS.agy, 'gemini-3.1-pro-high', { system: '', prompt: 'hi', images: [] }, { files: scratch, env: AGY_ENV });
 
   /* Its own agent: without the coding agent's prompt and tool definitions,
      which were most of the 8,000 tokens a "hello" cost. */
@@ -200,7 +220,7 @@ try {
   C.ensureAgyAgent(AGY_ENV);
   eq('an unchanged agent is not rewritten', fs.statSync(agentPath).mtimeMs, mtime);
   check('CLI_AGY_AGENT=off runs agy as itself',
-    !C.buildInvocation(C.PROVIDERS.agy, 'x', { system: '', prompt: 'hi', images: [] }, { files: scratch, env: { ...AGY_ENV, CLI_AGY_AGENT: 'off' } }).args.includes('--agent'));
+    !sandboxed(C.PROVIDERS.agy, 'x', { system: '', prompt: 'hi', images: [] }, { files: scratch, env: { ...AGY_ENV, CLI_AGY_AGENT: 'off' } }).args.includes('--agent'));
   check('without a picture, no tools at all, as before', JSON.parse(agyPlain.stdin).message.content[0].text.includes('Do not use any tools') && !agyPlain.cwd);
   eq('Claude Code says it can', C.toShow(C.PROVIDERS['claude-code'], 'x').capabilities.includes('vision'), true);
   eq('and neither claims tool calls it cannot make', C.toShow(C.PROVIDERS['claude-code'], 'x').capabilities.includes('tools'), false);
@@ -338,20 +358,31 @@ eq('but not over "off"', C.effortOf(false, C.PROVIDERS.codex, { CLI_EFFORT: 'hig
   }
 
   const scratch2 = fs.mkdtempSync(path.join(os.tmpdir(), 'climodels-inv-'));
-  const withTools = C.buildInvocation(C.PROVIDERS['claude-code'], 'opus', { system: '', prompt: 'hi', images: [] },
+  const withTools = sandboxed(C.PROVIDERS['claude-code'], 'opus', { system: '', prompt: 'hi', images: [] },
     { files: scratch2, tools: claudeTools });
   eq('Claude Code gets only web search and fetch as built-in tools', withTools.args[withTools.args.indexOf('--tools') + 1], 'WebSearch,WebFetch');
   check('still strict about which MCP servers', withTools.args.includes('--strict-mcp-config'));
+  const executionRules = fs.readFileSync(withTools.args[withTools.args.indexOf('--system-prompt-file') + 1], 'utf8');
+  check('MCP execution does not end with a promise', executionRules.includes('A promise or plan is not execution'));
+  check('MCP execution preserves approval and plan-only boundaries', executionRules.includes('plan-only requests, cancellations and required approvals'));
+  for (const resume of ['', 'existing-thread']) {
+    const run = sandboxed(C.PROVIDERS.codex, 'test-model', { system: 'Be brief.', prompt: '진행해줘', images: [] },
+      { files: scratch2, tools: C.toolsFor(C.PROVIDERS.codex, {}, opts), resume });
+    check('Codex execution rules survive ' + (resume || 'new thread'),
+      run.session.thread.baseInstructions.includes('A promise or plan is not execution'));
+    eq('execution rules do not widen the built-in sandbox', run.session.thread.sandbox, 'read-only');
+    eq('execution rules do not change approval policy', run.session.thread.approvalPolicy, 'never');
+  }
   const configFile = withTools.args[withTools.args.indexOf('--mcp-config') + 1];
   check('the servers are handed over in a file', fs.existsSync(configFile) && JSON.parse(fs.readFileSync(configFile, 'utf8')).mcpServers.files);
   eq('and allowed', withTools.args[withTools.args.indexOf('--allowedTools') + 1],
     'WebSearch,WebFetch,mcp__files__read_file,mcp__web,mcp__old');
   eq('a denied tool is disallowed', withTools.args[withTools.args.indexOf('--disallowedTools') + 1], 'mcp__web__delete');
-  const without = C.buildInvocation(C.PROVIDERS['claude-code'], 'opus', { system: '', prompt: 'hi', images: [] }, { files: scratch2 });
+  const without = sandboxed(C.PROVIDERS['claude-code'], 'opus', { system: '', prompt: 'hi', images: [] }, { files: scratch2 });
   check('without the toggle, no config and nothing allowed', !without.args.includes('--mcp-config') && !without.args.includes('--allowedTools'));
 
   const codexTools = C.toolsFor(C.PROVIDERS.codex, {}, opts);
-  const codexRun = C.buildInvocation(C.PROVIDERS.codex, 'gpt-5.5', { system: '', prompt: 'hi', images: [] }, { files: scratch2, tools: codexTools });
+  const codexRun = sandboxed(C.PROVIDERS.codex, 'gpt-5.5', { system: '', prompt: 'hi', images: [] }, { files: scratch2, tools: codexTools });
   eq('Codex still runs its app server, last', codexRun.args[codexRun.args.length - 1], 'app-server');
   const overrides = codexRun.args.filter((a, i) => codexRun.args[i - 1] === '-c' && a.startsWith('mcp_servers.'));
   eq('one -c per server', overrides.length, 2);
@@ -408,15 +439,15 @@ eq('but not over "off"', C.effortOf(false, C.PROVIDERS.codex, { CLI_EFFORT: 'hig
 {
   const scratch3 = fs.mkdtempSync(path.join(os.tmpdir(), 'climodels-think-'));
   const req = { system: '', prompt: 'hi', images: [] };
-  const claudeOn = C.buildInvocation(C.PROVIDERS['claude-code'], 'opus', req, { files: scratch3 });
+  const claudeOn = sandboxed(C.PROVIDERS['claude-code'], 'opus', req, { files: scratch3 });
   eq('Claude Code is asked for its reasoning summarized', claudeOn.args[claudeOn.args.indexOf('--thinking-display') + 1], 'summarized');
   check('not when the chat switched thinking off',
-    !C.buildInvocation(C.PROVIDERS['claude-code'], 'opus', req, { files: scratch3, think: false }).args.includes('--thinking-display'));
+    !sandboxed(C.PROVIDERS['claude-code'], 'opus', req, { files: scratch3, think: false }).args.includes('--thinking-display'));
   check('nor with CLI_THINKING_DISPLAY=off',
-    !C.buildInvocation(C.PROVIDERS['claude-code'], 'opus', req, { files: scratch3, env: { CLI_THINKING_DISPLAY: 'off' } }).args.includes('--thinking-display'));
-  const codexOn = C.buildInvocation(C.PROVIDERS.codex, 'gpt-5.5', req, { files: scratch3 });
+    !sandboxed(C.PROVIDERS['claude-code'], 'opus', req, { files: scratch3, env: { CLI_THINKING_DISPLAY: 'off' } }).args.includes('--thinking-display'));
+  const codexOn = sandboxed(C.PROVIDERS.codex, 'gpt-5.5', req, { files: scratch3 });
   check('Codex is asked for a detailed reasoning summary', codexOn.args.includes('model_reasoning_summary="detailed"'), JSON.stringify(codexOn.args));
-  check('not when thinking is off', !C.buildInvocation(C.PROVIDERS.codex, 'gpt-5.5', req, { files: scratch3, think: false }).args.some(a => a.startsWith('model_reasoning_summary')));
+  check('not when thinking is off', !sandboxed(C.PROVIDERS.codex, 'gpt-5.5', req, { files: scratch3, think: false }).args.some(a => a.startsWith('model_reasoning_summary')));
   deep('agy passes its reasoning on', { ...new C.AgyReader().accept({ event: 'step_update', step_update: { step_type: 'planner_response', thinking_delta: 'hmm' } }), started: undefined }, { thinking: 'hmm' });
   fs.rmSync(scratch3, { recursive: true, force: true });
 }
@@ -657,7 +688,7 @@ deep('.env names the list when it says', await C.modelsOf(C.PROVIDERS['claude-co
     onDelta: (d) => { text += d.content; },
   });
   eq('an agy without the agent is asked again as itself', text, 'as itself');
-  check('and later runs do not pass the agent', !C.buildInvocation(C.PROVIDERS.agy, 'x', { system: '', prompt: 'hi', images: [] }, { files: dir, env: AGY_ENV }).args.includes('--agent'));
+  check('and later runs do not pass the agent', !sandboxed(C.PROVIDERS.agy, 'x', { system: '', prompt: 'hi', images: [] }, { files: dir, env: AGY_ENV }).args.includes('--agent'));
   fs.rmSync(dir, { recursive: true, force: true });
 }
 

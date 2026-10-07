@@ -4,6 +4,7 @@ import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { readRequestBody } from './requestBody.js';
+import { signedInFile } from './cliAuth.js';
 import { ownerOfRequest } from './session.js';
 import { backendOf, callServer, imageMime, toTags } from './llamacpp.js';
 import {
@@ -15,6 +16,7 @@ import { listCommands, stopCommand, noteCommand, readLog } from './liveCommands.
 import { readPolicy, writePolicy, effectiveAccess, hasBackup, restoreBackup, sweepBackups, listBackups } from './workbenchState.js';
 import { resumeEnabled, historyKey, splitForResume, tailRequest, sessions } from './cliSessions.js';
 import { recordUsage, readUsage, summariseUsage } from './cliUsage.js';
+import { agyQuotaForModel, agyQuotaGroup } from '../src/agyQuota.js';
 import {
   candidatesFor, blockedUntil, isLimitError, isUnavailableError, streamLocal, LIMIT_ERROR,
 } from './cliFallback.js';
@@ -129,7 +131,9 @@ export const PROVIDERS = {
     bin: 'codex',
     pathEnv: 'CODEX_CLI_PATH',
     modelsEnv: 'CLI_CODEX_MODELS',
-    defaultModels: ['gpt-5.5'],
+    // Only until Codex has written models_cache.json (its first run): the
+    // list a signed-in Codex offered as of 2026-10, so a new PC is not one model.
+    defaultModels: ['gpt-6-astra', 'gpt-6-sol', 'gpt-6-luna', 'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5'],
     vision: true,
     thinking: true,
     // `-c mcp_servers.<name>...` for one run. Codex has no legacy SSE client.
@@ -145,7 +149,15 @@ export const PROVIDERS = {
     bin: 'agy',
     pathEnv: 'AGY_CLI_PATH',
     modelsEnv: 'CLI_AGY_MODELS',
-    defaultModels: ['gemini-3.1-pro-high', 'gemini-3.8-flash-medium'],
+    // Only while `agy models` cannot answer (not signed in, not on PATH yet):
+    // what it listed as of 2026-10.
+    defaultModels: [
+      'gemini-3.1-pro-high', 'gemini-3.1-pro-low',
+      'gemini-3.8-flash-high', 'gemini-3.8-flash-medium', 'gemini-3.8-flash-low',
+      'gemini-3.7-flash-high', 'gemini-3.7-flash-medium', 'gemini-3.7-flash-low',
+      'gemini-3.6-flash-high', 'gemini-3.6-flash-medium', 'gemini-3.6-flash-low',
+      'claude-sonnet-4-6', 'claude-opus-4-6-thinking', 'gpt-oss-120b-medium',
+    ],
     // `agy`'s stream input takes text blocks only ("content block type
     // "image" is not supported"), but its own `view_file` tool opens images.
     // So a picture is saved as a file in the directory it runs in, and it is
@@ -255,7 +267,18 @@ export const formatInstruction = (format) => {
  * here that sees images takes them once, alongside the prompt, and an older
  * picture has already been answered about in the transcript.
  */
-export const toPrompt = (messages = [], { format } = {}) => {
+/* With tools, "write the next message: only its text" read as a text-completion
+   task -- and the transcript shows earlier answers without the tool calls
+   behind them, so they look like a model that only talks. Codex found its
+   tools and still ended on "I will check ..." with no call. The agentic
+   framing says what the transcript leaves out and asks for the work itself. */
+const AGENTIC_FRAME = [
+  'The conversation so far is below. Earlier [Assistant] turns show only the final text of each reply; the tool calls and results behind them are not shown, so do not imitate them as replies that only describe work.',
+  'Reply to the latest [User] message as the assistant. If it asks for work -- or agrees to work you proposed or promised -- do that work now with your tools in this turn, and continue until it is done or genuinely blocked, before writing your reply. A reply that only says what you will do is not acceptable.',
+  'Write the reply without the "[Assistant]" label.',
+].join(' ');
+
+export const toPrompt = (messages = [], { format, agentic = false } = {}) => {
   const system = [];
   const turns = [];
   for (const message of messages) {
@@ -285,8 +308,11 @@ export const toPrompt = (messages = [], { format } = {}) => {
       .map(turn => `[${ROLE_LABEL[turn.role]}]\n${turn.text}`)
       .join('\n\n');
     const last = turns.findLast(turn => !['system', 'developer'].includes(turn.role));
+    const continuing = last?.role === 'assistant';
     prompt = [
-      'The conversation so far is below. Write the next [Assistant] message: only its text, without the "[Assistant]" label.',
+      agentic && !continuing
+        ? AGENTIC_FRAME
+        : 'The conversation so far is below. Write the next [Assistant] message: only its text, without the "[Assistant]" label.',
       '',
       '<conversation>',
       history,
@@ -348,6 +374,24 @@ const flag = (value, fallback) => {
   if (!text) return fallback;
   return !['false', '0', 'off', 'no'].includes(text);
 };
+
+/* Full access: the CLIs may read and write anywhere on this PC, and are never
+   stopped to ask. Asked for in so many words -- "every folder, always
+   writable" -- after a chat agent kept answering that its session was
+   read-only and it could not continue the work. On by default for that
+   reason; CLI_FULL_ACCESS=false in .env puts back the sandbox (chat
+   read-only, project writes inside the folder with everything else asked
+   about in the browser). It applies to everyone who can use the CLIs on this
+   server, which is the thing to weigh before leaving it on. */
+export const fullAccessOf = (env = {}) => flag(env.CLI_FULL_ACCESS, true);
+
+/* Every drive on this machine, for Claude Code's --add-dir: its file tools
+   stay inside the folders they are given even when nothing is asked. */
+export const allRoots = (platform = process.platform, exists = fs.existsSync) => (platform === 'win32'
+  ? 'CDEFGHIJKLMNOPQRSTUVWXYZ'.split('').map(letter => `${letter}:\\`).filter(root => { try { return exists(root); } catch { return false; } })
+  : ['/']);
+
+const FULL_ACCESS_NOTE = "\n\nYou have full read and write access to the user's PC: every folder, with no sandbox and no approval prompts. When asked to create, edit or continue work on files, do it directly with your tools and absolute paths -- never say the session is read-only or ask the user to change permissions. Still do not run destructive commands (deleting data, formatting, force-pushing) unless the user explicitly asks for that.";
 
 /* The transports a CLI takes MCP servers in for one run, here and now. agy
    takes them only in an agent file (see agyAgentFile), which is newer than
@@ -660,6 +704,19 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
   const servers = tools?.servers || {};
   const hasServers = Object.keys(servers).length > 0;
 
+  // Keep this in the invocation, not only the browser prompt: resumed and
+  // API-driven chats need the same distinction between intent and execution.
+  if (hasServers && !project) system = [
+    system || 'You are a helpful assistant.',
+    '[Tool execution]',
+    'When the user asks you to perform work, use the available tools to do it in this turn, within the user-authorized scope. A promise or plan is not execution.',
+    'A brief progress message must be followed by the actual tool call, not a final answer saying you will start.',
+    'Use the project path and task already supplied in the conversation or its summary. Inspect that location with an available tool before asking the user to resend source files or a path.',
+    'After a tool result, continue the requested work until complete or genuinely blocked. If blocked, report the attempted operation and actual error, and ask only for the missing information.',
+    'Do not infer that every MCP server can write: use only capabilities actually offered, and respect permissions, plan-only requests, cancellations and required approvals.',
+    'Report only changes, tests and uploads supported by tool results. Do not retry external side effects merely because a prior answer was incomplete.',
+  ].join('\n\n');
+
   if (project) return buildProjectInvocation(provider, model, { system, prompt, images }, {
     effort, wantThinking, files, servers, hasServers, env, resume, persist, project, tools,
   });
@@ -673,8 +730,11 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
       '--include-partial-messages',
       // No built-in tools, and no MCP servers but the ones handed over below:
       // this is a chat, and a chat message that can run commands on the host
-      // is a remote shell with extra steps.
-      '--tools', tools?.web ? 'WebSearch,WebFetch' : '',
+      // is a remote shell with extra steps -- unless full access was chosen
+      // (see fullAccessOf), when it has every tool, every drive and no prompts.
+      ...(fullAccessOf(env)
+        ? ['--permission-mode', 'bypassPermissions', ...allRoots().flatMap(root => ['--add-dir', root])]
+        : ['--tools', tools?.web ? 'WebSearch,WebFetch' : '']),
       '--strict-mcp-config',
       '--disable-slash-commands',
       // Kept only when it may be resumed (server/cliSessions.js); in the
@@ -697,7 +757,7 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
     // agent in a repository. A file rather than an argument, because a
     // character card is longer than Windows allows a command line to be.
     const systemFile = path.join(files, 'system.txt');
-    fs.writeFileSync(systemFile, system || 'You are a helpful assistant.', 'utf8');
+    fs.writeFileSync(systemFile, (system || 'You are a helpful assistant.') + (fullAccessOf(env) ? FULL_ACCESS_NOTE : ''), 'utf8');
     args.push('--system-prompt-file', systemFile);
     if (effort) args.push('--effort', effort);
     const display = thinkingDisplayOf(env);
@@ -737,10 +797,11 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
           cwd: workDir(),
           // Codex has no "no tools" switch. Read-only is the nearest thing:
           // it can look, it cannot change anything, and it is never asked.
-          sandbox: 'read-only',
+          // Full access (see fullAccessOf) lifts the sandbox altogether.
+          sandbox: fullAccessOf(env) ? 'danger-full-access' : 'read-only',
           approvalPolicy: 'never',
           ephemeral: !(persist || resume),
-          baseInstructions: [
+          baseInstructions: fullAccessOf(env) ? (system || 'You are a helpful assistant.') + FULL_ACCESS_NOTE : [
             system || 'You are a helpful assistant.',
             /* The read-only sandbox is only Codex's own shell. Told nothing,
                Codex read "sandbox: read-only" in its context and refused to
@@ -780,7 +841,9 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
     /* With the tools toggle on, the app's tool tags are in the instructions
        and are the way to use them; agy's own tools stay off either way. */
     const appTools = !!tools;
-    const ownTools = hasServers
+    const ownTools = fullAccessOf(env)
+      ? `You have full read and write access to the user's PC. When asked to create, edit or continue work on files, use your file and command tools directly with absolute paths (by default a new folder on their Desktop, ${path.join(HOME, 'Desktop')}, for new work). Do not run destructive commands unless explicitly asked.`
+      : hasServers
       /* This agy build ignores the agent's `tools: []` and `mcpServers` (it
          loads MCP only from the global mcp_config.json or plugins), so the
          MCP write_file is not there. Told to use it, the model wrote with
@@ -839,7 +902,12 @@ const buildProjectInvocation = (provider, model, { system, prompt, images = [] }
       '--output-format', 'stream-json',
       '--verbose',
       '--include-partial-messages',
-      '--permission-mode', plan ? 'plan' : 'acceptEdits',
+      ...(plan
+        ? ['--permission-mode', 'plan']
+        : fullAccessOf(env)
+          // Full access: nothing is asked, and every drive is in reach.
+          ? ['--permission-mode', 'bypassPermissions', ...allRoots().flatMap(root => ['--add-dir', root])]
+          : ['--permission-mode', 'acceptEdits']),
       '--permission-prompt-tool', 'mcp__webui_approval__ask',
       '--mcp-config', configFile,
       '--strict-mcp-config',
@@ -887,9 +955,10 @@ const buildProjectInvocation = (provider, model, { system, prompt, images = [] }
         thread: {
           model,
           cwd: project.dir,
-          // Writes inside the folder; anything else is asked about.
-          sandbox: plan ? 'read-only' : 'workspace-write',
-          approvalPolicy: 'on-request',
+          // Writes inside the folder; anything else is asked about -- or,
+          // with full access, anywhere and without asking.
+          sandbox: plan ? 'read-only' : (fullAccessOf(env) ? 'danger-full-access' : 'workspace-write'),
+          approvalPolicy: !plan && fullAccessOf(env) ? 'never' : 'on-request',
           ephemeral: !(persist || resume),
           // Codex's own instructions and AGENTS.md stay; the chat's are added.
           ...(system ? { developerInstructions: system } : {}),
@@ -903,7 +972,7 @@ const buildProjectInvocation = (provider, model, { system, prompt, images = [] }
   if (provider.id === 'agy') {
     /* agy has no way to ask before it acts, so it edits only when the reader
        has said in .env that it may; otherwise it plans. */
-    const mayEdit = !plan && flag(env.CLI_AGY_PROJECT_EDIT, false);
+    const mayEdit = !plan && (fullAccessOf(env) || flag(env.CLI_AGY_PROJECT_EDIT, false));
     /* Not allowed to edit: always the read-only plan agent, so the rule is
        enforced by agy and not only asked for in the prompt. If the agent cannot
        be written, refuse rather than run agy with its full default tools. */
@@ -922,7 +991,9 @@ const buildProjectInvocation = (provider, model, { system, prompt, images = [] }
     const rules = [
       `You are working in the project at ${project.dir}. Follow its GEMINI.md / AGENTS.md if present.`,
       mayEdit
-        ? 'You may read and edit files inside this folder. Do not touch anything outside it, and do not run destructive commands.'
+        ? (fullAccessOf(env)
+          ? 'You have full read and write access to this PC. Work in this folder by default; other folders are allowed when the task needs them. Do not run destructive commands unless explicitly asked.'
+          : 'You may read and edit files inside this folder. Do not touch anything outside it, and do not run destructive commands.')
         : 'Plan only: read what you need and propose the change step by step. Do not modify any file and do not run commands.',
       pictures.length ? `The user attached images, saved at:\n${pictures.map(f => `  ${f}`).join('\n')}\nOpen them with view_file before answering.` : '',
     ].filter(Boolean).join('\n');
@@ -1062,11 +1133,18 @@ export const noteLimits = (id, limits, source = 'run') => {
 };
 
 /* A run refused for being over the limit says so, even if no event came. */
-export const noteLimitError = (id, message) => {
+export const noteLimitError = (id, message, model = '') => {
   if (!LIMIT_ERROR.test(String(message || ''))) return;
   const store = loadLimits();
   /* agy never says how much a window holds; the runs before it said "limit"
      are the best guess, kept for the estimate in allLimits. */
+  if (id === 'agy') {
+    const group = agyQuotaGroup(model);
+    if (!group) return; // A provider-wide refusal cannot identify a quota pool.
+    noteLimits(id, { poolErrors: { ...(store[id]?.poolErrors || {}),
+      [group]: { updatedAt: Date.now(), message: String(message).slice(0, 300) } } }, 'error');
+    return;
+  }
   const learned = id === 'agy' ? learnAgyCapacity(readUsage({ since: Date.now() - 5 * 3600 * 1000 })) : null;
   noteLimits(id, {
     ...(store[id] || { windows: [] }), status: 'rejected', lastError: String(message).slice(0, 300),
@@ -2173,7 +2251,11 @@ export const modelsOf = async (provider, env = {}) => {
   if (provider.id === 'codex') found = codexModels();
   if (provider.id === 'agy') found = await agyModels(env);
   const models = found.length ? found : provider.defaultModels;
-  modelCache.set(provider.id, { at: Date.now(), models });
+  /* A fallback is remembered for 30 s only, not 10 min. On a fresh PC Codex
+     has no models_cache.json until its first run and `agy models` fails until
+     the sign-in, so the defaults are what shows -- and they used to stick
+     long after the CLI could have given its full list. */
+  modelCache.set(provider.id, { at: found.length ? Date.now() : Date.now() - MODEL_CACHE_MS + 30 * 1000, models });
   return models;
 };
 
@@ -2544,8 +2626,10 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
   const waitFor = (providerId) => noteResetWaiter(providerId, owner, backAt(allLimits(env)[providerId]));
 
   const runOneCli = async ({ provider, model }) => {
-    const full = toPrompt(messages, { format: body.format });
     const tools = toolsFor(provider, env, { wanted: toolsWanted });
+    // A run that can act is told, in the transcript too, to act (see AGENTIC_FRAME).
+    const agentic = !body.format && (!!project || Object.keys(tools?.servers || {}).length > 0 || !!tools?.web);
+    const full = toPrompt(messages, { format: body.format, agentic });
     const resumable = !generate && resumeEnabled(provider.id, env);
     // A session belongs to the folder it ran in: the same history in
     // another folder (or none) is a different session.
@@ -2642,7 +2726,7 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
         }
         /* Over its limit by its own account: not started at all, unless it
            is the last there is to try. */
-        if (!lastChance && blockedUntil(allLimits(env)[id])) {
+        if (!lastChance && blockedUntil(id === 'agy' ? agyQuotaForModel(allLimits(env)[id], cli.model) : allLimits(env)[id])) {
           waitFor(id);
           passedOver.push({ model: candidate, reason: 'limit' });
           continue;
@@ -2675,7 +2759,7 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
           if (controller.signal.aborted) throw e;
           record(id, { error: message, ms: Date.now() - runStarted });
           recordUsage({ provider: id, model: cli.model, owner, chat, via, error: message, ms: Date.now() - runStarted });
-          noteLimitError(id, message);
+          noteLimitError(id, message, cli.model);
           if (isLimitError(message)) waitFor(id);
           if (!delivered && !lastChance && (isLimitError(message) || isUnavailableError(message))) {
             passedOver.push({ model: candidate, reason: isLimitError(message) ? 'limit' : 'unavailable' });
@@ -2809,7 +2893,7 @@ export const answerOnce = async ({ model: name, messages, env = {}, owner = '', 
         continue;
       }
     }
-    if (!providers.includes(cli.provider) || (!last && blockedUntil(allLimits(env)[cli.provider.id]))) { passed.push(candidate); continue; }
+    if (!providers.includes(cli.provider) || (!last && blockedUntil(cli.provider.id === 'agy' ? agyQuotaForModel(allLimits(env).agy, cli.model) : allLimits(env)[cli.provider.id]))) { passed.push(candidate); continue; }
     // The same daily budget as a chat.
     if (Number(env.CLI_DAILY_BUDGET_USD) > 0) {
       const budget = budgetState(readUsage({ since: Date.now() - 24 * 3600 * 1000 }), env);
@@ -2824,7 +2908,7 @@ export const answerOnce = async ({ model: name, messages, env = {}, owner = '', 
     const before = folder ? await snapshotTree(folder.dir) : null;
     try {
       const result = await runCli({
-        provider: cli.provider, model: cli.model, env, request: toPrompt(messages), project: folder, signal,
+        provider: cli.provider, model: cli.model, env, request: toPrompt(messages, { agentic: !!folder }), project: folder, signal,
         approve: (question) => requestApproval({ owner, chat, ...question }),
         onDelta: (d) => { text += d.content || ''; },
       });
@@ -2845,7 +2929,7 @@ export const answerOnce = async ({ model: name, messages, env = {}, owner = '', 
       };
     } catch (e) {
       recordUsage({ provider: cli.provider.id, model: cli.model, owner, chat, via, error: String(e.message || e), ms: Date.now() - started });
-      noteLimitError(cli.provider.id, e.message);
+      noteLimitError(cli.provider.id, e.message, cli.model);
       if (!last && !text && (isLimitError(e.message) || isUnavailableError(e.message))) { passed.push(candidate); continue; }
       throw e;
     }
@@ -2874,7 +2958,8 @@ const versionOf = (provider, binary) => new Promise((resolve) => {
 const signInOf = (provider, env) => {
   const key = (provider.authEnv || []).find(name => env[name] || process.env[name]);
   if (key) return { signedIn: true, how: key };
-  const file = (provider.authFiles || []).map(parts => path.join(HOME, ...parts)).find(f => fs.existsSync(f));
+  // Read, not just found: an empty account file is no sign-in (cliAuth.js).
+  const file = signedInFile(provider.authFiles, HOME);
   return file ? { signedIn: true, how: path.basename(file) } : { signedIn: provider.authFiles?.length ? false : null, how: '' };
 };
 
@@ -3052,7 +3137,7 @@ const runInFolder = (env, owner) => async ({ model: name, dir, mode, prompt }) =
     return text;
   } catch (e) {
     recordUsage({ provider: cli.provider.id, model: cli.model, owner, via: 'race', error: String(e.message || e), ms: Date.now() - started });
-    noteLimitError(cli.provider.id, e.message);
+    noteLimitError(cli.provider.id, e.message, cli.model);
     throw e;
   }
 };

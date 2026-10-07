@@ -664,6 +664,43 @@ export const DRAWING_TAGS = new Set([
 ]);
 
 /**
+ * Where the n-th finished drawing call ends in a reply, or -1.
+ *
+ * Only the answer counts: a tag inside reasoning (`<think>`) is the model
+ * thinking about drawing, and a reply still thinking has no answer yet.
+ */
+export const drawingCallEnd = (text, n = 0) => {
+  const source = String(text || '');
+  const lastOpen = source.lastIndexOf('<think>');
+  const lastClose = source.lastIndexOf('</think>');
+  if (lastOpen > lastClose) return -1;
+  const start = lastClose === -1 ? 0 : lastClose + '</think>'.length;
+  const ends = /<\/(TOOL_[A-Z_]+)\s*>|<(TOOL_[A-Z_]+)[^<>]*\/>/gi;
+  ends.lastIndex = start;
+  let seen = 0;
+  let match;
+  while ((match = ends.exec(source)) !== null) {
+    if (!DRAWING_TAGS.has((match[1] || match[2]).toUpperCase())) continue;
+    if (seen === n) return match.index + match[0].length;
+    seen += 1;
+  }
+  return -1;
+};
+
+/**
+ * A reply as it may be shown while its drawing has not been made yet.
+ *
+ * Tools run once the reply has finished arriving, so whatever the model wrote
+ * after the drawing call -- "I hope you like it!" -- reached the screen before
+ * the picture, and stayed there when the drawing failed and was tried again.
+ * Everything after the first finished drawing call waits for the picture.
+ */
+export const holdAfterDrawing = (text) => {
+  const end = drawingCallEnd(text, 0);
+  return end === -1 ? text : String(text).slice(0, end).replace(/\s+$/, '');
+};
+
+/**
  * The schemas to send.
  *
  * `web` is the switch: fetching a page or reading a file needs permission and

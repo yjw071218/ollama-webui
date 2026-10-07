@@ -420,11 +420,16 @@ const LoraStack = ({ label, rows, options, slots, onChange, t }) => {
     <div className="studio-loras">
       <span className="studio-loras-label">
         {label}
-        <em>{rows.length} / {slots}</em>
+        <em>{rows.length} / ∞</em>
       </span>
 
       {rows.map((row, index) => (
-        <div className="studio-lora-row" key={index}>
+        <div className={`studio-lora-row ${row.enabled === false ? 'is-disabled' : ''}`} key={index}>
+          <button type="button" className="studio-lora-toggle" role="switch"
+            aria-checked={row.enabled !== false} aria-label={`${label} ${index + 1}`}
+            onClick={() => set(index, { enabled: row.enabled === false })}>
+            {row.enabled !== false ? 'ON' : 'OFF'}
+          </button>
           <SearchPicker
             value={row.name}
             options={options}
@@ -457,10 +462,7 @@ const LoraStack = ({ label, rows, options, slots, onChange, t }) => {
       <button
         type="button"
         className="studio-lora-add"
-        disabled={rows.length >= slots}
-        onClick={() => onChange(current => (current.length >= slots
-          ? current
-          : [...current, { name: '', weight: 1 }]))}
+        onClick={() => onChange(current => [...current, { name: '', weight: 1, enabled: true }])}
       >
         <Plus size={13} /> {t('studio.addLora')}
       </button>
@@ -797,7 +799,10 @@ export const StudioPanel = ({
 
   useEffect(() => {
     let cancelled = false;
-    (async () => {
+    let timer = 0;
+    /* While the bundled ComfyUI is starting (`starting`, server/studio.js)
+       ask again every 5 s, so the Studio comes alive by itself once it is up. */
+    const load = async (tries = 0) => {
       try {
         const res = await fetch('/studio/models', {
           method: 'POST', headers: { 'Content-Type': 'application/json' }, body: '{}',
@@ -809,12 +814,16 @@ export const StudioPanel = ({
           loading: false,
           error: data.success ? '' : (data.error || ''),
           offline: !!data.offline,
+          starting: !!data.starting,
+          slowWarning: data.slowWarning || '',
         });
+        if (data.starting && tries < 60) timer = setTimeout(() => load(tries + 1), 5000);
       } catch (e) {
         if (!cancelled) setCatalogue({ models: [], loading: false, error: String(e.message || e), offline: true });
       }
-    })();
-    return () => { cancelled = true; };
+    };
+    load();
+    return () => { cancelled = true; clearTimeout(timer); };
   }, []);
 
   const model = useMemo(
@@ -1078,7 +1087,7 @@ export const StudioPanel = ({
       // Only the rows that name something. An empty row is a row somebody
       // added and has not filled in yet, not a LoRA called "".
       ...((form.loras || []).some(l => l.name)
-        ? { loras: form.loras.filter(l => l.name) }
+        ? { loras: form.loras.filter(l => l.name && l.enabled !== false) }
         : {}),
       ...(form.referenceImage ? { referenceImage: form.referenceImage } : {}),
       /* How much to change it. Without this a reference picture reached the
@@ -1125,7 +1134,8 @@ export const StudioPanel = ({
         loras: request.loras,
         /* What the stack was before the switch took the style LoRAs out, so
            loading this back and switching it off gets them back. */
-        ...(mono ? { monochrome: true, formLoras: (form.loras || []).filter(l => l.name) } : {}),
+        formLoras: (form.loras || []).filter(l => l.name),
+        ...(mono ? { monochrome: true } : {}),
         size: `${form.width}×${form.height}`,
         // What this one actually ran at, which for a sweep is not what the
         // form says: the card has to name the value it is showing.
@@ -1911,6 +1921,13 @@ export const StudioPanel = ({
           </div>
         </div>
       )}
+      {/* A PC near ComfyUI's minimum (server/hwSpec.js): it works, slowly. */}
+      {catalogue.slowWarning && (
+        <div className="studio-offline is-warning" role="note">
+          <TriangleAlert size={15} />
+          <div className="studio-offline-detail">{catalogue.slowWarning}</div>
+        </div>
+      )}
 
       {/* ---------------------------------------------------- the instruments */}
       {dragging && <div className="studio-drop" aria-hidden="true"><FileImage size={22} />{t('studio.importDrop')}</div>}
@@ -2333,7 +2350,7 @@ export const StudioPanel = ({
             </Group>
 
             {has.lora && (
-              <Group label={t('studio.lora')} summary={[`${loraCount} / ${model?.loraSlots || 1}`]}>
+              <Group label={t('studio.lora')} summary={[`${loraCount} / ∞`]}>
                 <LoraStack
                   label={t('studio.lora')}
                   rows={form.loras || []}

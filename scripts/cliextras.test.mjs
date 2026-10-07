@@ -21,6 +21,11 @@ const AGY_DIR = fs.mkdtempSync(path.join(os.tmpdir(), 'cliextras-agyagents-'));
 
 const load = (file) => import(pathToFileURL(path.join(ROOT, file)).href);
 const C = await load('server/cliModels.js');
+/* These tests describe the sandboxed CLIs, which is CLI_FULL_ACCESS=false;
+   full access is the default and is checked on its own (see fullAccessOf). */
+const sandboxed = (provider, model, request, options = {}) => C.buildInvocation(provider, model, request,
+  { ...options, env: { CLI_FULL_ACCESS: 'false', ...(options.env || {}) } });
+
 const S = await load('server/cliSessions.js');
 const F = await load('server/cliFallback.js');
 const U = await load('server/cliUsage.js');
@@ -57,6 +62,15 @@ eq('and includes those', S.resumeEnabled('codex', { CLI_RESUME: 'claude-code,cod
   check('an edited answer is another key', S.historyKey('claude-code', 'opus', [history[0], history[1], { role: 'assistant', content: 'Hi.' }]) !== key);
   check('another model is another key', S.historyKey('claude-code', 'sonnet', history) !== key);
   check('another instruction is another key', S.historyKey('claude-code', 'opus', [{ role: 'system', content: 'Be long.' }, history[1], history[2]]) !== key);
+  {
+    const at = (t) => [{ role: 'system', content: `[Environment]\nCurrent date and time: ${t} (Asia/Seoul).` }, history[1], history[2]];
+    eq('the clock in the system prompt does not change the key (resume used to never hit)',
+      S.historyKey('codex', 'm', at('2026-10-03T10:56:46.051Z')), S.historyKey('codex', 'm', at('2026-10-03T10:58:39.385Z')));
+    check('but another day is another key',
+      S.historyKey('codex', 'm', at('2026-10-03T10:56:46.051Z')) !== S.historyKey('codex', 'm', at('2026-10-04T10:56:46.051Z')));
+    check('a time the user wrote is still part of the key',
+      S.historyKey('codex', 'm', [{ role: 'user', content: 'at 2026-10-03T10:00' }]) !== S.historyKey('codex', 'm', [{ role: 'user', content: 'at 2026-10-03T11:00' }]));
+  }
 
   const split = S.splitForResume([...history, { role: 'user', content: 'And you?', images: ['data:image/png;base64,QUJD'] }]);
   eq('split at the last answer', split.prefix.length, 3);
@@ -91,18 +105,18 @@ eq('and includes those', S.resumeEnabled('codex', { CLI_RESUME: 'claude-code,cod
 {
   const files = fs.mkdtempSync(path.join(os.tmpdir(), 'cliextras-files-'));
   const request = { system: 'Be brief.', prompt: 'Hi', images: [] };
-  const plain = C.buildInvocation(C.PROVIDERS['claude-code'], 'opus', request, { files });
+  const plain = sandboxed(C.PROVIDERS['claude-code'], 'opus', request, { files });
   check('Claude keeps no session when it will not be resumed', plain.args.includes('--no-session-persistence'));
-  const kept = C.buildInvocation(C.PROVIDERS['claude-code'], 'opus', request, { files, persist: true });
+  const kept = sandboxed(C.PROVIDERS['claude-code'], 'opus', request, { files, persist: true });
   check('and keeps one when it may be', !kept.args.includes('--no-session-persistence'));
-  const resumed = C.buildInvocation(C.PROVIDERS['claude-code'], 'opus', request, { files, resume: 'sess-9', persist: true });
+  const resumed = sandboxed(C.PROVIDERS['claude-code'], 'opus', request, { files, resume: 'sess-9', persist: true });
   eq('a resumed Claude is told which session', resumed.args[resumed.args.indexOf('--resume') + 1], 'sess-9');
 
-  const codex = C.buildInvocation(C.PROVIDERS.codex, 'gpt-5.5', request, { files, persist: true });
+  const codex = sandboxed(C.PROVIDERS.codex, 'gpt-5.5', request, { files, persist: true });
   const opened = codex.session.accept({ id: 1, result: {} }).write[1];
   eq('a Codex thread that may be resumed starts', opened.method, 'thread/start');
   eq('and is not ephemeral', opened.params.ephemeral, false);
-  const codexResume = C.buildInvocation(C.PROVIDERS.codex, 'gpt-5.5', request, { files, resume: 'thr-7' });
+  const codexResume = sandboxed(C.PROVIDERS.codex, 'gpt-5.5', request, { files, resume: 'thr-7' });
   const reopened = codexResume.session.accept({ id: 1, result: {} }).write[1];
   eq('a resumed one is picked up', reopened.method, 'thread/resume');
   eq('by its id', reopened.params.threadId, 'thr-7');
@@ -111,17 +125,17 @@ eq('and includes those', S.resumeEnabled('codex', { CLI_RESUME: 'claude-code,cod
   eq('and the turn goes to it', turn.params.threadId, 'thr-7');
   const done = codexResume.session.accept({ method: 'turn/completed', params: { turn: { status: 'completed' } } });
   eq('it says which thread answered', done.sessionId, 'thr-7');
-  const ephemeral = C.buildInvocation(C.PROVIDERS.codex, 'gpt-5.5', request, { files });
+  const ephemeral = sandboxed(C.PROVIDERS.codex, 'gpt-5.5', request, { files });
   ephemeral.session.accept({ id: 1, result: {} });
   ephemeral.session.accept({ id: 2, result: { thread: { id: 'thr-x' } } });
   eq('an ephemeral thread is not offered for resuming',
     ephemeral.session.accept({ method: 'turn/completed', params: { turn: { status: 'completed' } } }).sessionId, undefined);
 
   const agyEnv = { AGY_AGENTS_DIR: AGY_DIR };
-  const agy = C.buildInvocation(C.PROVIDERS.agy, 'm', request, { files, resume: 'conv-3', env: agyEnv });
+  const agy = sandboxed(C.PROVIDERS.agy, 'm', request, { files, resume: 'conv-3', env: agyEnv });
   eq('a resumed agy is told which conversation', agy.args[agy.args.indexOf('--conversation') + 1], 'conv-3');
   check('and is not sent the instructions again', !agy.stdin.includes('<instructions>'));
-  const fresh = C.buildInvocation(C.PROVIDERS.agy, 'm', request, { files, env: agyEnv });
+  const fresh = sandboxed(C.PROVIDERS.agy, 'm', request, { files, env: agyEnv });
   check('a fresh one is', fresh.stdin.includes('<instructions>'));
 
   const reader = new C.ClaudeReader();

@@ -66,11 +66,19 @@ const normal = (content) => stripThinking(textOf(content))
   .replace(/\s+/g, ' ')
   .trim();
 
+/* The app's system prompt states the current time to the millisecond
+   ("Current date and time: 2026-10-03T10:58:39.385Z"), so hashed as it is,
+   no conversation ever matched its own next turn: nothing resumed, and every
+   turn went out as a flattened transcript in which the earlier answers'
+   tool calls are invisible. In instructions, a date-time counts as its date. */
+const DATE_TIME = /(\d{4}-\d{2}-\d{2})[T ]\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?(?:Z|[+-]\d{2}:?\d{2})?/g;
+const instructionText = (content) => normal(content).replace(DATE_TIME, '$1');
+
 /** One conversation, as a key: which CLI and model, and every message in it. */
 export const historyKey = (providerId, model, messages = []) => {
   const shape = (messages || []).filter(Boolean).map(m => [
     m.role || 'user',
-    normal(m.content),
+    m.role === 'system' || m.role === 'developer' ? instructionText(m.content) : normal(m.content),
     Array.isArray(m.images) ? m.images.length : 0,
   ]);
   return crypto.createHash('sha256').update(JSON.stringify([providerId, model, shape])).digest('hex');

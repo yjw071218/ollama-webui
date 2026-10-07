@@ -12,6 +12,11 @@ process.env.WEBUI_DATA_DIR = path.join(tmp, 'data');
 
 const P = await import('../server/cliProject.js');
 const M = await import('../server/cliModels.js');
+/* These tests describe the sandboxed CLIs, which is CLI_FULL_ACCESS=false;
+   full access is the default and is checked on its own (see fullAccessOf). */
+const sandboxed = (provider, model, request, options = {}) => M.buildInvocation(provider, model, request,
+  { ...options, env: { CLI_FULL_ACCESS: 'false', ...(options.env || {}) } });
+
 
 let passed = 0, failed = 0;
 // The server's timers are unref'd; a test awaiting one needs something alive.
@@ -165,7 +170,7 @@ await check('the approval MCP server asks through the folder and returns the ans
 const files = fs.mkdtempSync(path.join(tmp, 'req-'));
 const project = { dir: repo, mode: 'edit', maxTurns: 20 };
 await check('Claude Code in a folder: its own prompt kept, edits allowed, the rest asked', () => {
-  const inv = M.buildInvocation(M.PROVIDERS['claude-code'], 'opus', { system: 'Be brief.', prompt: 'fix it' }, { files, project, env });
+  const inv = sandboxed(M.PROVIDERS['claude-code'], 'opus', { system: 'Be brief.', prompt: 'fix it' }, { files, project, env });
   const a = inv.args.join(' ');
   ok(a.includes('--permission-mode acceptEdits') && a.includes('--permission-prompt-tool mcp__webui_approval__ask'), a);
   ok(a.includes('--append-system-prompt-file') && !a.includes('--system-prompt-file ') && !a.includes('--tools'), a);
@@ -175,23 +180,51 @@ await check('Claude Code in a folder: its own prompt kept, edits allowed, the re
   ok(config.mcpServers.webui_approval.args.includes(inv.approvalDir), 'approval server');
 });
 await check('plan mode is Claude Code\'s plan mode', () => {
-  const inv = M.buildInvocation(M.PROVIDERS['claude-code'], 'opus', { prompt: 'x' }, { files, project: { ...project, mode: 'plan' }, env });
+  const inv = sandboxed(M.PROVIDERS['claude-code'], 'opus', { prompt: 'x' }, { files, project: { ...project, mode: 'plan' }, env });
   ok(inv.args.join(' ').includes('--permission-mode plan'));
 });
 await check('Codex in a folder writes there and asks for the rest; plan is read-only', () => {
-  const edit = M.buildInvocation(M.PROVIDERS.codex, 'gpt-5.5', { system: 'S', prompt: 'x' }, { files, project, env });
+  const edit = sandboxed(M.PROVIDERS.codex, 'gpt-5.5', { system: 'S', prompt: 'x' }, { files, project, env });
   eq([edit.session.thread.cwd, edit.session.thread.sandbox, edit.session.thread.approvalPolicy, edit.session.thread.developerInstructions], [repo, 'workspace-write', 'on-request', 'S']);
   ok(!('baseInstructions' in edit.session.thread), 'Codex keeps its own');
-  const plan = M.buildInvocation(M.PROVIDERS.codex, 'gpt-5.5', { prompt: 'x' }, { files, project: { ...project, mode: 'plan' }, env });
+  const plan = sandboxed(M.PROVIDERS.codex, 'gpt-5.5', { prompt: 'x' }, { files, project: { ...project, mode: 'plan' }, env });
   eq(plan.session.thread.sandbox, 'read-only');
 });
 await check('agy plans unless CLI_AGY_PROJECT_EDIT is on', () => {
-  const text = (e) => JSON.parse(M.buildInvocation(M.PROVIDERS.agy, 'g', { prompt: 'x' }, { files, project, env: e }).stdin).message.content[0].text;
+  const text = (e) => JSON.parse(sandboxed(M.PROVIDERS.agy, 'g', { prompt: 'x' }, { files, project, env: e }).stdin).message.content[0].text;
   ok(/Plan only/.test(text(env)));
   ok(/may read and edit/.test(text({ ...env, CLI_AGY_PROJECT_EDIT: 'on' })));
 });
+/* Full access, the default (fullAccessOf): every folder writable, nothing asked. */
+await check('full access is on unless CLI_FULL_ACCESS=false', () => {
+  ok(M.fullAccessOf({}) && M.fullAccessOf({ CLI_FULL_ACCESS: 'on' }));
+  ok(!M.fullAccessOf({ CLI_FULL_ACCESS: 'false' }) && !M.fullAccessOf({ CLI_FULL_ACCESS: '0' }));
+  eq(M.allRoots('linux'), ['/']);
+  eq(M.allRoots('win32', (root) => root === 'C:\\' || root === 'D:\\'), ['C:\\', 'D:\\']);
+});
+await check('with full access, chat CLIs can write anywhere and are never stopped to ask', () => {
+  const full = { ...env, CLI_FULL_ACCESS: 'true' };
+  const claude = M.buildInvocation(M.PROVIDERS['claude-code'], 'opus', { system: 'Be brief.', prompt: '이어서 진행해줘' }, { files, env: full });
+  const a = claude.args.join(' ');
+  ok(a.includes('--permission-mode bypassPermissions') && a.includes('--add-dir') && !claude.args.includes('--tools'), a);
+  const codex = M.buildInvocation(M.PROVIDERS.codex, 'gpt-5.5', { system: 'Be brief.', prompt: 'x' }, { files, env: full });
+  eq([codex.session.thread.sandbox, codex.session.thread.approvalPolicy], ['danger-full-access', 'never']);
+  ok(/full read and write access/.test(codex.session.thread.baseInstructions) && !/read-only sandbox/.test(codex.session.thread.baseInstructions));
+});
+await check('with full access, project runs write anywhere without asking -- but plan still only plans', () => {
+  const full = { ...env, CLI_FULL_ACCESS: 'true' };
+  const claude = M.buildInvocation(M.PROVIDERS['claude-code'], 'opus', { prompt: 'x' }, { files, project, env: full }).args.join(' ');
+  ok(claude.includes('--permission-mode bypassPermissions') && claude.includes('--add-dir'), claude);
+  const codex = M.buildInvocation(M.PROVIDERS.codex, 'gpt-5.5', { prompt: 'x' }, { files, project, env: full });
+  eq([codex.session.thread.sandbox, codex.session.thread.approvalPolicy], ['danger-full-access', 'never']);
+  const plan = M.buildInvocation(M.PROVIDERS.codex, 'gpt-5.5', { prompt: 'x' }, { files, project: { ...project, mode: 'plan' }, env: full });
+  eq([plan.session.thread.sandbox, plan.session.thread.approvalPolicy], ['read-only', 'on-request']);
+  ok(M.buildInvocation(M.PROVIDERS['claude-code'], 'opus', { prompt: 'x' }, { files, project: { ...project, mode: 'plan' }, env: full }).args.join(' ').includes('--permission-mode plan'));
+  const agy = JSON.parse(M.buildInvocation(M.PROVIDERS.agy, 'g', { prompt: 'x' }, { files, project, env: full }).stdin).message.content[0].text;
+  ok(/full read and write access/.test(agy), agy);
+});
 await check('without a folder nothing changes', () => {
-  const inv = M.buildInvocation(M.PROVIDERS['claude-code'], 'opus', { prompt: 'x' }, { files, env });
+  const inv = sandboxed(M.PROVIDERS['claude-code'], 'opus', { prompt: 'x' }, { files, env });
   ok(inv.args.includes('--system-prompt-file') && inv.args.includes('--tools') && !inv.cwd);
 });
 

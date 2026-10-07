@@ -58,6 +58,31 @@ const TEXT = {
       '상황극 탭은 캐릭터 대화용이에요. 로그인하면 PC와 휴대폰 사이에 동기화돼요.',
       '우측 상단 배지는 CLI 사용량이에요. 누르면 한도별로 자세히 보여요.',
     ],
+    s6t: '로그인과 동기화',
+    s6b: [
+      '로그인하면 대화·설정·상황극이 계정에 저장돼서 PC와 휴대폰에서 똑같이 보여요.',
+      'Google 버튼은 첫 실행 설정에서 키를 넣으면 생겨요. 없으면 아이디·비밀번호로 가입하면 돼요.',
+      '항상 같은 주소(실행 창에 나온 nip.io 주소)로 접속하세요. 주소가 다르면 브라우저가 다른 사이트로 여겨서 로그인을 따로 해야 해요.',
+    ],
+    s7t: '코딩 CLI 활용',
+    s7b: [
+      'Claude Code·Codex·Antigravity 모델을 고르면 PC에 로그인된 구독으로 답해요. 추가 요금은 없어요.',
+      '파일·폴더를 끌어다 놓으면 경로가 함께 전달돼서 CLI가 그 파일을 직접 열어 작업할 수 있어요.',
+      '우측 상단 배지에서 한도가 초기화되기까지 남은 시간을 확인하세요.',
+    ],
+    s8t: '다른 PC로 옮기기',
+    s8b: [
+      '쓰던 PC의 앱 폴더에서 node server/setup-bundle.mjs export 를 실행하면 바탕 화면에 설정 파일이 생겨요.',
+      '그 파일을 새 PC의 바탕 화면이나 다운로드 폴더에 두고 설치하면, 첫 실행에서 자동으로 찾아 그대로 가져와요.',
+      '파일에는 접속 토큰과 API 키가 들어 있으니 옮긴 뒤 지우세요.',
+    ],
+    s9t: '알아 두면 좋은 것',
+    s9b: [
+      'Ctrl+K: 명령 팔레트 · Esc: 창 닫기',
+      '긴 문서는 설정 → 지식에서 공용으로 올려 두면 모든 대화가 참고해요.',
+      '설정 → 일반에서 언어·테마·애니메이션 줄이기를 바꿀 수 있어요.',
+      '문제가 생기면 PC의 실행 창(검은 창) 메시지를 먼저 확인하세요.',
+    ],
     s5t: '휴대폰에서 접속하기',
     s5b: [
       'PC 실행 창에 나온 주소(예: http://192.168.0.10:5173)를 같은 와이파이의 휴대폰에서 여세요.',
@@ -93,6 +118,31 @@ const TEXT = {
       'The Studio in the sidebar makes pictures and videos.',
       'The role-play tab is for character chats, synced between PC and phone when signed in.',
       'The badge at the top right is CLI usage; click it for each limit.',
+    ],
+    s6t: 'Signing in and sync',
+    s6b: [
+      'Signed in, your chats, settings and role-play live in your account and look the same on PC and phone.',
+      'The Google button appears once its key is entered in the first-run setup; otherwise sign up with a username and password.',
+      'Always use the same address (the nip.io one in the PC window): a different address is a different site to the browser, with its own login.',
+    ],
+    s7t: 'Using the coding CLIs',
+    s7b: [
+      'Pick a Claude Code, Codex or Antigravity model and it answers with the subscription signed in on the PC, at no extra cost.',
+      'Dropped files and folders carry their path, so a CLI can open and work on them itself.',
+      'The badge at the top right shows how long until each limit resets.',
+    ],
+    s8t: 'Moving to another PC',
+    s8b: [
+      'On the old PC, run node server/setup-bundle.mjs export in the app folder: a setup file appears on the Desktop.',
+      'Put it on the new PC\'s Desktop or Downloads before installing; the first run finds it and imports it as is.',
+      'It holds your access token and API keys, so delete it afterwards.',
+    ],
+    s9t: 'Good to know',
+    s9b: [
+      'Ctrl+K: command palette · Esc: close',
+      'Long documents added under Settings → Knowledge are referenced by every chat.',
+      'Settings → General changes language, theme and reduced motion.',
+      'When something goes wrong, read the PC\'s launcher window first.',
     ],
     s5t: 'Using it from your phone',
     s5b: [
@@ -176,7 +226,7 @@ export const NewbieGuide = ({ open, onClose, isEmbeddingModel, onModelsChanged }
     if (!open) return undefined;
     const onKey = (e) => {
       if (e.key === 'Escape') finish();
-      else if (e.key === 'ArrowRight') setStep(s => Math.min(s + 1, 4));
+      else if (e.key === 'ArrowRight') setStep(s => Math.min(s + 1, 8));
       else if (e.key === 'ArrowLeft') setStep(s => Math.max(s - 1, 0));
     };
     window.addEventListener('keydown', onKey);
@@ -266,6 +316,10 @@ export const NewbieGuide = ({ open, onClose, isEmbeddingModel, onModelsChanged }
     },
     { title: T.s3t, body: <ul className="guide-list">{T.s3b.map(x => <li key={x}>{x}</li>)}</ul> },
     { title: T.s4t, body: <ul className="guide-list">{T.s4b.map(x => <li key={x}>{x}</li>)}</ul> },
+    { title: T.s6t, body: <ul className="guide-list">{T.s6b.map(x => <li key={x}>{x}</li>)}</ul> },
+    { title: T.s7t, body: <ul className="guide-list">{T.s7b.map(x => <li key={x}>{x}</li>)}</ul> },
+    { title: T.s8t, body: <ul className="guide-list">{T.s8b.map(x => <li key={x}>{x}</li>)}</ul> },
+    { title: T.s9t, body: <ul className="guide-list">{T.s9b.map(x => <li key={x}>{x}</li>)}</ul> },
     {
       title: T.s5t,
       body: (

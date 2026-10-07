@@ -54,6 +54,7 @@ import { applyH3Motion, applyH3Segment, applyH3Upscale, bypassUnloads, segmentPl
 import { longVideosFor, isLongId, parseCaptionLines } from './longVideo.js';
 import { MUSIC_DIR } from './music.js';
 import { enginesFor } from './engines.js';
+import { comfySpec } from './hwSpec.js';
 import { segmentPrompts, frameMemory } from '../src/videoPrompt.js';
 import {
   trainGraph, daemonBase, daemonState, datasetFolder, slugify, findLora,
@@ -161,6 +162,7 @@ export const describe = (definition, installed = null) => {
        without changing anything; Krea 2's single loader is cloned and chained,
        which is why it has a ceiling at all. */
     loraSlots: definition.loras?.max || 0,
+    loraUnlimited: !!definition.loras,
     /* Why the ones it does not have are absent.
      *
      * The Studio greys those controls and puts the reason beside them instead
@@ -608,6 +610,12 @@ export const comfyResident = (report, stats) => {
     : [];
 };
 
+/* This PC against ComfyUI's minimum (server/hwSpec.js). Measuring runs
+   nvidia-smi once per process; a failure is no warning rather than an error. */
+const comfySpecSafe = () => { try { return comfySpec(); } catch { return null; } };
+const slowText = (s) => `이 PC는 최소 사양 근처예요 (VRAM ${s.vram} GB · RAM ${s.ram} GB · 가상 메모리 포함 ${s.commit} GB). `
+  + '그림, 특히 영상 생성이 느리거나 가끔 메모리 부족으로 실패할 수 있어요.';
+
 /** What to say when ComfyUI is simply not there, which is the common case. */
 const offline = (base, error) => ({
   success: false,
@@ -810,7 +818,18 @@ export const createStudioRoutes = (env = {}, { identify = () => '' } = {}) => {
     try {
       installed = await listInstalled(base, (url) => withTimeout(url, { timeout: 20000 }));
     } catch (e) {
-      return sendJson(res, { ...offline(base, e), models: modelList() });
+      /* The bundled ComfyUI (engines.js "comfyui") is started when the Studio
+         first asks and it is not up; the Studio polls this route, so the next
+         ask finds it. `starting` lets the page say so instead of "offline". */
+      const comfy = engines.resolve('comfyui');
+      const starting = !!comfy?.installed;
+      if (starting) engines.ensure('comfyui', { wait: false }).catch(() => {});
+      const spec = comfySpecSafe();
+      return sendJson(res, {
+        ...offline(base, e), models: modelList(), starting,
+        ...(starting ? { error: 'ComfyUI를 켜는 중이에요. 1~3분 걸릴 수 있어요.' } : {}),
+        slowWarning: spec?.slow ? slowText(spec) : '',
+      });
     }
 
     /* Every workflow, with the lists its pickers should offer.
@@ -822,6 +841,8 @@ export const createStudioRoutes = (env = {}, { identify = () => '' } = {}) => {
       success: true,
       base,
       models: Object.values(WORKFLOWS).map(definition => describe(definition, installed)),
+      // Near the minimum spec (server/hwSpec.js): the Studio shows it as a notice.
+      slowWarning: (() => { const s = comfySpecSafe(); return s?.slow ? slowText(s) : ''; })(),
     });
   });
 
@@ -1167,7 +1188,7 @@ export const createStudioRoutes = (env = {}, { identify = () => '' } = {}) => {
     }
 
     const stacked = applyLoras(graph, definition, job.loras);
-    if ((job.loras || []).length > stacked.capacity) {
+    if (stacked.capacity !== null && (job.loras || []).filter(l => l.enabled !== false).length > stacked.capacity) {
       warnings.push(`${definition.label} stacks ${stacked.capacity} LoRAs; the rest were left out.`);
     }
     /* The workflow's own upscaler, when asked. See applyH3Upscale. */

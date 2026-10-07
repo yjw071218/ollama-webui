@@ -117,6 +117,55 @@ export const ENGINE_SPECS = {
       PYTORCH_CUDA_ALLOC_CONF: 'expandable_segments:True',
     },
   },
+  /* Speech to text. Not a separate install: server/stt_server.py run with
+     GPT-SoVITS's Python, which already carries faster-whisper and FastAPI. */
+  stt: {
+    id: 'stt',
+    label: 'Whisper STT',
+    dir: 'gpt-sovits',
+    rootEnv: 'GPT_SOVITS_PATH',
+    pythonEnv: 'GPT_SOVITS_PYTHON',
+    python: ['runtime/python.exe', 'runtime/bin/python'],
+    script: path.join(HERE, 'stt_server.py'),
+    hostEnv: 'STT_HOST',
+    portEnv: 'STT_PORT',
+    port: 8000,
+    args: ({ host, port }) => ['--host', host, '--port', String(port)],
+    health: '/health',
+    anyAnswer: false,
+    startupMs: 60000,
+  },
+  /* ComfyUI, the portable build installed by server/install-engines.mjs into
+     engines/comfyui (only on a PC that meets server/hwSpec.js). COMFYUI_ARGS
+     adds flags -- the installer writes --lowvram on a card under 8 GB. */
+  comfyui: {
+    id: 'comfyui',
+    label: 'ComfyUI',
+    dir: 'comfyui',
+    rootEnv: 'COMFYUI_PATH',
+    pythonEnv: 'COMFYUI_PYTHON',
+    python: ['python_embeded/python.exe', '.venv/Scripts/python.exe', '.venv/bin/python'],
+    script: 'ComfyUI/main.py',
+    hostEnv: 'COMFYUI_HOST',
+    portEnv: 'COMFYUI_PORT',
+    port: 8188,
+    args: ({ host, port, env }) => [
+      '--listen', host, '--port', String(port), '--windows-standalone-build',
+      ...String(env.COMFYUI_ARGS || '').split(/\s+/).filter(Boolean),
+    ],
+    health: '/system_stats',
+    anyAnswer: false,
+    startupMs: 240000,
+  },
+};
+
+/* FFmpeg: .env's FFMPEG_BIN, else the copy the installer ships beside Node
+   (runtime/ffmpeg) or puts in engines/ffmpeg. Folder holding the binary. */
+export const ffmpegDir = (env = {}, dir = ENGINES_DIR) => {
+  if (env.FFMPEG_BIN) return String(env.FFMPEG_BIN);
+  const exe = process.platform === 'win32' ? 'ffmpeg.exe' : 'ffmpeg';
+  return [path.join(dir, 'ffmpeg', 'bin'), path.resolve(dir, '..', '..', 'runtime', 'ffmpeg', 'bin')]
+    .find(d => fs.existsSync(path.join(d, exe))) || '';
 };
 
 /**
@@ -147,7 +196,7 @@ export const resolveEngine = (id, env = {}, { exists = fs.existsSync, dir = ENGI
     problem = given
       ? `${spec.rootEnv} does not exist: ${root}`
       : `${spec.label} is not in engines/${spec.dir}.`;
-  } else if (!exists(path.join(root, spec.script))) {
+  } else if (!exists(path.resolve(root, spec.script))) {
     problem = `${spec.label} at ${root} has no ${spec.script}.`;
   } else if (!python) {
     problem = `No Python for ${spec.label}: none of ${spec.python.join(', ')} exists, and ${spec.pythonEnv} is not set.`;
@@ -170,7 +219,8 @@ export const resolveEngine = (id, env = {}, { exists = fs.existsSync, dir = ENGI
 /** The process an engine is started as. */
 export const engineCommand = (resolved, env = {}) => {
   const spec = ENGINE_SPECS[resolved.id];
-  const extraPath = resolved.id === 'gpt-sovits' && env.FFMPEG_BIN ? env.FFMPEG_BIN : '';
+  // GPT-SoVITS and Whisper both decode audio through ffmpeg.
+  const extraPath = ['gpt-sovits', 'stt', 'comfyui'].includes(resolved.id) ? ffmpegDir(env) : '';
   return {
     command: resolved.python,
     args: [spec.script, ...spec.args({ host: resolved.host, port: resolved.port, env })],
