@@ -1,3 +1,4 @@
+import { authPage, STATUS_HELPER } from './nativeAuthPage.js';
 // Google OIDC implicit ID-token flow: no client secret or embedded user-agent.
 // Enable only after registering the exact callback URI in Google Cloud.
 export function googleNativeRedirect(env = {}) {
@@ -64,9 +65,12 @@ export function createRedirectProbe({ fetcher = fetch, now = Date.now, yesFor = 
 
 const json = value => JSON.stringify(value).replace(/</g, '\\u003c');
 export function nativeGoogleDirectPage(clientId, redirectUri) {
-  return `<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Google 계정 연결</title><p id="status">Google 계정 선택 화면으로 이동 중…</p>
-<script>
+  return authPage({
+    title: 'Google 계정 연결',
+    lead: 'Google 계정 선택 화면으로 이동합니다.',
+    status: '이동하는 중…',
+    state: 'working',
+    script: `${STATUS_HELPER}
 try {
   const [id] = location.hash.slice(1).split('&');
   history.replaceState(null, '', location.pathname);
@@ -82,17 +86,19 @@ try {
     response_type: 'id_token', response_mode: 'fragment', scope: 'openid email profile',
     nonce: id, state, prompt: 'select_account'});
   location.replace(target.href);
-} catch (error) { document.getElementById('status').textContent = error.message; }
-</script></html>`;
+} catch (error) { say(error.message, 'error'); }`,
+  });
 }
 export function nativeGoogleCallbackPage() {
-  return `<!doctype html><html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width">
-<title>Google 계정 연결</title><p id="status">인증 확인 중…</p>
-<script>
+  return authPage({
+    title: 'Google 계정 연결',
+    lead: 'Google 인증 결과를 앱에 전달하고 있습니다.',
+    status: '인증 확인 중…',
+    state: 'working',
+    script: `${STATUS_HELPER}
 (async () => {
   const params = new URLSearchParams(location.hash.slice(1));
   history.replaceState(null, '', location.pathname);
-  const status = document.getElementById('status');
   try {
     const state = params.get('state');
     if (!/^[a-f0-9]{64}$/.test(state || '')) throw new Error('로그인 요청을 확인할 수 없습니다. 앱에서 다시 시작하세요.');
@@ -108,9 +114,9 @@ export function nativeGoogleCallbackPage() {
       headers: {'Content-Type': 'application/json'}, body: JSON.stringify({id: pending.id, credential}),
       signal: AbortSignal.timeout(15000)});
     if (!response.ok) throw new Error('앱 인증 연결에 실패했습니다. 앱에서 다시 시도하세요.');
-    status.textContent = '로그인되었습니다. 이 탭을 닫고 앱으로 돌아가세요.';
+    say('로그인되었습니다. 이 탭을 닫고 앱으로 돌아가세요.', 'ok');
     window.close();
-  } catch (error) { status.textContent = error.message; }
-})();
-</script></html>`;
+  } catch (error) { say(error.message, 'error'); }
+})();`,
+  });
 }
