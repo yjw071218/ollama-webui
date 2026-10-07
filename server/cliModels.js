@@ -1511,8 +1511,17 @@ export const nativeChangeText = (result) => {
   return `[file-change] ${file} (+${added} -${removed})\n\`\`\`diff\n--- a/${name}\n+++ b/${name}\n${body.join('\n')}\n\`\`\``;
 };
 
+const CLAUDE_SHELL_TOOLS = new Set(['Bash', 'PowerShell']);
+
 export class ClaudeReader {
   constructor() { this.sawText = false; this.usage = {}; this.textInMessage = false; this.gap = false; this.sessionId = ''; }
+
+  /* The run is over (finished, stopped or timed out): a command whose result
+     never came is not left "running" in the corner for six hours. */
+  close() {
+    for (const id of this.commands || []) noteCommand({ id, status: 'failed', source: 'claude' });
+    this.commands?.clear();
+  }
 
   accept(line) {
     // Every line says which session it belongs to; kept for resuming it.
@@ -1548,15 +1557,22 @@ export class ClaudeReader {
           /* Said once its arguments are in (content_block_stop), so the note
              can name the file or command and not only the tool. */
           if (!this.tools) this.tools = new Map();
-          this.tools.set(event.index, { name: block.name, json: '' });
+          this.tools.set(event.index, { name: block.name, id: block.id || '', json: '' });
           return null;
         }
       }
       if (event.type === 'content_block_stop' && this.tools?.has(event.index)) {
-        const { name, json } = this.tools.get(event.index);
+        const { name, id, json } = this.tools.get(event.index);
         this.tools.delete(event.index);
         let input = {};
         try { input = json ? JSON.parse(json) : {}; } catch { /* half an argument list: the name alone */ }
+        /* Claude Code's own shell runs went nowhere but this note, so the
+           "running" pill in the corner never came up for a Claude chat. They
+           go into the same live list as Codex's; the result closes them. */
+        if (id && CLAUDE_SHELL_TOOLS.has(name) && typeof input.command === 'string') {
+          noteCommand({ id, command: input.command, status: 'running', source: 'claude' });
+          (this.commands ||= new Set()).add(id);
+        }
         const what = toolTarget(input);
         return { thinking: toolNote('tool', `${claudeToolLabel(name)}${what ? ` · ${what}` : ''}`) + inputNote(input) };
       }
@@ -1587,6 +1603,9 @@ export class ClaudeReader {
       const parts = Array.isArray(line.message?.content) ? line.message.content : [];
       const outs = parts.filter(part => part?.type === 'tool_result').map((part) => {
         const text = resultText(part.content);
+        if (this.commands?.delete(part.tool_use_id)) {
+          noteCommand({ id: part.tool_use_id, output: text, status: part.is_error ? 'failed' : 'done', source: 'claude' });
+        }
         const shown = toolResultOutput(text);
         // A failure that is not a command (which carries its own exit code) is said as one.
         if (part.is_error && !shown?.thinking) {
@@ -2284,6 +2303,7 @@ const runCliOnce = ({
     settled = true;
     clearTimeout(timer);
     stopWatching();
+    try { reader.close?.(); } catch { /* only the live list */ }
     // The last steps agy wrote, before the answer is called whole.
     if (transcript) { if (error) transcript.stop(); else transcript.finish(); }
     signal?.removeEventListener('abort', onAbort);

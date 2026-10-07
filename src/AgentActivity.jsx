@@ -323,7 +323,7 @@ export const LiveCommand = ({ command, defaultOpen = true }) => {
         </button>
         {serving && <span className="agent-badge is-running">{t('agent.background')}</span>}
         <span className="live-command-meta">
-          {command.source === 'codex' ? 'Codex' : 'workbench'} · {duration(command.elapsed || 0)}
+          {command.source === 'codex' ? 'Codex' : command.source === 'claude' ? 'Claude Code' : 'workbench'} · {duration(command.elapsed || 0)}
           {!running && (command.status === 'lost' ? ` · ${t('agent.lost')}` : command.code !== null && command.code !== undefined ? ` · exit ${command.code}` : '')}
         </span>
         {(command.urls || []).slice(0, 2).map(url => (

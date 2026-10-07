@@ -1203,13 +1203,60 @@ const motionReduced = () => {
   if (m === 'full') return false;
   return !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches;
 };
-const useTypewriter = (text, live) => {
-  const [shown, setShown] = useState(() => (live && !motionReduced() ? 0 : text.length));
+/* How far each streaming answer had been typed, kept outside the component.
+ * Leaving the chat (another conversation, the Studio, the app in the
+ * background) unmounts or freezes the typewriter; without this, coming back
+ * started it from the first character again and re-typed -- and re-faded --
+ * text that had been on screen all along. Keyed by chat, row and part; the
+ * value is the text itself, so a regenerated answer is not mistaken for the
+ * one it replaced. */
+const typedSoFar = new Map();
+const rememberTyped = (key, value) => {
+  if (!key) return;
+  typedSoFar.delete(key);
+  typedSoFar.set(key, value);
+  // Only the few answers being written at once are worth remembering.
+  while (typedSoFar.size > 32) typedSoFar.delete(typedSoFar.keys().next().value);
+};
+const typedBefore = (key, text) => {
+  const before = key ? typedSoFar.get(key) : null;
+  return before && text.startsWith(before) ? before.length : 0;
+};
+
+/* Returns the text to show and how much of it counts as already seen: text
+ * typed before a remount, or caught up all at once after the page was hidden.
+ * The reveal clock shows that part settled instead of fading it in again. */
+const useTypewriter = (text, live, memoryKey) => {
+  const [shown, setShown] = useState(() => (live && !motionReduced() ? typedBefore(memoryKey, text) : text.length));
   const pos = useRef(shown);
+  const seen = useRef(shown);
   const textRef = useRef(text);
   textRef.current = text;
   const liveRef = useRef(live);
   liveRef.current = live;
+  useEffect(() => {
+    if (!live) { if (memoryKey) typedSoFar.delete(memoryKey); return; }
+    rememberTyped(memoryKey, text.slice(0, Math.min(shown, text.length)));
+  }, [memoryKey, live, shown, text]);
+  /* A hidden page gets no animation frames, so the typewriter stopped where it
+     was while the model went on. Coming back, the whole backlog was typed out
+     in front of the reader as if it were new. Show it at once instead. */
+  useEffect(() => {
+    const onVisible = () => {
+      if (document.visibilityState !== 'visible') return;
+      const target = textRef.current.length;
+      if (pos.current >= target) return;
+      pos.current = target;
+      seen.current = target;
+      setShown(target);
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('pageshow', onVisible);
+    return () => {
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('pageshow', onVisible);
+    };
+  }, []);
   useEffect(() => {
     if (pos.current > text.length) { pos.current = text.length; setShown(text.length); }
     if (pos.current >= text.length) return undefined;
@@ -1243,7 +1290,7 @@ const useTypewriter = (text, live) => {
     raf = requestAnimationFrame(step);
     return () => cancelAnimationFrame(raf);
   }, [text, live]);
-  return shown >= text.length ? text : text.slice(0, shown);
+  return [shown >= text.length ? text : text.slice(0, shown), Math.min(seen.current, text.length)];
 };
 
 /* A half-typed `code` or **bold** would show its raw marks until closed, then
@@ -1273,11 +1320,13 @@ const closeOpenMarks = (s) => {
 /* When each character of the streaming answer was first shown, as a list of
  * (length, time) steps. `ageOf(offset)` is how long ago that character
  * appeared, or null once its fade is over and it is ordinary text. */
-const useRevealClock = (length, live) => {
-  const steps = useRef(live ? [] : [{ len: length, at: -Infinity }]);
+const useRevealClock = (length, live, settled = 0) => {
+  // What is on screen at mount was already shown (typed before a remount), so
+  // it starts out settled rather than fading in a second time.
+  const steps = useRef([{ len: live ? Math.min(settled, length) : length, at: -Infinity }]);
   const now = performance.now();
   const last = steps.current[steps.current.length - 1];
-  if (!last || length > last.len) steps.current.push({ len: length, at: now });
+  if (!last || length > last.len) steps.current.push({ len: length, at: length <= settled ? -Infinity : now });
   else if (length < last.len) steps.current = [...steps.current.filter(st => st.len < length), { len: length, at: now }];
   // A step whose successor has finished fading tells nothing more.
   while (steps.current.length > 1 && now - steps.current[0].at > REVEAL_MS
@@ -1291,10 +1340,10 @@ const useRevealClock = (length, live) => {
   } : null), [live, length]); // eslint-disable-line react-hooks/exhaustive-deps
 };
 
-const LiveAnswerMarkdown = ({ text, live, ...rest }) => {
-  const typed = useTypewriter(text, live);
+const LiveAnswerMarkdown = ({ text, live, revealKey, ...rest }) => {
+  const [typed, settled] = useTypewriter(text, live, revealKey);
   const shownText = typed.length < text.length ? closeOpenMarks(typed) : typed;
-  const ageOf = useRevealClock(typed.length, live);
+  const ageOf = useRevealClock(typed.length, live, settled);
   return <AnswerMarkdown text={shownText} ageOf={ageOf} {...rest} />;
 };
 
@@ -2779,6 +2828,19 @@ function App() {
     shown[index] = { ...shown[index], content: followed.content };
     return shown;
   }, [currentSession, followed, currentSessionId]);
+
+  /* Which rows slide in. Only messages added while this chat is on screen --
+     not the ones already there when it was opened. Rows are keyed by
+     position, so returning to a longer conversation mounted its extra rows
+     fresh and played the entrance over messages that were finished long ago. */
+  const enterFromRef = useRef({ chat: null, n: 0 });
+  if (enterFromRef.current.chat !== currentSessionId || !isStorageLoaded) {
+    enterFromRef.current = { chat: currentSessionId, n: messages.length };
+  } else if (messages.length < enterFromRef.current.n) {
+    // Deleted or regenerated: whatever is written next in their place is new.
+    enterFromRef.current.n = messages.length;
+  }
+  const entersFrom = enterFromRef.current.n;
   // For the global key handler, which is installed once and cannot see this.
   const messagesRef = useRef(messages);
   messagesRef.current = messages;
@@ -15104,7 +15166,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 <div
                   key={i}
                   ref={el => { messageRefs.current[i] = el; }}
-                  className={`message-row ${msg.role} ${msg.starred ? 'starred' : ''} ${searchHits[searchHitIndex] === i ? 'search-current' : ''} ${openActionsIndex === i ? 'actions-open' : ''} ${navIndex === i ? 'nav-focus' : ''}`}
+                  className={`message-row ${msg.role} ${i >= entersFrom ? 'is-entering' : ''} ${msg.starred ? 'starred' : ''} ${searchHits[searchHitIndex] === i ? 'search-current' : ''} ${openActionsIndex === i ? 'actions-open' : ''} ${navIndex === i ? 'nav-focus' : ''}`}
                   // How the keyboard finds a row to scroll to. An index rather
                   // than a ref array: rows come and go as the transcript grows
                   // and a ref array would have to be kept in step with it.
@@ -15409,7 +15471,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                      when this paragraph's text changes. Citations
                                      are per message, so the linker is built there. */
                                   <LiveAnswerMarkdown
-                                    key={`md-${pn}`}
+                                    /* Rows are keyed by position, so without the
+                                       chat in the key this one would carry the
+                                       typewriter of another conversation's
+                                       message at the same place, and switching
+                                       back typed the difference out again. */
+                                    key={`${currentSessionId}:md-${pn}`}
+                                    revealKey={`${currentSessionId}:${i}:${idx}:${pn}`}
                                     text={part.text}
                                     live={isStreamingRow && idx === textBlocks.length - 1}
                                     basePlugins={isStreamingRow && idx === textBlocks.length - 1 ? streamingRehypePlugins : markdownRehypePlugins}

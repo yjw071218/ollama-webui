@@ -1795,7 +1795,9 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
 /* `backwards`, not `both`: a fill held after the animation keeps every message
    its own stacking context for good, so a menu opened inside one slid under
    the next message -- and on a phone each held layer is memory. */
-.message-row { animation: message-in var(--dur-slow) var(--ease-out) backwards; }
+/* Only rows that arrive while the chat is open (see `entersFrom` in App.jsx):
+   opening a conversation, or coming back to one, shows it as it is. */
+.message-row.is-entering { animation: message-in var(--dur-slow) var(--ease-out) backwards; }
 
 .message-row .msg-hover-actions { transition: opacity var(--dur-fast) var(--ease-out); }
 
