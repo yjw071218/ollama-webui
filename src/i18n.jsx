@@ -20590,6 +20590,22 @@ export const strings = {
   en, ko, ja, 'zh-Hans': zhHans, 'zh-Hant': zhHant, es, fr, de, pt, ru, vi, ar,
 };
 
+/* In a production build every language but English is its own chunk, fetched
+   when it is chosen (vite.config.js, i18nSplit, replaces this null with the
+   loaders and empties those tables here). Read as source -- by the tests, or
+   in dev -- every table is already here and loading is a no-op. */
+const LANGUAGE_LOADERS = null;
+const loadedLanguages = new Set(['en']);
+
+/** Make sure a language's table is filled in before it is shown. */
+export const loadLanguage = async (code) => {
+  const load = LANGUAGE_LOADERS?.[code];
+  if (!load || loadedLanguages.has(code)) return;
+  const table = (await load()).default;
+  Object.assign(strings[code], table);
+  loadedLanguages.add(code);
+};
+
 /** Maps a browser language tag onto one of ours. */
 export const resolveLanguage = (tag) => {
   if (!tag) return 'en';
@@ -20646,7 +20662,13 @@ export const I18nProvider = ({ children }) => {
 
   const t = useCallback((key, vars) => translate(lang, key, vars), [lang]);
 
-  const value = useMemo(() => ({ lang, setLang: setLangState, t, dir }), [lang, t, dir]);
+  // A language not yet fetched is switched to once its table has arrived,
+  // not shown in English for a moment first.
+  const setLang = useCallback((code) => {
+    loadLanguage(code).catch(() => {}).finally(() => setLangState(code));
+  }, []);
+
+  const value = useMemo(() => ({ lang, setLang, t, dir }), [lang, setLang, t, dir]);
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;
 };

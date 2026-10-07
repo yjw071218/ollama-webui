@@ -1125,7 +1125,7 @@ export const noteLimits = (id, limits, source = 'run') => {
   for (const old of previous.windows || []) if (!windows.some(w => w.id === old.id)) windows.push(old);
   store[id] = { ...previous, ...limits, windows, updatedAt: Date.now(), source };
   // Only what the CLI said just now, for the forecast (server/cliProject.js).
-  if (source === 'run') noteLimitHistory(id, limits);
+  if (source === 'run' || source === 'live') noteLimitHistory(id, limits);
   try {
     fs.mkdirSync(path.dirname(limitsFile()), { recursive: true });
     fs.writeFileSync(limitsFile(), JSON.stringify(store, null, 2));
@@ -1222,6 +1222,129 @@ const agyLimitsFromStatusline = () => {
     if (!record?.quota) return null;
     return { ...agyLimitsOf(record.quota), ...(record.plan ? { plan: record.plan } : {}), updatedAt: record.at || null, source: 'agy-statusline' };
   } catch { return null; }
+};
+
+/* ---------------------------------------------------------- live limits
+
+   What a CLI said with its last answer goes stale the moment the same
+   subscription is used anywhere else -- a terminal, the web, another PC -- so
+   the header showed the old figure until the next chat here. These ask the
+   provider directly, at most once per CLI_LIMITS_LIVE_SECONDS (60 by
+   default), when /cli/limits is read. CLI_LIMITS_LIVE=false turns it off.
+
+   Claude: the same usage endpoint Claude Code's own /usage reads, with the
+   sign-in Claude Code keeps on this PC, sent only to Anthropic. The token is
+   never refreshed here; an expired one waits for the CLI to renew it.
+   Codex: its own app server, asked `account/rateLimits/read` -- no turn is
+   started and no quota spent. */
+
+const liveState = new Map(); // id -> { at, failedAt, running }
+
+const claudeTokenOf = (env) => {
+  const fromEnv = env.CLAUDE_CODE_OAUTH_TOKEN || process.env.CLAUDE_CODE_OAUTH_TOKEN;
+  if (fromEnv) return fromEnv;
+  try {
+    const dir = env.CLAUDE_CONFIG_DIR || process.env.CLAUDE_CONFIG_DIR || path.join(HOME, '.claude');
+    const oauth = JSON.parse(fs.readFileSync(path.join(dir, '.credentials.json'), 'utf8'))?.claudeAiOauth;
+    if (!oauth?.accessToken) return null;
+    if (Number(oauth.expiresAt) && Number(oauth.expiresAt) < Date.now() + 30_000) return null;
+    return oauth.accessToken;
+  } catch { return null; }
+};
+
+const claudeLiveLimits = async (env) => {
+  const token = claudeTokenOf(env);
+  if (!token) return null;
+  const res = await fetch('https://api.anthropic.com/api/oauth/usage', {
+    headers: { Authorization: `Bearer ${token}`, 'anthropic-beta': 'oauth-2025-04-20', 'Content-Type': 'application/json' },
+    signal: AbortSignal.timeout(8000),
+  });
+  if (!res.ok) throw new Error(`claude usage ${res.status}`);
+  const body = await res.json();
+  const windows = [];
+  for (const id of ['five_hour', 'seven_day', 'seven_day_opus', 'seven_day_sonnet']) {
+    const w = body?.[id];
+    if (!w || !Number.isFinite(Number(w.utilization))) continue;
+    windows.push({ id, usedPercent: toPercent(w.utilization, false), resetsAt: toMs(w.resets_at), windowMins: WINDOW_MINS[id] || null });
+  }
+  if (!windows.length) return null;
+  const full = windows.some(w => w.usedPercent >= 100);
+  return { status: full ? 'rejected' : windows.some(w => w.usedPercent >= 80) ? 'allowed_warning' : 'allowed', windows, lastError: undefined };
+};
+
+const codexLiveLimits = (env) => new Promise((resolve, reject) => {
+  const binary = resolveBinary(PROVIDERS.codex, env);
+  if (!binary) { resolve(null); return; }
+  let child;
+  try {
+    child = spawn(binary.command, [...binary.prefix, 'app-server'], {
+      cwd: workDir(),
+      env: { ...process.env, ...authEnvOf(PROVIDERS.codex, env), NO_COLOR: '1' },
+      stdio: ['pipe', 'pipe', 'ignore'],
+      windowsHide: true,
+    });
+  } catch (e) { reject(e); return; }
+  let buffer = '';
+  let done = false;
+  const finish = (err, value) => {
+    if (done) return;
+    done = true;
+    clearTimeout(timer);
+    try { child.stdin.end(); } catch { /* closed */ }
+    try { child.kill(); } catch { /* gone */ }
+    if (err) reject(err); else resolve(value);
+  };
+  const timer = setTimeout(() => finish(new Error('codex rate limits timed out')), 15_000);
+  const write = (m) => { try { child.stdin.write(`${JSON.stringify(m)}\n`); } catch { /* closed */ } };
+  child.on('error', e => finish(e));
+  child.on('exit', () => finish(new Error('codex app-server exited')));
+  child.stdout.on('data', (chunk) => {
+    buffer += chunk.toString('utf8');
+    let nl;
+    while ((nl = buffer.indexOf('\n')) >= 0) {
+      const line = buffer.slice(0, nl).trim();
+      buffer = buffer.slice(nl + 1);
+      if (!line) continue;
+      let m;
+      try { m = JSON.parse(line); } catch { continue; }
+      if (m.id === 1) {
+        write({ method: 'initialized' });
+        write({ id: 2, method: 'account/rateLimits/read' });
+      } else if (m.id === 2) {
+        if (m.error) { finish(new Error(m.error.message || 'codex rate limits failed')); return; }
+        const r = m.result?.rateLimits || m.result;
+        finish(null, r?.primary || r?.secondary ? codexLimitsOf(r) : null);
+      }
+    }
+  });
+  write({ id: 1, method: 'initialize', params: { clientInfo: { name: 'ollama-webui', title: 'Ollama WebUI', version: '1.0.0' } } });
+});
+
+const LIVE_PROBES = { 'claude-code': claudeLiveLimits, codex: codexLiveLimits };
+
+/** Ask each signed-in CLI's provider for its limits, if not asked lately. */
+export const refreshLiveLimits = async (env = {}, { force = false } = {}) => {
+  if (!flag(env.CLI_LIMITS_LIVE, true)) return;
+  const every = Math.max(15, Number(env.CLI_LIMITS_LIVE_SECONDS) || 60) * 1000;
+  const now = Date.now();
+  await Promise.all(Object.entries(LIVE_PROBES).map(async ([id, probe]) => {
+    const state = liveState.get(id) || {};
+    if (state.running) return state.running;
+    if (!force && state.at && now - state.at < every) return null;
+    // A failure (no sign-in, offline) is not retried for five minutes.
+    if (state.failedAt && now - state.failedAt < 5 * 60_000) return null;
+    const running = (async () => {
+      try {
+        const limits = await probe(env);
+        if (limits) noteLimits(id, limits, 'live');
+        liveState.set(id, { at: Date.now() });
+      } catch {
+        liveState.set(id, { at: Date.now(), failedAt: Date.now() });
+      }
+    })();
+    liveState.set(id, { ...state, running });
+    return running;
+  }));
 };
 
 /** Every CLI's limits, as last heard. */
@@ -1363,6 +1486,31 @@ export const toolResultOutput = (text) => {
   return content || thinking ? { ...(content ? { content } : {}), ...(thinking ? { thinking } : {}) } : null;
 };
 
+/* A change Claude Code's own Edit / MultiEdit / Write made, from the
+   `tool_use_result` its stream-json puts beside the result, written the way
+   the workbench writes one (`[file-change] …` and a diff) so the answer shows
+   it the same way. A new file has no patch: all of it is added. */
+export const nativeChangeText = (result) => {
+  const file = typeof result?.filePath === 'string' ? result.filePath : '';
+  if (!file) return '';
+  let hunks = Array.isArray(result.structuredPatch) ? result.structuredPatch : [];
+  if (!hunks.length && result.type === 'create' && typeof result.content === 'string') {
+    const lines = result.content.replace(/\r?\n$/, '').split(/\r?\n/);
+    hunks = [{ oldStart: 0, oldLines: 0, newStart: 1, newLines: lines.length, lines: lines.map(l => `+${l}`) }];
+  }
+  if (!hunks.length) return '';
+  let added = 0, removed = 0;
+  const body = [];
+  for (const h of hunks) {
+    const lines = Array.isArray(h?.lines) ? h.lines.map(String) : [];
+    body.push(`@@ -${h.oldStart},${h.oldLines} +${h.newStart},${h.newLines} @@`, ...lines);
+    added += lines.filter(l => l.startsWith('+')).length;
+    removed += lines.filter(l => l.startsWith('-')).length;
+  }
+  const name = file.split(/[\\/]/).pop();
+  return `[file-change] ${file} (+${added} -${removed})\n\`\`\`diff\n--- a/${name}\n+++ b/${name}\n${body.join('\n')}\n\`\`\``;
+};
+
 export class ClaudeReader {
   constructor() { this.sawText = false; this.usage = {}; this.textInMessage = false; this.gap = false; this.sessionId = ''; }
 
@@ -1382,7 +1530,7 @@ export class ClaudeReader {
           this.textInMessage = true;
           return { content: gap + delta.text };
         }
-        if (delta.type === 'thinking_delta' && delta.thinking) { this.thoughts = 1; return { thinking: delta.thinking }; }
+        if (delta.type === 'thinking_delta' && delta.thinking) { this.thoughts = 1; return { thinking: delta.thinking, reasoning: true }; }
       }
       if (event.type === 'content_block_delta' && event.delta?.type === 'input_json_delta') {
         const open = this.tools?.get(event.index);
@@ -1394,8 +1542,8 @@ export class ClaudeReader {
         /* Each thinking block (one per step between tool calls) is its own
            paragraph; without this they ran into each other and into the
            tool notes. A redacted one is said, not silently dropped. */
-        if (block.type === 'thinking' && this.thoughts) return { thinking: '\n\n' };
-        if (block.type === 'redacted_thinking') return { thinking: '\n[thinking hidden by the model]\n' };
+        if (block.type === 'thinking' && this.thoughts) return { thinking: '\n\n', reasoning: true };
+        if (block.type === 'redacted_thinking') return { thinking: '\n[thinking hidden by the model]\n', reasoning: true };
         if (block.type === 'tool_use' || block.type === 'server_tool_use') {
           /* Said once its arguments are in (content_block_stop), so the note
              can name the file or command and not only the tool. */
@@ -1448,6 +1596,10 @@ export class ClaudeReader {
         if (!shown) { const note = resultNote(text); return note ? { thinking: `\n${note}` } : null; }
         return shown;
       }).filter(Boolean);
+      /* Claude Code's own Edit / Write (full access, or a project) report no
+         `[file-change]`; the patch comes beside the result instead. */
+      const native = nativeChangeText(line.tool_use_result);
+      if (native) outs.push({ content: changesAsMarkdown(native) });
       if (!outs.length) return null;
       const content = outs.map(o => o.content || '').join('');
       const thinking = outs.map(o => o.thinking || '').join('');
@@ -1592,7 +1744,7 @@ export class CodexSession {
           this.reasoning.set(item.id, 'whole');
           const lead = this.lastReasoning ? '\n\n' : '';
           this.lastReasoning = item.id;
-          return { thinking: lead + parts.join('\n\n') };
+          return { thinking: lead + parts.join('\n\n'), reasoning: true };
         }
         if (item.type === 'commandExecution') {
           const command = Array.isArray(item.command) ? item.command.join(' ') : String(item.command || '');
@@ -1637,12 +1789,12 @@ export class CodexSession {
         // A new thought (another reasoning item) starts a new paragraph.
         const lead = this.lastReasoning && this.lastReasoning !== p.itemId ? '\n\n' : '';
         this.lastReasoning = p.itemId;
-        return { thinking: lead + String(p.delta) };
+        return { thinking: lead + String(p.delta), reasoning: true };
       }
       /* One summary is several parts ("**Planning**", "**Checking**"); each
          was glued onto the last. */
       case 'item/reasoning/summaryPartAdded':
-        if (Number(p.summaryIndex) > 0 && this.reasoning.get(p.itemId) !== 'raw') return { thinking: '\n\n' };
+        if (Number(p.summaryIndex) > 0 && this.reasoning.get(p.itemId) !== 'raw') return { thinking: '\n\n', reasoning: true };
         return null;
       case 'account/rateLimits/updated':
         return p.rateLimits || p.primary ? { limits: codexLimitsOf(p.rateLimits || p) } : null;
@@ -1705,7 +1857,7 @@ export class AgyReader {
       const started = this.began ? {} : { started: true };
       this.began = true;
       // Its reasoning, when the model shares any.
-      if (step.thinking_delta) { this.sawThinking = true; return { ...started, thinking: String(step.thinking_delta) }; }
+      if (step.thinking_delta) { this.sawThinking = true; return { ...started, thinking: String(step.thinking_delta), reasoning: true }; }
       if (step.step_type === 'agent_response' && step.text_delta) {
         this.sawText = true;
         this.text = (this.text || '') + String(step.text_delta);
@@ -2175,7 +2327,7 @@ const runCliOnce = ({
       try { onStart?.(); } catch { /* timing only */ }
     }
     if (out.content || out.thinking) {
-      try { onDelta?.({ content: out.content || '', thinking: out.thinking || '' }); } catch { /* a closed reader is not our failure */ }
+      try { onDelta?.({ content: out.content || '', thinking: out.thinking || '', reasoning: !!out.reasoning }); } catch { /* a closed reader is not our failure */ }
     }
     // The answer is whole once the CLI says so. Codex's app server would
     // otherwise wait for the next turn indefinitely.
@@ -2544,11 +2696,15 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
   const onDelta = (delta) => {
     delivered = true;
     if (!firstAt) firstAt = Date.now();
+    /* The model's reasoning unless thinking was switched off, as Ollama does.
+       What the CLI did -- a tool, a command, an edit, its output -- travels in
+       the thinking too, but it is not reasoning: it stays, or with thinking
+       off the chat showed no steps at all (src/agentActivity.js). */
+    const shown = showThinking || !delta.reasoning ? delta.thinking || '' : '';
     content += delta.content || '';
-    thinking += delta.thinking || '';
-    // Thinking unless it was switched off, as Ollama does.
-    if (!showThinking && !delta.content) return;
-    publish(frameOf({ content: delta.content || '', thinking: showThinking ? delta.thinking || '' : '' }, { done: false }));
+    thinking += shown;
+    if (!shown && !delta.content) return;
+    publish(frameOf({ content: delta.content || '', thinking: shown }, { done: false }));
   };
 
   /* The last frame: timings as Ollama gives them, and what only a CLI says --
@@ -2609,8 +2765,8 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
       publish(done);
     } else {
       const text = body.format ? unfence(content) : content;
-      if (generate) Object.assign(done, { response: text }, showThinking && thinking ? { thinking } : {});
-      else Object.assign(done.message, { content: text }, showThinking && thinking ? { thinking } : {});
+      if (generate) Object.assign(done, { response: text }, thinking ? { thinking } : {});
+      else Object.assign(done.message, { content: text }, thinking ? { thinking } : {});
       if (jobId) appendChatFrame(jobId, done);
       if (!res.writableEnded) sendJson(res, done);
     }
@@ -2783,7 +2939,7 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
         onFrame: (frame) => {
           if (frame.done) return;
           const m = frame.message || {};
-          if (m.content || m.thinking) onDelta({ content: m.content || '', thinking: m.thinking || '' });
+          if (m.content || m.thinking) onDelta({ content: m.content || '', thinking: m.thinking || '', reasoning: true });
         },
       });
       const pick = (key) => (Number.isFinite(last?.[key]) ? { [key]: last[key] } : {});
@@ -3242,6 +3398,10 @@ export const createCliRoutes = (env = {}) => [
         if (Number(env.CLI_DAILY_BUDGET_USD) > 0) {
           try { budget = budgetState(readUsage({ since: Date.now() - 24 * 3600 * 1000 }), env); } catch { /* shown without */ }
         }
+        /* Fresh figures from the providers when the last ask is a minute old;
+           waited for briefly, and otherwise shown on the next read. */
+        const force = /[?&]force=1/.test(req.url || '');
+        await Promise.race([refreshLiveLimits(env, { force }), new Promise(r => setTimeout(r, 6000))]);
         sendJson(res, { success: true, limits: withForecasts(allLimits(env)), budget, now: Date.now() });
       } catch (e) { sendJson(res, { success: false, error: String(e.message || e) }, 500); }
     },

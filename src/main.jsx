@@ -15,9 +15,11 @@ import { SessionProvider, useSession } from './session.jsx'
 import { deriveScope } from './profileScope.js'
 import { setActiveScope } from './settingsStore.js'
 import { trackViewport } from './viewport.js'
-import { SharedChat } from './SharedChat.jsx'
+import { lazyPanel } from './lazyPanel.jsx'
+// A separate page that most loads never show: its code comes only with a share link.
+const SharedChat = lazyPanel(() => import('./SharedChat.jsx'), 'SharedChat')
 import { shareTokenFromPath } from './shareLink.js'
-import { I18nProvider } from './i18n.jsx'
+import { I18nProvider, loadLanguage, detectLanguage } from './i18n.jsx'
 import { installDecodeReveal } from './decodeReveal.js'
 
 installDecodeReveal()
@@ -95,7 +97,8 @@ setInterval(() => {
   html.classList.toggle('caret-off');
 }, 530);
 
-createRoot(document.getElementById('root')).render(
+// The reader's language first, so the first paint is already in it.
+loadLanguage(detectLanguage()).catch(() => {}).finally(() => createRoot(document.getElementById('root')).render(
   <StrictMode>
     {sharedToken ? (
       <I18nProvider>
@@ -107,4 +110,4 @@ createRoot(document.getElementById('root')).render(
       </SessionProvider>
     )}
   </StrictMode>,
-)
+))

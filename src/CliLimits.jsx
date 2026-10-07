@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useLayoutEffect, useRef, useState } from 'react';
+import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Gauge } from 'lucide-react';
 import { agyQuotaForModel, agyQuotaGroup } from './agyQuota.js';
@@ -147,23 +147,59 @@ export const LimitBars = ({ limits, cli = '', now = Date.now() }) => {
   );
 };
 
-/* Every CLI's limits from the server, fetched on demand. Nothing is run to
-   answer it: the server reads what the CLIs last said. */
+/* Every CLI's limits from the server. One shared poll for every view that
+   shows them: every 30 s while the page is visible, at once when it comes
+   back into view or online, and paused in a background tab. The server asks
+   the providers themselves at most once a minute (server/cliModels.js,
+   refreshLiveLimits), so this follows use made anywhere, not only here. */
+const POLL_MS = 30_000;
+const limitsHub = { data: { limits: null, budget: null }, subs: new Set(), timer: null, inflight: null, at: 0 };
+const loadLimits = (force = false) => {
+  if (limitsHub.inflight) return limitsHub.inflight;
+  limitsHub.inflight = fetch(force ? '/cli/limits?force=1' : '/cli/limits')
+    .then(r => r.json())
+    .then((d) => {
+      if (!d.success) return;
+      limitsHub.data = { limits: d.limits || {}, budget: d.budget || null };
+      limitsHub.at = Date.now();
+      limitsHub.subs.forEach(fn => fn(limitsHub.data));
+    })
+    .catch(() => { /* no server: nothing shown */ })
+    .finally(() => { limitsHub.inflight = null; });
+  return limitsHub.inflight;
+};
+const hidden = () => typeof document !== 'undefined' && document.visibilityState === 'hidden';
+const onWake = () => { if (!hidden() && Date.now() - limitsHub.at > 5000) loadLimits(); };
+const startHub = () => {
+  if (limitsHub.timer) return;
+  limitsHub.timer = setInterval(() => { if (!hidden()) loadLimits(); }, POLL_MS);
+  document.addEventListener('visibilitychange', onWake);
+  window.addEventListener('focus', onWake);
+  window.addEventListener('online', onWake);
+};
+const stopHub = () => {
+  clearInterval(limitsHub.timer);
+  limitsHub.timer = null;
+  document.removeEventListener('visibilitychange', onWake);
+  window.removeEventListener('focus', onWake);
+  window.removeEventListener('online', onWake);
+};
 const useLimitsData = (active, refreshKey) => {
-  const [data, setData] = useState({ limits: null, budget: null });
-  const load = useCallback(async () => {
-    try {
-      const res = await fetch('/cli/limits');
-      const d = await res.json();
-      if (d.success) setData({ limits: d.limits || {}, budget: d.budget || null });
-    } catch { /* no server: nothing shown */ }
-  }, []);
+  const [data, setData] = useState(limitsHub.data);
   useEffect(() => {
     if (!active) return undefined;
-    load();
-    const timer = setInterval(load, 60_000);
-    return () => clearInterval(timer);
-  }, [active, load, refreshKey]);
+    limitsHub.subs.add(setData);
+    startHub();
+    if (limitsHub.data.limits) setData(limitsHub.data);
+    return () => {
+      limitsHub.subs.delete(setData);
+      if (!limitsHub.subs.size) stopHub();
+    };
+  }, [active]);
+  // An answer just started or finished: what the CLI said with it is newest.
+  useEffect(() => {
+    if (active) loadLimits(refreshKey === false);
+  }, [active, refreshKey]);
   return data;
 };
 export const useCliLimits = (active, refreshKey) => useLimitsData(active, refreshKey).limits;
@@ -264,7 +300,7 @@ export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
   }, [open]);
   useEffect(() => {
     if (!cli) return undefined;
-    const timer = setInterval(() => setNow(Date.now()), 30_000);
+    const timer = setInterval(() => { if (!hidden()) setNow(Date.now()); }, 30_000);
     return () => clearInterval(timer);
   }, [cli]);
   if (!cli || !all) return null;

@@ -43,6 +43,47 @@ const apiPlugin = (env = {}) => ({
   },
 });
 
+/* Every UI language but English as its own chunk, in a build only.
+   src/i18n.jsx keeps all twelve tables in one file -- the tests read it as
+   text -- which put a megabyte of translations nobody reads into the first
+   download. Here each table is cut out into a module of its own and the
+   file's LANGUAGE_LOADERS is pointed at them; see loadLanguage there. */
+const I18N_LAZY = { ko: 'ko', ja: 'ja', zhHans: 'zh-Hans', zhHant: 'zh-Hant', es: 'es', fr: 'fr', de: 'de', pt: 'pt', ru: 'ru', vi: 'vi', ar: 'ar' };
+const PREFIX = 'virtual:i18n-lang/';
+const VIRTUAL = '\0'; // Rollup's mark for a module with no file behind it.
+const i18nSplit = () => {
+  const tables = new Map();
+  return {
+    name: 'ollama-webui-i18n-split',
+    apply: 'build',
+    enforce: 'pre',
+    resolveId(id) { return id.startsWith(PREFIX) ? VIRTUAL + id : null; },
+    load(id) {
+      if (!id.startsWith(VIRTUAL + PREFIX)) return null;
+      const lang = id.slice(PREFIX.length + 1);
+      if (!tables.has(lang)) throw new Error(`i18nSplit: no table for ${lang}`);
+      return `export default ${tables.get(lang)};`;
+    },
+    transform(code, id) {
+      if (!/[\\/]src[\\/]i18n\.jsx(\?|$)/.test(id)) return null;
+      let out = code.replace(/\r\n/g, '\n');
+      const loaders = [];
+      for (const [name, lang] of Object.entries(I18N_LAZY)) {
+        const head = '\nconst ' + name + ' = {\n';
+        const start = out.indexOf(head);
+        const end = start < 0 ? -1 : out.indexOf('\n};\n', start);
+        if (end < 0) throw new Error(`i18nSplit: table ${name} not found in src/i18n.jsx`);
+        tables.set(lang, out.slice(start + head.length - 2, end + 3));
+        out = out.slice(0, start) + '\nconst ' + name + ' = {};' + out.slice(end + 3);
+        loaders.push(`${JSON.stringify(lang)}: () => import(${JSON.stringify(PREFIX + lang)})`);
+      }
+      if (!out.includes('const LANGUAGE_LOADERS = null;')) throw new Error('i18nSplit: LANGUAGE_LOADERS not found');
+      out = out.replace('const LANGUAGE_LOADERS = null;', `const LANGUAGE_LOADERS = { ${loaders.join(', ')} };`);
+      return { code: out, map: null };
+    },
+  };
+};
+
 // https://vitejs.dev/config/
 // The third argument to loadEnv is an empty prefix, so unprefixed values like
 // KAKAO_CLIENT_SECRET are readable here without ever being exposed to the client.
@@ -56,7 +97,7 @@ export default defineConfig(({ mode }) => {
   const canonicalHost = canonical ? new URL(canonical).hostname : '';
 
   return {
-    plugins: [react(), apiPlugin(env)],
+    plugins: [i18nSplit(), react(), apiPlugin(env)],
     server: {
       // OAuth redirect URIs are registered per exact origin, so the port must
       // not drift. Without strictPort a second `npm run dev` silently lands on

@@ -15,14 +15,12 @@ import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import rehypeHighlight from 'rehype-highlight';
-import 'katex/dist/katex.min.css';
+import { useRichRehype } from './richMarkdown.js';
 import { RefreshCcw, Sparkles, Link2Off, MessageSquare, Image as ImageIcon } from 'lucide-react';
 import { fetchShare, sharedImageUrl } from './shareLink.js';
 import { useI18n } from './i18n.jsx';
 
-const Bubble = ({ message }) => (
+const Bubble = ({ message, rich }) => (
   <div className={`message-row ${message.role}`}>
     {message.role === 'assistant' && (
       <div className="message-avatar assistant-avatar"><Sparkles size={16} /></div>
@@ -44,7 +42,7 @@ const Bubble = ({ message }) => (
         <div className="markdown-body">
           <ReactMarkdown
             remarkPlugins={[remarkGfm, remarkMath]}
-            rehypePlugins={[rehypeKatex, rehypeHighlight]}
+            rehypePlugins={rich}
           >
             {message.content}
           </ReactMarkdown>
@@ -61,6 +59,7 @@ const Bubble = ({ message }) => (
 
 export const SharedChat = ({ token }) => {
   const { t, lang } = useI18n();
+  const rich = useRichRehype();
   const [state, setState] = useState('loading');
   const [share, setShare] = useState(null);
 
@@ -133,7 +132,7 @@ export const SharedChat = ({ token }) => {
             {share.picture?.prompt && <figcaption>{share.picture.prompt}</figcaption>}
           </figure>
         ) : (
-          share.messages.map((message, i) => <Bubble key={i} message={message} />)
+          share.messages.map((message, i) => <Bubble key={i} message={message} rich={rich} />)
         )}
       </main>
 

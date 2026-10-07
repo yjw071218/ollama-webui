@@ -6,9 +6,7 @@ import { ArrowUp, Paperclip, Sparkles, RefreshCcw, Trash2, Copy, Check, Terminal
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
-import rehypeKatex from 'rehype-katex';
-import rehypeHighlight from 'rehype-highlight';
-import 'katex/dist/katex.min.css';
+import { useRichRehype } from './richMarkdown.js';
 import {
   extractCodeBlocks,
   normalizeLanguage,
@@ -13371,11 +13369,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     }, []);
   })();
 
+  const richRehype = useRichRehype();
   const markdownRehypePlugins = useMemo(() => {
-    const base = [rehypeKatex, rehypeHighlight];
+    const base = richRehype;
     const q = chatSearchQuery.trim();
     return q ? [...base, createSearchHighlighter(q)] : base;
-  }, [chatSearchQuery]);
+  }, [chatSearchQuery, richRehype]);
 
   // The streaming message adds the per-character wrapper itself (it needs the
   // reveal clock; see LiveAnswerMarkdown), so its set is the same.

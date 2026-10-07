@@ -234,7 +234,7 @@ try {
   const r = new C.ClaudeReader();
   deep('the message start carries no text, only that the model began', r.accept({ type: 'stream_event', event: { type: 'message_start', message: { usage: { input_tokens: 10, cache_read_input_tokens: 5 } } } }), { started: true });
   eq('and says so once', r.accept({ type: 'stream_event', event: { type: 'message_start', message: { usage: { input_tokens: 10, cache_read_input_tokens: 5 } } } }), null);
-  deep('a thinking delta', r.accept({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'hm' } } }), { thinking: 'hm' });
+  deep('a thinking delta', r.accept({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'thinking_delta', thinking: 'hm' } } }), { thinking: 'hm', reasoning: true });
   deep('a text delta', r.accept({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'hi' } } }), { content: 'hi' });
   eq('the whole message again is ignored', r.accept({ type: 'assistant', message: { content: [{ type: 'text', text: 'hi' }] } }), null);
   r.accept({ type: 'stream_event', event: { type: 'message_delta', usage: { output_tokens: 7 } } });
@@ -248,7 +248,7 @@ try {
   const r = new C.CodexSession({ thread: {}, turn: {} });
   deep('a started turn is when the model began', r.accept({ method: 'turn/started', params: { turn: {} } }), { started: true });
   eq('a config warning is not the answer', r.accept({ method: 'configWarning', params: { summary: 'ignoring settings' } }), null);
-  deep('a reasoning summary is thinking', r.accept({ method: 'item/reasoning/summaryTextDelta', params: { itemId: 'r', delta: 'plan' } }), { thinking: 'plan' });
+  deep('a reasoning summary is thinking', r.accept({ method: 'item/reasoning/summaryTextDelta', params: { itemId: 'r', delta: 'plan' } }), { thinking: 'plan', reasoning: true });
   eq('and the raw text of the same thought is not shown twice', r.accept({ method: 'item/reasoning/textDelta', params: { itemId: 'r', delta: 'plan' } }), null);
   deep('a delta is passed on as it comes', r.accept({ method: 'item/agentMessage/delta', params: { itemId: 'a', delta: 'Hel' } }), { content: 'Hel' });
   deep('and the next', r.accept({ method: 'item/agentMessage/delta', params: { itemId: 'a', delta: 'lo' } }), { content: 'lo' });
@@ -407,12 +407,27 @@ eq('but not over "off"', C.effortOf(false, C.PROVIDERS.codex, { CLI_EFFORT: 'hig
   r.accept({ type: 'stream_event', event: { type: 'content_block_delta', index: 1, delta: { type: 'input_json_delta', partial_json: '{"path":"C:\\\\a.js"}' } } });
   const note = r.accept({ type: 'stream_event', event: { type: 'content_block_stop', index: 1 } });
   check('a tool call is shown as thinking, by server and tool', /\[tool: files \/ read_file · C:\\a\.js\]/.test(note?.thinking || ''), JSON.stringify(note));
+  // Not reasoning: it is still shown with thinking switched off.
+  check('and is not marked as reasoning', note && !note.reasoning, JSON.stringify(note));
   r.accept({ type: 'stream_event', event: { type: 'message_start', message: { usage: {} } } });
   deep('text after the tool is set apart from text before it',
     r.accept({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Found it.' } } }),
     { content: '\n\nFound it.' });
   const end = r.accept({ type: 'result', subtype: 'success', usage: { input_tokens: 100, output_tokens: 20 }, total_cost_usd: 0.01 });
   deep("the run's own totals and cost are kept", end.usage, { prompt: 100, eval: 20, fresh: 100, cacheWrite: 0, costUsd: 0.01 });
+}
+{
+  /* Claude Code's own Edit: its patch comes beside the result, and becomes the
+     same diff in the answer a workbench edit does. */
+  const r = new C.ClaudeReader();
+  const out = r.accept({
+    type: 'user',
+    message: { content: [{ type: 'tool_result', content: 'The file C:\\x\\a.js has been updated successfully.' }] },
+    tool_use_result: { filePath: 'C:\\x\\a.js', structuredPatch: [{ oldStart: 1, oldLines: 2, newStart: 1, newLines: 2, lines: [' a', '-b', '+c'] }] },
+  });
+  check("Claude's own edit is shown as its diff", /📝 \*\*`C:\\x\\a\.js`\*\* \(\+1 −1\)\n```diff\n[\s\S]*\n-b\n\+c\n```/.test(out?.content || ''), JSON.stringify(out));
+  check('a new file is all added', /\(\+2 -0\)[\s\S]*\n\+1\n\+2\n```$/.test(C.nativeChangeText({ type: 'create', filePath: 'C:\\x\\n.txt', content: '1\n2\n', structuredPatch: [] })));
+  eq('a result with no file is no change', C.nativeChangeText({ stdout: 'ok' }), '');
 }
 {
   /* Three calls in one run: the context is the last call's, not the sum. */
@@ -448,7 +463,7 @@ eq('but not over "off"', C.effortOf(false, C.PROVIDERS.codex, { CLI_EFFORT: 'hig
   const codexOn = sandboxed(C.PROVIDERS.codex, 'gpt-5.5', req, { files: scratch3 });
   check('Codex is asked for a detailed reasoning summary', codexOn.args.includes('model_reasoning_summary="detailed"'), JSON.stringify(codexOn.args));
   check('not when thinking is off', !sandboxed(C.PROVIDERS.codex, 'gpt-5.5', req, { files: scratch3, think: false }).args.some(a => a.startsWith('model_reasoning_summary')));
-  deep('agy passes its reasoning on', { ...new C.AgyReader().accept({ event: 'step_update', step_update: { step_type: 'planner_response', thinking_delta: 'hmm' } }), started: undefined }, { thinking: 'hmm' });
+  deep('agy passes its reasoning on', { ...new C.AgyReader().accept({ event: 'step_update', step_update: { step_type: 'planner_response', thinking_delta: 'hmm' } }), started: undefined }, { thinking: 'hmm', reasoning: true });
   fs.rmSync(scratch3, { recursive: true, force: true });
 }
 
