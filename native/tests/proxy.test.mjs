@@ -33,6 +33,21 @@ const request = (url, headers = {}, body = null) => new Promise((resolve, reject
   });
   req.on('error', reject); req.end(body);
 });
+test('android gateway: an unreachable server gets a page with a way out', { skip: !existsSync(javac), timeout: 30000 }, async () => {
+  const spare = net.createServer(); spare.listen(0, '127.0.0.1'); await once(spare, 'listening');
+  const dead = 'http://127.0.0.1:' + spare.address().port; await new Promise(resolve => spare.close(resolve));
+  const gateway = await javaProxy(dead);
+  try {
+    const auth = { cookie: '__ollama_native_gate=' + gateway.token };
+    const page = await request(gateway.origin + '/', { ...auth, accept: 'text/html', 'sec-fetch-dest': 'document' });
+    assert.equal(page.status, 502);
+    assert.match(page.headers['content-type'], /text\/html/);
+    assert.match(page.body, /다시 시도/); assert.match(page.body, /서버 변경/);
+    assert.doesNotMatch(page.body, /상단 새로고침/);
+    const api = await request(gateway.origin + '/api/x', auth);
+    assert.equal(JSON.parse(api.body).code, 'offline');
+  } finally { await gateway.close(); }
+});
 for (const kind of ['desktop', 'android']) test(kind + ' gateway integration', { skip: kind === 'android' && !existsSync(javac), timeout: 30000 }, async t => {
   const backend = http.createServer(async (req, res) => {
     if (req.url === '/redirect') { res.writeHead(302, { location: target + '/next?q=1' }); res.end(); return; }
@@ -88,6 +103,37 @@ for (const kind of ['desktop', 'android']) test(kind + ' gateway integration', {
         res.on('end', () => { assert.match(text, /first/); assert.match(text, /last/); resolve(); });
       }).on('error', reject);
     });
+  });
+  if (kind === 'android') await t.test('keeps the server connection between requests, including chunked uploads', async () => {
+    const agent = new http.Agent({ keepAlive: true, maxSockets: 1 });
+    let connections = 0;
+    const count = () => { connections++; };
+    backend.on('connection', count);
+    try {
+      const send = (pathname, body = null, headers = {}) => new Promise((resolve, reject) => {
+        const req = http.request(gateway.origin + pathname, { agent, method: body === null ? 'GET' : 'POST', headers: { ...auth, ...headers } }, res => {
+          const chunks = []; res.on('data', c => chunks.push(c));
+          res.on('end', () => resolve({ status: res.statusCode, body: Buffer.concat(chunks).toString() }));
+        });
+        req.on('error', reject);
+        if (body !== null && headers['transfer-encoding']) { req.write(body.subarray(0, 10)); req.end(body.subarray(10)); }
+        else req.end(body);
+      });
+      for (let i = 0; i < 3; i++) assert.equal((await send('/n' + i)).status, 200);
+      assert.equal(JSON.parse((await send('/up', Buffer.alloc(70000, 1), { 'transfer-encoding': 'chunked' })).body).length, 70000);
+      const stream = await send('/stream');
+      assert.match(stream.body, /first[\s\S]*last/);
+      assert.equal(JSON.parse((await send('/after')).body).url, '/after');
+      assert.equal(connections, 1);
+    } finally { backend.off('connection', count); agent.destroy(); }
+  });
+  if (kind === 'android') await t.test('normalizes addresses typed without a scheme', async () => {
+    const out = path.join(root, 'artifacts/java-tests');
+    const probe = path.join(out, 'NormalizeProbe.java');
+    (await import('node:fs')).writeFileSync(probe, 'public class NormalizeProbe { public static void main(String[] a) throws Exception { for (String s : a) System.out.println(io.github.yjw071218.ollamawebui.client.LoopbackProxy.normalize(s)); } }');
+    assert.equal(spawnSync(javac, ['-cp', out, '-d', out, probe]).status, 0);
+    const run = spawnSync(java, ['-cp', out, 'NormalizeProbe', '192.168.0.5:5173', ' https://example.com/ ', 'localhost:5173/'], { encoding: 'utf8' });
+    assert.deepEqual(run.stdout.trim().split(/\r?\n/), ['http://192.168.0.5:5173', 'https://example.com', 'http://localhost:5173']);
   });
   await t.test('tunnels websocket upgrade and binary bytes', async () => {
     await new Promise((resolve, reject) => {

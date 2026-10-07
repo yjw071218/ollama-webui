@@ -1,0 +1,13 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- The app's mark in one colour for the status bar; Android tints it. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="32" android:viewportHeight="32">
+    <path android:fillColor="@android:color/transparent" android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.6" android:strokeLineCap="round"
+        android:pathData="M15 4.54A11.5 11.5 0 1 1 6.58 9.4"/>
+    <path android:fillColor="@android:color/transparent" android:strokeColor="#FFFFFFFF"
+        android:strokeWidth="2.8" android:strokeLineCap="round"
+        android:pathData="M15.44 9.62A6.4 6.4 0 0 1 20.53 20.53"/>
+    <path android:fillColor="#FFFFFFFF" android:pathData="M18.3,16a2.3,2.3 0,1 1,-4.6,0a2.3,2.3 0,1 1,4.6,0"/>
+</vector>

@@ -1,4 +1,4 @@
-import { app, BrowserWindow, Menu, ipcMain, session, shell, desktopCapturer } from 'electron';
+import { app, BrowserWindow, Menu, ipcMain, session, shell, desktopCapturer, screen } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
@@ -17,6 +17,22 @@ const setupURL = pathToFileURL(path.join(directory, 'setup.html')).href;
 const smokeProfile = process.argv.find(value => value.startsWith('--smoke-profile='));
 if (process.argv.includes('--native-smoke') && smokeProfile) app.setPath('userData', smokeProfile.slice(16));
 let setupWindow, clientWindow, gateway, settings = { server: '', ports: {} }, connecting = false;
+/* The window opens where it was left, at the size it was left -- unless that
+   place is no longer on any screen (a monitor unplugged since). */
+const savedBounds = () => {
+  const w = settings.window;
+  const ok = w && [w.x, w.y, w.width, w.height].every(Number.isFinite) && w.width >= 420 && w.height >= 500;
+  if (!ok) return { width: 1360, height: 900 };
+  const visible = screen.getAllDisplays().some(({ workArea: a }) =>
+    w.x < a.x + a.width - 80 && w.x + w.width > a.x + 80 && w.y >= a.y - 10 && w.y < a.y + a.height - 80);
+  return visible ? { x: w.x, y: w.y, width: w.width, height: w.height } : { width: w.width, height: w.height };
+};
+const rememberBounds = win => {
+  try {
+    settings.window = { ...win.getNormalBounds(), maximized: win.isMaximized() };
+    writeFile(configPath(), JSON.stringify(settings, null, 2), { mode: 0o600 }).catch(() => {});
+  } catch {}
+};
 const configPath = () => path.join(app.getPath('userData'), 'connection.json');
 const sameOrigin = (value, origin) => { try { return new URL(value).origin === origin; } catch { return false; } };
 async function external(url, owner) {
@@ -101,9 +117,11 @@ async function connect(value) {
     });
     ses.removeAllListeners('will-download');
     ses.on('will-download', (_event, item) => item.setSaveDialogOptions({ title: '파일 저장' }));
-    clientWindow = createClientWindow({ icon: path.join(directory, 'icons/app.png'), show: !process.argv.includes('--native-smoke'), width: 1360, height: 900, minWidth: 420, minHeight: 500, title: 'Ollama WebUI Client',
+    clientWindow = createClientWindow({ icon: path.join(directory, 'icons/app.png'), show: !process.argv.includes('--native-smoke'), ...savedBounds(), minWidth: 420, minHeight: 500, title: 'Ollama WebUI Client',
       webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, allowRunningInsecureContent: false } }, { server: openSetup, updates: () => notifyUpdate(true), menu: win => Menu.getApplicationMenu()?.popup({window:win}) });
     const win = clientWindow;
+    if (settings.window?.maximized) win.maximize();
+    win.on('close', () => rememberBounds(win));
     /* Google's account chooser in the browser, answered on 127.0.0.1:47615
        (googleLoopback.mjs). If the port is taken, the server's page instead. */
     const googleDirect = async ({ id, clientId }) => {
@@ -144,6 +162,7 @@ async function connect(value) {
       return { action: 'deny' };
     });
     win.on('closed', () => {
+      if (clientWindow === win) clientWindow = undefined;
       current.close();
       if (gateway === current) gateway = undefined;
       if (!connecting && (!setupWindow || setupWindow.isDestroyed() || !setupWindow.isVisible())) app.quit();
@@ -168,7 +187,16 @@ async function connect(value) {
 }
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
-  app.on('second-instance', () => (clientWindow || setupWindow)?.focus());
+  /* Started again while running: bring the open window back, even from
+     minimized or hidden, rather than seeming to do nothing. */
+  app.on('second-instance', () => {
+    const win = [clientWindow, setupWindow].find(w => w && !w.isDestroyed());
+    if (!win) { if (app.isReady()) openSetup(); return; }
+    if (win.isMinimized()) win.restore();
+    if (!win.isVisible()) win.show();
+    app.focus({ steal: true });
+    win.focus();
+  });
   app.whenReady().then(async () => {
     try { settings = { ...settings, ...JSON.parse(await readFile(configPath(), 'utf8')) }; } catch {}
     ipcMain.handle('connection:current', event => { if (!validSetup(event)) throw new Error('Forbidden'); return settings.server; });

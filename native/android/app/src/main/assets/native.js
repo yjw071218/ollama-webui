@@ -54,7 +54,9 @@
     }
     constructor(title, options = {}) {
       if (NativeNotification.permission !== 'granted') throw new DOMException('알림 권한이 필요합니다.', 'NotAllowedError');
-      call('notify', { title: String(title), body: String(options.body || ''), tag: String(options.tag || 'ollama') }).catch(() => {});
+      // The chat goes along, so tapping the notification opens it.
+      const chat = options.data && options.data.chat != null ? String(options.data.chat) : '';
+      call('notify', { title: String(title), body: String(options.body || ''), tag: String(options.tag || 'ollama'), chat }).catch(() => {});
     }
     close() {}
   }
@@ -81,13 +83,25 @@
   if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', watchChrome, { once: true });
   else watchChrome();
   window.addEventListener('load', sendChrome, { once: true });
-  document.addEventListener('click', async event => {
-    const a = event.target.closest?.('a[download]');
-    if (!a || !/^(blob:|data:)/.test(a.href)) return;
-    event.preventDefault();
+  const saveLink = async (href, name) => {
     try {
-      const blob = await fetch(a.href).then(r => r.blob());
-      await call('save', { name: a.download || 'download', type: blob.type, data: await base64(blob) });
-    } catch (error) { alert(error.message); }
+      const blob = await fetch(href).then(r => r.blob());
+      await call('save', { name: name || 'download', type: blob.type, data: await base64(blob) });
+    } catch (error) { if (error?.message !== '저장을 취소했습니다.') alert(error.message); }
+  };
+  const savable = a => a && a.hasAttribute('download') && /^(blob:|data:)/.test(a.href);
+  document.addEventListener('click', event => {
+    const a = event.target.closest?.('a[download]');
+    if (!savable(a)) return;
+    event.preventDefault();
+    saveLink(a.href, a.download);
   }, true);
+  // Exports and backups click a link that was never put on the page
+  // (App.jsx downloadBlob). Its click reaches no document listener, so the
+  // click itself is answered here.
+  const click = HTMLAnchorElement.prototype.click;
+  HTMLAnchorElement.prototype.click = function () {
+    if (!this.isConnected && savable(this)) { saveLink(this.href, this.download); return; }
+    return click.call(this);
+  };
 })();

@@ -34,13 +34,17 @@ public class MainActivity extends Activity {
     private JavaScriptReplyProxy captureReply, saveReply;
     private String captureId, saveId, downloadURL;
     private byte[] saveBytes;
-    private boolean connecting, notificationAllowed;
+    private boolean connecting, notificationAllowed, pageReady;
+    /** The chat a tapped notification is about, until the page can be told. */
+    private String pendingChat;
     private static final int MEDIA = 41, FILE = 42, SAVE = 43, CAPTURE = 44, NOTIFY = 45, AUTH = 46;
+    private static final String EXTRA_CHAT = "chat";
     private int dp(int n) { return (int) (getResources().getDisplayMetrics().density * n); }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences("connection", MODE_PRIVATE);
+        if (state == null) takeChat(getIntent());
         getWindow().setStatusBarColor(Color.rgb(17, 24, 39));
         getWindow().setNavigationBarColor(Color.rgb(17, 24, 39));
         // The address screen is for choosing a server, not a gate on every launch:
@@ -106,6 +110,38 @@ public class MainActivity extends Activity {
         // ollamawebui://auth is only a "come back" signal from the sign-in page; it carries nothing.
         if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null
             && "ollamawebui".equals(intent.getData().getScheme())) nudgeAuth();
+        if (takeChat(intent)) deliverChat();
+    }
+    /** A notification's chat, held until the page is there to open it. */
+    private boolean takeChat(Intent intent) {
+        String chat = intent == null ? null : intent.getStringExtra(EXTRA_CHAT);
+        if (chat == null || chat.isEmpty()) return false;
+        pendingChat = chat; intent.removeExtra(EXTRA_CHAT); return true;
+    }
+    /** Tell the page which chat to open. It also keeps it, for an app still starting up. */
+    private void deliverChat() {
+        if (pendingChat == null || web == null || !pageReady) return;
+        String chat = JSONObject.quote(pendingChat); pendingChat = null;
+        web.evaluateJavascript("window.__ollamaOpenChat=" + chat + ";window.dispatchEvent(new CustomEvent('ollama-native-open-chat',{detail:{chat:" + chat + "}}))", null);
+    }
+    /** Dialogs in the page's own light or dark, not the system default. */
+    private AlertDialog.Builder dialog() {
+        boolean light = luminance(prefs.getInt("chrome", Color.rgb(26, 25, 22))) > 0.6 && web != null;
+        return new AlertDialog.Builder(this, light ? android.R.style.Theme_DeviceDefault_Light_Dialog_Alert : android.R.style.Theme_DeviceDefault_Dialog_Alert);
+    }
+    /** System bars, display cutout and keyboard, on every side (landscape puts them left or right). */
+    private static int[] bars(WindowInsets insets) {
+        if (Build.VERSION.SDK_INT >= 30) {
+            android.graphics.Insets b = insets.getInsets(WindowInsets.Type.systemBars() | WindowInsets.Type.displayCutout());
+            android.graphics.Insets ime = insets.getInsets(WindowInsets.Type.ime());
+            return new int[]{b.left, b.top, b.right, Math.max(b.bottom, ime.bottom)};
+        }
+        return new int[]{insets.getSystemWindowInsetLeft(), insets.getSystemWindowInsetTop(), insets.getSystemWindowInsetRight(), insets.getSystemWindowInsetBottom()};
+    }
+    private boolean notificationsAllowedBySystem() {
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED) return false;
+        NotificationManager manager = getSystemService(NotificationManager.class);
+        return manager == null || manager.areNotificationsEnabled();
     }
     private UpdateDialog updateDialog;
     /** Check GitHub; on news, the in-app update screen (UpdateDialog) downloads and installs it. */
@@ -142,29 +178,50 @@ public class MainActivity extends Activity {
         notificationAllowed = false;
         layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(dp(24), dp(40), dp(24), dp(24));
-        setContentView(layout);
-        applyChrome(Color.rgb(17, 24, 39));
-        layout.setOnApplyWindowInsetsListener((v, insets) -> {
-            v.setPadding(dp(24), Math.max(dp(40), insets.getSystemWindowInsetTop()), dp(24), Math.max(dp(24), insets.getSystemWindowInsetBottom()));
+        ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
+        scroll.addView(layout);
+        setContentView(scroll);
+        int background = Color.rgb(26, 25, 22);
+        scroll.setBackgroundColor(background);
+        applyChrome(background);
+        scroll.setOnApplyWindowInsetsListener((v, insets) -> {
+            int[] b = bars(insets);
+            layout.setPadding(dp(24) + b[0], Math.max(dp(40), b[1] + dp(16)), dp(24) + b[2], Math.max(dp(24), b[3] + dp(16)));
             return insets;
         });
-        TextView title = label("Ollama WebUI", 30); layout.addView(title);
-        layout.addView(label("연결할 서버의 기본 주소를 입력하세요. 0.0.0.0은 예시이며 실제 접속 주소가 아닙니다.", 16));
+        TextView title = label("Ollama WebUI", 28); title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD); layout.addView(title);
+        TextView intro = label("연결할 서버 주소를 입력하세요. PC에서 서버를 켰을 때 표시되는 주소입니다.", 15);
+        intro.setTextColor(Color.rgb(185, 179, 167)); layout.addView(intro);
         EditText address = new EditText(this); address.setSingleLine(true);
-        address.setTextColor(Color.WHITE); address.setHintTextColor(Color.LTGRAY);
+        address.setTextColor(Color.rgb(238, 233, 224)); address.setHintTextColor(Color.rgb(120, 114, 104));
         address.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
-        address.setHint("http://0.0.0.0:5173/");
-        address.setText(prefs.getString("server", "")); layout.addView(address);
-        TextView warning = label("HTTP 통신은 암호화되지 않습니다. 대화·비밀번호·첨부 파일을 보호하려면 HTTPS를 사용하세요. 신뢰하는 서버에만 연결하세요.\n\n서버 변경 시 로그인 쿠키는 삭제됩니다. 서버별 앱 저장 데이터는 분리됩니다.", 14);
-        warning.setTextColor(Color.rgb(252, 211, 77)); layout.addView(warning);
-        Button connect = new Button(this); connect.setText("연결하기"); layout.addView(connect);
-        Button updates = new Button(this); updates.setText("업데이트 확인"); layout.addView(updates);
+        address.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_GO);
+        address.setHint("예: 192.168.0.5:5173");
+        address.setBackground(rounded(Color.rgb(41, 38, 32), 12, Color.rgb(81, 74, 64)));
+        address.setPadding(dp(14), dp(12), dp(14), dp(12));
+        address.setText(prefs.getString("server", ""));
+        LinearLayout.LayoutParams field = new LinearLayout.LayoutParams(-1, -2); field.topMargin = dp(8); field.bottomMargin = dp(4);
+        layout.addView(address, field);
+        TextView warning = label("http://로 연결하면 내용이 암호화되지 않습니다. 집 밖에서 쓰거나 비밀번호를 보호하려면 https://를 쓰세요. 신뢰하는 서버에만 연결하세요.\n\n서버를 바꾸면 로그인 정보가 지워지고, 서버마다 앱 데이터가 따로 저장됩니다.", 13);
+        warning.setTextColor(Color.rgb(232, 196, 120)); layout.addView(warning);
+        Button connect = button("연결하기", true);
+        LinearLayout.LayoutParams primary = new LinearLayout.LayoutParams(-1, dp(50)); primary.topMargin = dp(8);
+        layout.addView(connect, primary);
+        Button updates = button("업데이트 확인", false);
+        LinearLayout.LayoutParams secondary = new LinearLayout.LayoutParams(-1, dp(46)); secondary.topMargin = dp(10);
+        layout.addView(updates, secondary);
         updates.setOnClickListener(v -> checkUpdates(true));
+        address.setOnEditorActionListener((v, action, event) -> {
+            boolean enter = event != null && event.getKeyCode() == KeyEvent.KEYCODE_ENTER && event.getAction() == KeyEvent.ACTION_DOWN;
+            if (action != android.view.inputmethod.EditorInfo.IME_ACTION_GO && !enter) return false;
+            connect.performClick(); return true;
+        });
         connect.setOnClickListener(v -> {
             if (connecting) return;
             try {
                 String server = LoopbackProxy.normalize(address.getText().toString());
-                if (server.startsWith("http:")) new AlertDialog.Builder(this).setTitle("암호화되지 않은 연결")
+                address.setText(server);
+                if (server.startsWith("http:")) dialog().setTitle("암호화되지 않은 연결")
                     .setMessage(server + "\n신뢰하는 서버인지 확인하세요. HTTP는 도청·변조 위험이 있습니다.")
                     .setNegativeButton("취소", null).setPositiveButton("연결", (d,w) -> connect(server, connect)).show();
                 else connect(server, connect);
@@ -174,6 +231,21 @@ public class MainActivity extends Activity {
     private TextView label(String text, int size) {
         TextView view = new TextView(this); view.setText(text); view.setTextSize(size); view.setTextColor(Color.WHITE);
         view.setPadding(0, dp(12), 0, dp(12)); return view;
+    }
+    private android.graphics.drawable.GradientDrawable rounded(int color, int radius, int stroke) {
+        android.graphics.drawable.GradientDrawable d = new android.graphics.drawable.GradientDrawable();
+        d.setColor(color); d.setCornerRadius(dp(radius));
+        if (stroke != 0) d.setStroke(dp(1), stroke);
+        return d;
+    }
+    /** The setup screen's buttons, in the app's colours rather than the platform's light grey. */
+    private Button button(String text, boolean primary) {
+        Button b = new Button(this); b.setText(text); b.setAllCaps(false); b.setTextSize(15);
+        b.setStateListAnimator(null);
+        b.setBackground(primary ? rounded(Color.rgb(217, 119, 87), 12, 0) : rounded(Color.rgb(41, 38, 32), 12, Color.rgb(81, 74, 64)));
+        b.setTextColor(primary ? Color.WHITE : Color.rgb(238, 233, 224));
+        if (primary) b.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
+        return b;
     }
     private void connect(String server, Button button) {
         connecting = true;
@@ -235,7 +307,7 @@ public class MainActivity extends Activity {
         decor.setSystemUiVisibility(flags);
     }
     private void confirmChangeServer(Runnable cancelled) {
-        new AlertDialog.Builder(this).setTitle("서버 변경").setMessage("현재 연결과 진행 중인 녹음·화면 캡처를 종료하고 서버 주소 화면으로 이동할까요?")
+        dialog().setTitle("서버 변경").setMessage("현재 연결과 진행 중인 녹음·화면 캡처를 종료하고 서버 주소 화면으로 이동할까요?")
             .setNegativeButton("취소", (d,w) -> { if (cancelled != null) cancelled.run(); })
             .setOnCancelListener(d -> { if (cancelled != null) cancelled.run(); })
             .setPositiveButton("변경", (d,w) -> { stopService(new Intent(this, CaptureService.class)); showSetup(); }).show();
@@ -244,8 +316,13 @@ public class MainActivity extends Activity {
         layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
         setContentView(layout);
         layout.setOnApplyWindowInsetsListener((v, insets) -> {
-            v.setPadding(0, insets.getSystemWindowInsetTop(), 0, insets.getSystemWindowInsetBottom()); return insets;
+            int[] b = bars(insets);
+            v.setPadding(b[0], b[1], b[2], b[3]); return insets;
         });
+        pageReady = false;
+        // Allowed once for this server, allowed after a restart too (and still
+        // checked against the system setting, which can be turned off any time).
+        notificationAllowed = prefs.getBoolean("notify:" + server, false) && notificationsAllowedBySystem();
         // No native button bar: reload and server change live in the page's own
         // account menu (window.ollamaNative.changeServer), so the app has no frame.
         web = new WebView(this); layout.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
@@ -275,13 +352,18 @@ public class MainActivity extends Activity {
                 if (url.startsWith(server + "/") || url.equals(server)) { view.loadUrl(proxy.origin + url.substring(server.length())); return true; }
                 if ("intent".equals(request.getUrl().getScheme())) return true;
                 if ("http".equals(request.getUrl().getScheme()) || "https".equals(request.getUrl().getScheme()))
-                    new AlertDialog.Builder(MainActivity.this).setTitle("외부 링크").setMessage(url).setNegativeButton("취소", null)
+                    dialog().setTitle("외부 링크").setMessage(url).setNegativeButton("취소", null)
                         .setPositiveButton("브라우저로 열기", (d,w) -> { try { startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl())); } catch (Exception e) { message("링크를 열 앱이 없습니다."); } }).show();
                 return true;
             }
+            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) { pageReady = false; }
+            @Override public void onPageFinished(WebView view, String url) {
+                pageReady = local(url);
+                deliverChat();
+            }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (!request.isForMainFrame() || isFinishing() || isDestroyed()) return;
-                new AlertDialog.Builder(MainActivity.this).setTitle("연결 실패").setMessage(server + "\n" + error.getDescription())
+                dialog().setTitle("연결 실패").setMessage(server + "\n" + error.getDescription())
                     .setCancelable(false)
                     .setNegativeButton("서버 변경", (d,w) -> { stopService(new Intent(MainActivity.this, CaptureService.class)); showSetup(); })
                     .setPositiveButton("다시 시도", (d,w) -> { if (web != null) web.reload(); }).show();
@@ -301,7 +383,7 @@ public class MainActivity extends Activity {
                     }
                     if (resources.isEmpty()) { request.deny(); return; }
                     mediaRequest = request; requestedResources = resources.toArray(new String[0]);
-                    new AlertDialog.Builder(MainActivity.this).setTitle("마이크 / 카메라 접근")
+                    dialog().setTitle("마이크 / 카메라 접근")
                         .setMessage(server + "\n이 서버에 요청한 마이크·카메라 권한을 허용할까요?")
                         .setNegativeButton("거부", (d,w) -> denyMedia())
                         .setOnCancelListener(d -> denyMedia())
@@ -322,7 +404,7 @@ public class MainActivity extends Activity {
                 return true;
             }
             @Override public boolean onJsAlert(WebView view, String url, String text, JsResult result) {
-                new AlertDialog.Builder(MainActivity.this).setMessage(text).setPositiveButton("확인", (d,w) -> result.confirm()).setOnCancelListener(d -> result.cancel()).show(); return true;
+                dialog().setMessage(text).setPositiveButton("확인", (d,w) -> result.confirm()).setOnCancelListener(d -> result.cancel()).show(); return true;
             }
         });
         if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -331,7 +413,9 @@ public class MainActivity extends Activity {
                 handle(message.getData(), reply);
             });
             try (InputStream in = getAssets().open("native.js")) {
-                String js = new String(readBytes(in, 100000), StandardCharsets.UTF_8);
+                String js = new String(readBytes(in, 100000), StandardCharsets.UTF_8)
+                    // The page learns at once that it may notify, before its first check.
+                    .replace("static permission = 'default';", "static permission = '" + (notificationAllowed ? "granted" : "default") + "';");
                 WebViewCompat.addDocumentStartJavaScript(web, js, Collections.singleton(proxy.origin));
             } catch (Exception e) { message("앱 확장 초기화 실패: " + e.getMessage()); }
         } else message("Android System WebView를 업데이트해야 화면 캡처·공유·알림 확장을 사용할 수 있습니다.");
@@ -390,35 +474,49 @@ public class MainActivity extends Activity {
                         reply(reply, requestId, clip != null && clip.getItemCount() > 0 ? clip.getItemAt(0).coerceToText(this).toString() : "", null);
                     };
                     if (prefs.getBoolean(always, false)) { readClip.run(); break; }
-                    new AlertDialog.Builder(this).setTitle("클립보드 읽기").setMessage("현재 서버가 클립보드의 텍스트를 읽도록 허용할까요?")
+                    dialog().setTitle("클립보드 읽기").setMessage("현재 서버가 클립보드의 텍스트를 읽도록 허용할까요?")
                         .setNegativeButton("거부", (d,w) -> reply(reply, requestId, null, "클립보드 읽기를 거부했습니다."))
                         .setOnCancelListener(d -> reply(reply, requestId, null, "취소했습니다."))
                         .setNeutralButton("항상 허용", (d,w) -> { prefs.edit().putBoolean(always, true).apply(); readClip.run(); })
                         .setPositiveButton("이번만 허용", (d,w) -> readClip.run()).show(); break;
                 }
-                case "notificationPermission":
+                case "notificationPermission": {
                     if (permissionDone != null) throw new IllegalStateException("권한 요청이 진행 중입니다.");
-                    new AlertDialog.Builder(this).setTitle("완료 알림").setMessage("이 서버에서 작업 완료 알림을 표시하도록 허용할까요?")
+                    String key = "notify:" + prefs.getString("server", "");
+                    if (notificationAllowed && notificationsAllowedBySystem()) { reply(reply, id, "granted", null); break; }
+                    dialog().setTitle("완료 알림").setMessage("이 서버에서 작업 완료 알림을 표시하도록 허용할까요?")
                         .setNegativeButton("거부", (d,w) -> reply(reply, requestId, "denied", null))
                         .setOnCancelListener(d -> reply(reply, requestId, "denied", null))
                         .setPositiveButton("허용", (d,w) -> {
                             permissionDone = () -> {
-                                notificationAllowed = Build.VERSION.SDK_INT < 33 || checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED;
+                                notificationAllowed = notificationsAllowedBySystem();
+                                // Kept per server, so the next launch does not quietly forget it.
+                                prefs.edit().putBoolean(key, notificationAllowed).apply();
+                                if (!notificationAllowed && Build.VERSION.SDK_INT >= 33
+                                    && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
+                                    message("휴대폰 설정에서 이 앱의 알림이 꺼져 있습니다. 설정 › 앱 › Ollama WebUI › 알림에서 켜 주세요.");
                                 reply(reply, requestId, notificationAllowed ? "granted" : "denied", null);
                             };
                             if (Build.VERSION.SDK_INT >= 33) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFY);
                             else { permissionDone.run(); permissionDone = null; }
                         }).show(); break;
-                case "notify":
-                    if (!notificationAllowed) throw new SecurityException("알림 권한이 없습니다.");
+                }
+                case "notify": {
+                    if (!notificationAllowed || !notificationsAllowedBySystem()) throw new SecurityException("알림 권한이 없습니다.");
                     NotificationManager manager = getSystemService(NotificationManager.class);
                     manager.createNotificationChannel(new NotificationChannel("jobs", "작업 완료", NotificationManager.IMPORTANCE_DEFAULT));
-                    PendingIntent open = PendingIntent.getActivity(this, 0, new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP), PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-                    manager.notify(request.optString("tag", "ollama").hashCode(), new Notification.Builder(this, "jobs")
-                        .setSmallIcon(android.R.drawable.ic_dialog_info).setContentTitle(request.optString("title"))
+                    String tag = request.optString("tag", "ollama"), chat = request.optString("chat", "");
+                    // Tapping it opens the chat it is about; one PendingIntent per tag so their chats differ.
+                    Intent target = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                    if (!chat.isEmpty()) target.putExtra(EXTRA_CHAT, chat);
+                    PendingIntent open = PendingIntent.getActivity(this, tag.hashCode(), target, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+                    manager.notify(tag.hashCode(), new Notification.Builder(this, "jobs")
+                        .setSmallIcon(R.drawable.ic_notification).setColor(Color.rgb(217, 119, 87))
+                        .setContentTitle(request.optString("title"))
                         .setContentText(request.optString("body")).setStyle(new Notification.BigTextStyle().bigText(request.optString("body")))
                         .setContentIntent(open).setAutoCancel(true).build());
                     reply(reply, id, true, null); break;
+                }
                 case "changeServer":
                     confirmChangeServer(() -> reply(reply, requestId, false, null)); break;
                 case "checkUpdates":
@@ -494,10 +592,20 @@ public class MainActivity extends Activity {
             });
         }
     }
-    private void message(String text) { if (!isFinishing() && !isDestroyed()) new AlertDialog.Builder(this).setMessage(text).setPositiveButton("확인", null).show(); }
+    private void message(String text) { if (!isFinishing() && !isDestroyed()) dialog().setMessage(text).setPositiveButton("확인", null).show(); }
+    /**
+     * Back closes what is open in the page first -- a dialog, a menu, the
+     * sidebar -- one per press (App.jsx answers 'ollama-native-back'). With
+     * nothing open the app goes to the background, as other apps do; changing
+     * server is in the account menu, not on the back button.
+     */
     @Override public void onBackPressed() {
-        if (web != null && web.canGoBack()) web.goBack();
-        else if (web != null) confirmChangeServer(null); else super.onBackPressed();
+        if (web == null) { super.onBackPressed(); return; }
+        WebView page = web;
+        page.evaluateJavascript("(function(){var e=new Event('ollama-native-back',{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented})()", handled -> {
+            if ("true".equals(handled) || web != page) return;
+            if (page.canGoBack()) page.goBack(); else moveTaskToBack(true);
+        });
     }
     @Override protected void onDestroy() {
         denyMedia();

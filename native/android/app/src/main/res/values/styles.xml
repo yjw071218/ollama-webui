@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- The window behind the app before its first frame: the app's dark
+         background, not a white flash. The page's own colour takes over after. -->
+    <color name="app_background">#1A1916</color>
+    <!-- Light or dark follows the phone (values-night), so the page's
+         prefers-color-scheme does too. -->
+    <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:windowBackground">@color/app_background</item>
+        <item name="android:colorAccent">#D97757</item>
+    </style>
+</resources>
