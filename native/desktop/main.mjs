@@ -204,7 +204,7 @@ else {
     Menu.setApplicationMenu(Menu.buildFromTemplate([
       { label: '앱', submenu: [{ label: '서버 주소 변경', click: openSetup }, { label: '업데이트 확인', click: () => notifyUpdate(true) }, { label: '권한 초기화 / 다시 연결', click: () => settings.server && connect(settings.server).catch(e => showError('연결 실패', e.message)) }, { type: 'separator' }, { role: 'quit', label: '종료' }] },
       { label: '편집', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
-      { label: '보기', submenu: [{ label: '새로고침', accelerator: 'CmdOrCtrl+R', click: () => clientWindow?.clientContents?.reload() }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
+      { label: '보기', submenu: [{ label: '새로고침', accelerator: 'F5', click: () => clientWindow?.clientContents?.reload() }, { label: '캐시 무시하고 새로고침', accelerator: 'CmdOrCtrl+F5', click: () => clientWindow?.clientContents?.reloadIgnoringCache() }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
     ]));
     if (settings.server && !process.argv.includes('--native-smoke')) {
       try { await connect(settings.server); }
