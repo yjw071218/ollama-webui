@@ -1,4 +1,8 @@
 import localforage from 'localforage';
+import { extractSpreadsheet } from './spreadsheet.js';
+import { extractOfficeDocument, extractHTML } from './officeDocuments.js';
+import { decodeDocumentText, rtfText } from './documentText.js';
+import { ARCHIVE_LIMIT, archiveFiles, archiveFormat, epubPages } from './documentArchive.js';
 import { unzipSync, strFromU8 } from 'fflate';
 import { safeTail, safeSlice } from './textCut.js';
 import { buildLexicalIndex, lexicalSearch, fuseRRF } from './lexical.js';
@@ -235,7 +239,7 @@ const PDF_MAGIC = [0x25, 0x50, 0x44, 0x46];          // %PDF
 const ZIP_MAGIC = [0x50, 0x4b, 0x03, 0x04];          // PK\x03\x04
 
 /**
- * Which reader a file needs: 'pdf', 'docx', 'text' or 'binary'.
+ * Which reader a file needs: 'pdf', 'docx', 'spreadsheet', 'text' or 'binary'.
  *
  * The signature decides where there is one, so a PDF saved without an
  * extension still reads as a PDF. The name is consulted only to tell a `.docx`
@@ -246,9 +250,15 @@ export const sniffKind = (bytes, name = '') => {
   const view = bytes instanceof Uint8Array ? bytes : new Uint8Array(bytes);
   if (startsWith(view, PDF_MAGIC)) return 'pdf';
   if (startsWith(view, ZIP_MAGIC)) {
-    return /\.docx$/i.test(name) ? 'docx' : 'binary';
+    if (/\.(pptx|odt|odp|hwpx)$/i.test(name)) return 'office';
+    if (/\.(xlsx|xlsm|xlsb|ods)$/i.test(name)) return 'spreadsheet';
+    return /\.docx$/i.test(name) ? 'docx' : 'archive';
   }
-  return looksBinary(view) ? 'binary' : 'text';
+  // Legacy Excel and encrypted Office files share the compound-file header.
+  if (/\.(xls|xlsx|xlsm|xlsb)$/i.test(name)
+    && startsWith(view, [0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1])) return 'spreadsheet';
+  if (startsWith(view, [0xff, 0xfe]) || startsWith(view, [0xfe, 0xff])) return 'utf16';
+  return looksBinary(view) ? 'binary' : /\.html?$/i.test(name) ? 'html' : 'text';
 };
 
 /**
@@ -261,13 +271,66 @@ export const sniffKind = (bytes, name = '') => {
  */
 export const isSupportedDocument = () => true;
 
-export const extractDocument = async (file, onProgress) => {
+export const extractDocument = async (file, onProgress, context = { depth: 0, budget: { bytes: 0, files: 0 } }) => {
+  if (file.size > ARCHIVE_LIMIT) throw new Error('파일을 50 MB 이하로 나누어 첨부해 주세요.');
   const buffer = await file.arrayBuffer();
+  const bytes = new Uint8Array(buffer);
+  // Container contents are authoritative, even when the name is missing or wrong.
+  if (startsWith(bytes, ZIP_MAGIC)) {
+    if (context.depth >= 3) throw new Error('압축 파일 중첩이 너무 깊습니다. 압축을 풀어 첨부해 주세요.');
+    const files = await archiveFiles(buffer, context.budget);
+    const format = archiveFormat(files);
+    if (format === 'docx') return extractDocx(buffer);
+    if (format === 'spreadsheet') return extractSpreadsheet(buffer, onProgress);
+    if (['pptx', 'hwpx', 'odt', 'odp'].includes(format)) return extractOfficeDocument(buffer, `document.${format}`, onProgress);
+    if (format === 'epub') return epubPages(files);
+    // Let existing readers diagnose malformed documents rather than treating
+    // their XML implementation files as user-authored text.
+    if (/\.(pptx|hwpx|odt|odp)$/i.test(file.name || '')) return extractOfficeDocument(buffer, file.name, onProgress);
+    if (/\.docx$/i.test(file.name || '')) return extractDocx(buffer);
+    if (/\.(xlsx|xlsm|xlsb|ods)$/i.test(file.name || '')) return extractSpreadsheet(buffer, onProgress);
+    const pages = [], skipped = [];
+    for (const [name, data] of Object.entries(files)) {
+      try {
+        const extracted = await extractDocument(new File([data], name), undefined, { depth: context.depth + 1, budget: context.budget });
+        for (const p of extracted) if (p.text?.trim()) pages.push({ page: pages.length + 1, text: `File: ${JSON.stringify(name)} · page ${p.page}\n${p.text}` });
+      } catch (error) {
+        skipped.push(`${name}: ${error.code === 'binary' ? '해석할 수 없는 바이너리 형식' : error.message}`);
+      }
+    }
+    if (!pages.length) throw new Error(`압축 파일에 읽을 수 있는 본문이 없습니다.${skipped.length ? '\n' + skipped.slice(0, 10).join('\n') : ''}`);
+    if (skipped.length) pages.push({ page: pages.length + 1, text: `읽지 못한 첨부 항목 (${skipped.length}):\n${skipped.join('\n')}` });
+    onProgress?.(pages.length, pages.length);
+    return pages;
+  }
+  if (startsWith(bytes, [0x1f, 0x8b])) {
+    if (context.depth >= 3) throw new Error('압축을 풀어 첨부해 주세요.');
+    const reader = new Blob([buffer]).stream().pipeThrough(new DecompressionStream('gzip')).getReader();
+    const chunks = [];
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        context.budget.bytes += value.length;
+        if (context.budget.bytes > ARCHIVE_LIMIT) throw new Error('압축을 푼 파일이 50 MB를 넘습니다.');
+        chunks.push(value);
+      }
+    } finally { await reader.cancel(); reader.releaseLock(); }
+    return extractDocument(new File(chunks, (file.name || 'document').replace(/\.gz$/i, '')), onProgress, { depth: context.depth + 1, budget: context.budget });
+  }
   const kind = sniffKind(new Uint8Array(buffer), file.name || '');
 
   if (kind === 'pdf') return extractPdf(buffer, onProgress);
   if (kind === 'docx') return extractDocx(buffer);
-  if (kind === 'binary') {
+  if (kind === 'office') return extractOfficeDocument(buffer, file.name, onProgress);
+  if (kind === 'spreadsheet') {
+    return extractSpreadsheet(buffer, onProgress);
+  }
+  // Executables and compound binary formats must never be decoded as prose.
+  const executable = startsWith(bytes, [0x4d, 0x5a]) || startsWith(bytes, [0x7f, 0x45, 0x4c, 0x46])
+    || startsWith(bytes, [0xd0, 0xcf, 0x11, 0xe0]);
+  const text = executable ? null : decodeDocumentText(buffer);
+  if (text === null) {
     const err = new Error('binary');
     err.code = 'binary';
     throw err;
@@ -276,7 +339,9 @@ export const extractDocument = async (file, onProgress) => {
   // Decoded from the bytes already in hand rather than by reading the file a
   // second time — and non-fatally, so one bad byte in an otherwise readable
   // config file costs that byte and not the file.
-  return [{ page: 1, text: new TextDecoder('utf-8').decode(buffer) }];
+  if (/^\s*\{\\rtf\d/.test(text)) return [{ page: 1, text: rtfText(text) }];
+  if (kind === 'html' || /^\s*(?:<!doctype html\b|<html\b)/i.test(text)) return extractHTML(text);
+  return [{ page: 1, text }];
 };
 
 /* =========================================================================

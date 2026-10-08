@@ -101,8 +101,12 @@ eq('a PDF with no extension is still a PDF', sniffKind(pdf, 'invoice'), 'pdf');
 // Only the name can tell them apart, and only docx has a reader here.
 const zip = new Uint8Array([0x50, 0x4b, 0x03, 0x04, 0x14, 0x00, 0x00, 0x00]);
 eq('a .docx is a docx', sniffKind(zip, 'report.docx'), 'docx');
-eq('an .xlsx is not, since nothing here reads one', sniffKind(zip, 'sheet.xlsx'), 'binary');
-eq('a plain .zip is binary', sniffKind(zip, 'archive.zip'), 'binary');
+eq('an .xlsx has a spreadsheet reader', sniffKind(zip, 'sheet.xlsx'), 'spreadsheet');
+for (const ext of ['xlsm', 'xlsb', 'ods']) eq(`${ext} uses the spreadsheet reader`, sniffKind(zip, `sheet.${ext}`), 'spreadsheet');
+const ole = new Uint8Array([0xd0, 0xcf, 0x11, 0xe0, 0xa1, 0xb1, 0x1a, 0xe1]);
+eq('legacy Excel uses the spreadsheet reader', sniffKind(ole, 'sheet.xls'), 'spreadsheet');
+eq('unrelated compound files remain binary', sniffKind(ole, 'file.doc'), 'binary');
+eq('a plain .zip is inspected as an archive', sniffKind(zip, 'archive.zip'), 'archive');
 
 /* ------------------------------------------------------- the gate itself */
 

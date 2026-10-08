@@ -199,7 +199,7 @@ if (rag) {
     rag.sniffKind(utf8('@echo off\r\nnpm run build\r\n'), 'run.bat') === 'text');
   check('an executable is not, however it is named',
     rag.sniffKind(new Uint8Array([0x4d, 0x5a, 0x00, 0x00, 0x01]), 'setup.txt') === 'binary');
-  check('and a zip is not', rag.sniffKind(new Uint8Array([0x50, 0x4b, 0x03, 0x04]), 'archive.zip') === 'binary');
+  check('a zip is routed to its content reader', rag.sniffKind(new Uint8Array([0x50, 0x4b, 0x03, 0x04]), 'archive.zip') === 'archive');
   check('but a .docx is, because there is a reader for it',
     rag.sniffKind(new Uint8Array([0x50, 0x4b, 0x03, 0x04]), 'report.docx') === 'docx');
 

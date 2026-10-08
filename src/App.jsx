@@ -4790,7 +4790,20 @@ ${data.text}` : data.text));
    * someone drags a long line into view would be noise. A tap that ends a text
    * selection is ignored for the same reason: the user was selecting.
    */
-  const IGNORE_TAP = 'button, a, input, textarea, select, label, .msg-hover-actions, .code-container, .artifact-card, pre';
+  const IGNORE_TAP = 'button, a, input, textarea, select, label, summary, details > summary, [role="button"], [role="tab"], [role="link"], [role="switch"], [role="checkbox"], [contenteditable="true"], .msg-hover-actions, .code-container, .artifact-card, .chart-figure, table, pre';
+  /* Listing classes missed every control built from a <div> with a click
+     handler -- a work step, the thinking label, a tool call's header -- and
+     tapping one opened the toolbar as well. Anything the page shows a hand
+     cursor for between the finger and the message is a control. */
+  const tapIsOnControl = (target) => {
+    if (!target?.closest) return false;
+    if (target.closest(IGNORE_TAP)) return true;
+    const row = target.closest('.message-row');
+    for (let el = target; el && el !== row; el = el.parentElement) {
+      if (el.onclick || getComputedStyle(el).cursor === 'pointer') return true;
+    }
+    return false;
+  };
 
   /* A touch is decided by the message the finger came down on, at the moment
      it lifts (pointerup -- a touch pointer stays captured by where it began).
@@ -4802,7 +4815,7 @@ ${data.text}` : data.text));
   const touchHandledAtRef = useRef(0);
   const pressMessage = (event, index) => {
     if (!isTapUi || event.pointerType === 'mouse') return;
-    touchPressRef.current = { index, x: event.clientX, y: event.clientY, at: Date.now(), ignore: !!event.target.closest(IGNORE_TAP) };
+    touchPressRef.current = { index, x: event.clientX, y: event.clientY, at: Date.now(), ignore: tapIsOnControl(event.target) };
   };
   const releaseMessage = (event, index) => {
     const press = touchPressRef.current;
@@ -4818,7 +4831,7 @@ ${data.text}` : data.text));
   const toggleMessageActions = (event, index) => {
     if (!isTapUi) return;
     if (Date.now() - touchHandledAtRef.current < 800) return;
-    if (event.target.closest(IGNORE_TAP)) return;
+    if (tapIsOnControl(event.target)) return;
     if ((window.getSelection?.().toString() || '').length > 0) return;
     setOpenActionsIndex(prev => (prev === index ? null : index));
   };
@@ -9240,7 +9253,7 @@ ${data.text}` : data.text));
        * by looking at its bytes, in `sniffKind`, and the only refusal left is
        * the one that is actually true: this is not text and nothing here can
        * turn it into any. */
-      const needsWork = /\.(pdf|docx)$/i.test(file.name || '') || file.size > 400_000;
+      const needsWork = /\.(pdf|docx|xlsx|xls|xlsm|xlsb|ods|pptx|odt|odp|hwpx)$/i.test(file.name || '') || file.size > 400_000;
       if (needsWork) toast(t('attach.reading', { name: file.name }), 'info', 3000);
 
       let text;
@@ -10955,9 +10968,16 @@ Charts and graphs
   {"type":"bar","title":"Monthly sales","unit":"만원","labels":["1월","2월","3월"],"data":[120,340,280]}
   \`\`\`
 
-  \`type\` is bar, line, area or pie. Several series:
+  \`type\` is bar, line, area, pie, donut, horizontalBar, radar or heatmap. Several series:
   \`"series":[{"name":"A","data":[1,2]},{"name":"B","data":[3,4]}]\`, and
   \`"stacked":true\` to pile them up. A missing point is \`null\`, not 0.
+
+  Use horizontalBar for rankings or long labels, donut for shares, radar for
+  three or more comparable metrics in the same unit, and heatmap for a matrix
+  (labels are columns; each named series is a row). All use the same labels/data
+  or labels/series schema above. Only bar supports stacked. Keep matrices small
+  enough to read on mobile. Values can be inspected by touch or keyboard, and
+  each data chart includes a data table and CSV download. Do not invent data.
 
   An equation is drawn from the equation itself, not from a table of points you
   work out first:
@@ -15978,12 +15998,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                               || (!b.isComplete && streamingNow);
                           });
                           const textBlocks = allBlocks.filter(b => b.type === 'text');
-                          const isFetching = group[group.length - 1].isMcpFetching;
+                          const isFetching = streamingNow && group[group.length - 1].isMcpFetching;
                           // Only a reply still arriving can be "thinking"; a
                           // finished one with no words (a picture) is not.
                           const isThinkingOnly = streamingNow && group[group.length - 1].content === '' && !isFetching
                             && internalBlocks.some(b => b.type === 'think');
-                          const isThinkingIncomplete = internalBlocks.some(b => b.type === 'think' && !b.isComplete);
+                          const isThinkingIncomplete = streamingNow && internalBlocks.some(b => b.type === 'think' && !b.isComplete);
                           const shouldOpenDropdown = isFetching || isThinkingOnly || isThinkingIncomplete;
                           // Auto-open while the model is still thinking, but an
                           // explicit click always wins from then on.
@@ -16002,8 +16022,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                             .flatMap(b => fileChangesIn(b.content));
                           /* A coding CLI's steps -- tools, commands, edits --
                              said in its thinking (src/agentActivity.js). */
-                          const agentWorking = internalBlocks.some(b => b.type === 'think' && hasActivity(b.content));
-                          const lastThinkIdx = internalBlocks.map(b => b.type).lastIndexOf('think');
+                          const activityText = allBlocks.filter(b => b.type === 'think' && hasActivity(b.content))
+                            .map(b => b.content).join('\n[/output]\n');
 
                           return (
                             <>
@@ -16204,14 +16224,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
                               {/* Outside the fold: a build running for minutes
                                   is watched whether the thinking is open or not. */}
-                              {agentWorking && internalBlocks.map((part, idx) => (part.type === 'think' && hasActivity(part.content) ? (
+                              {activityText && (
                                 <AgentActivity
-                                  key={`steps-${idx}`}
-                                  text={part.content}
-                                  live={isStreamingRow && idx === lastThinkIdx}
+                                  text={activityText}
+                                  live={isStreamingRow}
                                   stepsOnly
                                 />
-                              ) : null))}
+                              )}
                               {/* A command running now is followed by the pill in the
                                   bottom-left corner (CommandsDock), not by a terminal
                                   opened here between the thinking and the answer. */}

@@ -165,6 +165,21 @@ const profileNow = async () => {
 };
 if (process.argv.includes('--profile')) { await profileNow(); cleanup(); process.exit(0); }
 
+if (process.argv.includes('--tapctl')) {
+  await waitIdle(); await sleep(1500);
+  const list = await ev(`(() => { const out = []; document.querySelectorAll('.message-row *').forEach(e => { if (getComputedStyle(e).cursor === 'pointer' && !e.closest('.msg-hover-actions') && !(e.parentElement && getComputedStyle(e.parentElement).cursor === 'pointer')) { const b = e.getBoundingClientRect(); if (b.width && b.height) out.push((e.className || e.tagName).toString().slice(0, 40)); } }); return out; })()`);
+  console.log('controls in messages:', list.length);
+  for (let k = 0; k < list.length; k++) {
+    const pt = await ev(`(() => { const all = [...document.querySelectorAll('.message-row *')].filter(e => getComputedStyle(e).cursor === 'pointer' && !e.closest('.msg-hover-actions') && !(e.parentElement && getComputedStyle(e.parentElement).cursor === 'pointer')); const e = all[${k}]; e.scrollIntoView({block:'center'}); const b = e.getBoundingClientRect(); return { x: b.left + b.width / 2, y: b.top + b.height / 2, what: (e.className || e.tagName).toString().slice(0, 40) }; })()`);
+    await sleep(150);
+    await send('Input.dispatchTouchEvent', { type: 'touchStart', touchPoints: [{ x: pt.x, y: pt.y }] });
+    await send('Input.dispatchTouchEvent', { type: 'touchEnd', touchPoints: [] });
+    await sleep(400);
+    console.log(pt.what, '-> capsule open:', await ev(`!!document.querySelector('.message-row.actions-open')`));
+    await send('Input.dispatchKeyEvent', { type: 'keyDown', key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 }); await sleep(150);
+  }
+  cleanup(); process.exit(0);
+}
 if (process.argv.includes('--tapall')) {
   await waitIdle();
   await sleep(1500); await ev(`document.querySelectorAll('.message-row.is-entering').forEach(r => r.classList.remove('is-entering'))`);

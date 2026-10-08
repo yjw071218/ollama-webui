@@ -8813,6 +8813,52 @@ body, .claude-main { background: var(--surface-sunken); }
   border-radius: 3px;
   flex: 0 0 auto;
 }
+.chart-data { margin-top: 0.5rem; font-size: var(--label); }
+.chart-data summary { cursor: pointer; color: var(--text-secondary); }
+.chart-data-scroll { overflow-x: auto; max-height: 320px; }
+.chart-svg [role="button"] { cursor: pointer; }
+.chart-svg [role="button"]:focus-visible { outline: 2px solid var(--text-primary); }
+
+.chart-figure {
+  min-width: 0;
+  padding: 1.15rem;
+  border-radius: 20px;
+  background: linear-gradient(145deg, color-mix(in srgb, var(--surface-sunken) 95%, #4a8fb5 5%), var(--surface-sunken));
+  box-shadow: 0 8px 28px #00000008;
+  animation: chart-appear 280ms ease-out both;
+}
+.chart-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 1rem; margin-bottom: 1rem; }
+.chart-figure { font-family: var(--font-sans, system-ui, sans-serif); }
+.chart-heading > div { min-width: 0; }
+.chart-eyebrow { display: block; color: var(--text-secondary); font-size: 11px; font-weight: 600; letter-spacing: .06em; margin-bottom: .3rem; }
+.chart-heading .chart-title { margin: 0; font-size: 1rem; line-height: 1.5; overflow-wrap: anywhere; }
+.chart-count { flex-shrink: 0; border: 1px solid var(--hairline); padding: .3rem .65rem; border-radius: 999px; font-size: 11px; color: var(--text-secondary); }
+.chart-plot { padding: .5rem 0; min-width: 0; }
+.chart-svg-round { max-width: 340px; margin-inline: auto; }
+.chart-plot-scroll { overflow-x: auto; }
+.chart-plot-scroll .chart-svg { min-width: 520px; }
+.chart-grid { stroke-dasharray: 3 5; opacity: .75; }
+.chart-readout { display: flex; align-items: center; gap: .5rem; min-height: 2.6rem; padding: .6rem .75rem; border-radius: 10px; background: color-mix(in srgb, var(--text-primary) 4%, transparent); color: var(--text-muted); line-height: 1.5; overflow-wrap: anywhere; }
+.chart-readout.is-selected { color: var(--text-primary); }
+.chart-readout-dot { flex: 0 0 6px; height: 6px; border-radius: 50%; background: var(--text-muted); }
+.chart-readout.is-selected .chart-readout-dot { background: #4a8fb5; box-shadow: 0 0 0 3px #4a8fb520; }
+.chart-legend { margin-top: .85rem; gap: .5rem; }
+.chart-legend-item { border: 1px solid var(--hairline); border-radius: 8px; padding: .3rem .5rem; overflow-wrap: anywhere; min-width: 0; }
+.chart-swatch { border-radius: 50%; width: 8px; height: 8px; }
+.chart-donut-caption { fill: var(--text-secondary); font-size: 13px; }
+.chart-donut-total { fill: var(--text-primary); font-size: 28px; font-weight: 700; }
+.chart-cell-label { fill: var(--text-primary); font-size: 12px; font-weight: 600; }
+.chart-svg [role="button"] { transition: opacity 140ms ease, filter 140ms ease; }
+.chart-svg [role="button"]:hover { filter: brightness(1.12); }
+.chart-data { margin-top: 1rem; border-top: 1px solid var(--hairline); padding-top: .75rem; }
+.chart-data summary { padding: .25rem 0; }
+.chart-data .btn-ghost { margin: .5rem 0; border: 1px solid var(--hairline); border-radius: 8px; padding: .4rem .7rem; }
+.chart-data table { width: 100%; font-variant-numeric: tabular-nums; }
+.chart-data th, .chart-data td { padding: .55rem .7rem; }
+.chart-data tbody tr:nth-child(even) { background: color-mix(in srgb, var(--text-primary) 3%, transparent); }
+@keyframes chart-appear { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: translateY(0); } }
+@media (max-width: 480px) { .chart-figure { padding: .8rem; border-radius: 15px; } .chart-heading { gap: .5rem; } .chart-heading .chart-title { font-size: .95rem; } }
+@media (prefers-reduced-motion: reduce) { .chart-figure { animation: none; } .chart-svg [role="button"] { transition: none; } }
 
 /* ==== UI review, September ====
 

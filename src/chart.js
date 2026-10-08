@@ -36,7 +36,7 @@
 
 import { compile, rightHandSide, looksPolar } from './mathExpr.js';
 
-export const TYPES = ['bar', 'line', 'area', 'pie', 'function'];
+export const TYPES = ['bar', 'line', 'area', 'pie', 'donut', 'horizontalBar', 'radar', 'heatmap', 'function'];
 
 /* What a model calls a curve when it is not told the word. All the same thing. */
 const FUNCTION_TYPES = ['function', 'plot', 'graph', 'curve', 'polar', 'equation', 'math'];
@@ -149,6 +149,12 @@ const parseFunction = (raw, asked, written) => {
  * numbers -- a series whose values do not parse is not a chart.
  */
 export const parseChart = (source) => {
+  // Generated JSON can be syntactically valid but contain uncoercible objects.
+  // Treat it like an invalid chart so the caller can display the source.
+  try { return parseChartSpec(source); } catch { return null; }
+};
+
+const parseChartSpec = (source) => {
   const text = String(source || '').trim();
   if (!text) return null;
 
@@ -181,7 +187,7 @@ export const parseChart = (source) => {
   /* Past here there is no expression, so a block claiming to be a curve is a
      list of numbers that called itself one. Those are drawn as a line, never as
      a curve: the shape below has no `curves` for the renderer to draw. */
-  const type = asked === 'function' ? 'line'
+  const type = asked === 'horizontalbar' ? 'horizontalBar' : asked === 'doughnut' ? 'donut' : asked === 'function' ? 'line'
     : TYPES.includes(asked) ? asked
       : 'bar';
 
@@ -258,8 +264,8 @@ export const niceCeiling = (value) => {
 export const axisRange = (values, { zero = true } = {}) => {
   const numbers = values.filter(v => v !== null && Number.isFinite(v));
   if (!numbers.length) return { min: 0, max: 1 };
-  let min = Math.min(...numbers);
-  let max = Math.max(...numbers);
+  let min = Infinity, max = -Infinity;
+  for (const value of numbers) { min = Math.min(min, value); max = Math.max(max, value); }
   if (zero) {
     min = Math.min(0, min);
     max = Math.max(0, max);
@@ -628,3 +634,49 @@ export const plotPie = (chart, box = BOX) => {
 
 /** A share as a percentage, for a pie's labels. */
 export const sharePercent = (share) => `${Math.round(share * 1000) / 10}%`;
+
+/** Geometry shared by the additional infographic views. Null stays a gap. */
+export const plotInfographic = (chart, box = BOX) => {
+  const values = chart.series.flatMap(s => s.data).filter(v => v !== null);
+  const range = axisRange(values);
+  const span = range.max - range.min || 1;
+  const left = 115, width = box.w - left - 20;
+  const rows = chart.labels.length * chart.series.length;
+  const height = Math.max(box.h, rows * 28 + 40);
+  const zero = left + (0 - range.min) / span * width;
+  const bars = chart.labels.flatMap((label, i) => chart.series.flatMap((s, si) => {
+    const value = s.data[i];
+    if (value === null) return [];
+    const end = left + (value - range.min) / span * width;
+    return [{ label, name: s.name, value, colour: s.colour, x: Math.min(zero, end),
+      y: 20 + (i * chart.series.length + si) * ((height - 40) / rows),
+      w: Math.abs(end - zero), h: Math.min(22, (height - 40) / rows - 4) }];
+  }));
+  const cx = box.w / 2, cy = box.h / 2, radius = 112;
+  const point = (i, fraction) => {
+    const angle = -Math.PI / 2 + i * Math.PI * 2 / chart.labels.length;
+    return { x: cx + Math.cos(angle) * radius * fraction, y: cy + Math.sin(angle) * radius * fraction };
+  };
+  const spokes = chart.labels.map((label, i) => ({ label, ...point(i, 1.2), end: point(i, 1) }));
+  const polygons = chart.series.map(s => ({ ...s, points: s.data.map((value, i) =>
+    value === null ? null : { ...point(i, (value - range.min) / span), value, label: chart.labels[i] }) }));
+  const cellW = width / chart.labels.length, cellH = 36;
+  const cells = chart.series.flatMap((s, si) => s.data.map((value, i) => ({
+    value, label: chart.labels[i], name: s.name, colour: COLOURS[0],
+    x: left + i * cellW, y: 30 + si * cellH, w: cellW, h: cellH,
+    opacity: value === null ? 0 : 0.15 + 0.85 * (value - range.min) / span,
+  })));
+  return { range, bars, height, zero, cx, cy, spokes, polygons, cells, cellW, cellH, left };
+};
+
+export const chartCSV = (chart) => {
+  const quote = (value) => {
+    // Text cells must not become spreadsheet formulas when opened in Excel.
+    const text = String(value ?? '');
+    const safe = typeof value === 'string' && /^[=+@\-\t\r]/.test(text) ? `'${text}` : text;
+    return `"${safe.replace(/"/g, '""')}"`;
+  };
+  return '\uFEFF' + [ ['Label', ...chart.series.map(s => s.name || 'Value')],
+    ...chart.labels.map((label, i) => [label, ...chart.series.map(s => s.data[i])]) ]
+    .map(row => row.map(quote).join(',')).join('\r\n');
+};
