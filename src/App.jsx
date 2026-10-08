@@ -1,12 +1,13 @@
 import { flushSync } from 'react-dom';
 import { resumableChatReader } from './chatStream.js';
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, useCallback } from 'react';
+import { jankPhase } from './jankWatch.js';
 import localforage from 'localforage';
 import { ArrowUp, Paperclip, Sparkles, RefreshCcw, Trash2, Copy, Check, Terminal, Settings, Edit, MessageSquare, ChevronDown, Download, Square, X, Play, Mic, MicOff, Volume2, Search, Code, Maximize2, Sun, Moon, Monitor, Pin, PinOff, GitBranch, FileDown, Command, Cpu, Plus, Save, ArrowDown, Zap, Layers, Server, ExternalLink, Star, Info, TriangleAlert, FileText, Minimize2, PanelLeft, ListTree, LogOut, UserPlus, Languages, User, Activity, Globe, Folder, FolderPlus, MoreHorizontal, ChevronLeft, ChevronRight, SlidersHorizontal, CornerDownRight, Archive, WrapText, ListChecks, ChevronUp, Vibrate, Smartphone, FolderInput, StretchHorizontal, TextQuote, Brain, HelpCircle, Baby, Share2, ClipboardPaste, Upload, Users, Telescope, ShieldCheck, Wand2, Clock, Film, Brush, Scissors, Tags, Images, SquareSplitHorizontal, Undo2, Music, FileEdit } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
-import { useRichRehype } from './richMarkdown.js';
+import { useRichRehype, highlightPlugin } from './richMarkdown.js';
 import {
   extractCodeBlocks,
   normalizeLanguage,
@@ -3454,7 +3455,8 @@ function App() {
       }));
     };
     watchElsewhere();
-    const timer = setInterval(watchElsewhere, 4000);
+    // Hidden, nobody is looking; polling resumes within 4 s of coming back.
+    const timer = setInterval(() => { if (!document.hidden) watchElsewhere(); }, 4000);
     return () => { stopped = true; clearInterval(timer); };
   }, [currentSessionId, isStorageLoaded, drawing, isGenerating]);
 
@@ -3559,7 +3561,7 @@ function App() {
         : Date.now());
     };
     look();
-    const timer = setInterval(look, 4000);
+    const timer = setInterval(() => { if (!document.hidden) look(); }, 4000);
     return () => { stopped = true; clearInterval(timer); controller.abort(); };
   }, [currentSessionId, isStorageLoaded, isGenerating]);
 
@@ -4790,8 +4792,32 @@ ${data.text}` : data.text));
    */
   const IGNORE_TAP = 'button, a, input, textarea, select, label, .msg-hover-actions, .code-container, .artifact-card, pre';
 
+  /* A touch is decided by the message the finger came down on, at the moment
+     it lifts (pointerup -- a touch pointer stays captured by where it began).
+     Waiting for `click` lost taps in a short chat: the tap blurs the composer,
+     the keyboard folds away, a chat shorter than the screen slides down under
+     the finger, and the browser then sends the click somewhere else or not at
+     all. The click that may still follow is ignored. */
+  const touchPressRef = useRef(null);
+  const touchHandledAtRef = useRef(0);
+  const pressMessage = (event, index) => {
+    if (!isTapUi || event.pointerType === 'mouse') return;
+    touchPressRef.current = { index, x: event.clientX, y: event.clientY, at: Date.now(), ignore: !!event.target.closest(IGNORE_TAP) };
+  };
+  const releaseMessage = (event, index) => {
+    const press = touchPressRef.current;
+    touchPressRef.current = null;
+    if (!press || press.index !== index || event.pointerType === 'mouse') return;
+    touchHandledAtRef.current = Date.now();
+    // A scroll never gets here: the browser cancels the pointer instead.
+    if (press.ignore || Date.now() - press.at > 600) return;
+    if ((window.getSelection?.().toString() || '').length > 0) return;
+    setOpenActionsIndex(prev => (prev === index ? null : index));
+  };
+
   const toggleMessageActions = (event, index) => {
     if (!isTapUi) return;
+    if (Date.now() - touchHandledAtRef.current < 800) return;
     if (event.target.closest(IGNORE_TAP)) return;
     if ((window.getSelection?.().toString() || '').length > 0) return;
     setOpenActionsIndex(prev => (prev === index ? null : index));
@@ -4801,6 +4827,76 @@ ${data.text}` : data.text));
   // list under it has changed -- a deleted message shifts every later one, and
   // a new reply would leave the toolbar attached to the wrong bubble.
   useEffect(() => { setOpenActionsIndex(null); }, [currentSessionId, messages.length]);
+
+  /* The actions are a sheet over the composer now (extras.css), so a tap
+     anywhere outside it and its message is "never mind". */
+  useEffect(() => {
+    if (openActionsIndex == null) return undefined;
+    /* The capsule takes the composer's place while it is open: centred on it,
+       with the composer faded out underneath (extras.css). */
+    /* Placed by measuring, not by trusting `position: fixed`: an ancestor
+       with a transform (the drawer's swipe, an entry animation) makes "fixed"
+       mean "fixed to that ancestor", and the capsule landed off-centre. Where
+       it is is read, and it is moved by the difference to the middle of the
+       screen, level with the middle of the composer it stands in for. */
+    let frame = 0;
+    let tries = 0;
+    const place = () => {
+      frame = 0;
+      const bar = document.querySelector('.message-row.actions-open .msg-hover-actions');
+      if (!bar) return;
+      /* Measured still: the entry animation's own transform skewed the first
+         look, and correcting it a moment later made the capsule jump. It is
+         hidden, placed, and only then animated in -- one smooth entrance. */
+      bar.style.animation = 'none';
+      bar.style.translate = '';
+      const b = bar.getBoundingClientRect();
+      // Not laid out yet: look again next frame.
+      if (!b.width || !b.height) { if (tries++ < 10) frame = requestAnimationFrame(place); return; }
+      const f = document.querySelector('form.input-container')?.getBoundingClientRect();
+      // Centred on the composer it stands in for, not the screen: on a tablet
+      // the sidebar pushes the chat column off the screen's middle.
+      const midX = f && f.width ? f.left + f.width / 2 : document.documentElement.clientWidth / 2;
+      const midY = f && f.height ? f.top + f.height / 2 : (window.visualViewport?.height || window.innerHeight) - 40;
+      bar.style.translate = `${Math.round(midX - (b.left + b.width / 2))}px ${Math.round(midY - (b.top + b.height / 2))}px`;
+      void bar.offsetWidth;
+      bar.style.animation = '';
+      bar.style.visibility = 'visible';
+    };
+    const replace = () => { cancelAnimationFrame(frame); tries = 0; frame = requestAnimationFrame(place); };
+    replace();
+    const settle = 0;
+    window.addEventListener('resize', replace);
+    window.visualViewport?.addEventListener('resize', replace);
+    const away = (e) => {
+      if (e.target.closest?.('.msg-hover-actions, .message-row.actions-open')) return;
+      setOpenActionsIndex(null);
+    };
+    const key = (e) => { if (e.key === 'Escape') setOpenActionsIndex(null); };
+    /* The click that ends the very tap which opened the capsule arrives after
+       it is on screen -- and if the finger was where the capsule now is, it
+       pressed whatever button appeared under it (Delete, in testing). */
+    const openedAt = Date.now();
+    const swallow = (e) => {
+      if (Date.now() - openedAt < 450 && e.target.closest?.('.msg-hover-actions')) {
+        e.preventDefault();
+        e.stopPropagation();
+      }
+    };
+    document.addEventListener('click', swallow, true);
+    document.addEventListener('pointerdown', away, true);
+    document.addEventListener('keydown', key);
+    return () => {
+      cancelAnimationFrame(frame);
+      clearTimeout(settle);
+      window.removeEventListener('resize', replace);
+      window.visualViewport?.removeEventListener('resize', replace);
+      document.removeEventListener('pointerdown', away, true);
+      document.removeEventListener('keydown', key);
+      document.removeEventListener('click', swallow, true);
+      document.querySelectorAll('.msg-hover-actions').forEach(el => { el.style.translate = ''; el.style.visibility = ''; el.style.animation = ''; });
+    };
+  }, [openActionsIndex]);
 
   // Switching chats does not fire a scroll event, so the bar would keep showing
   // how far through the *previous* conversation the reader had got.
@@ -7070,7 +7166,7 @@ ${data.text}` : data.text));
       } : {});
       if (first && !result.complete) throw new Error('동기화가 아직 완료되지 않았습니다. 다시 시도하여 이어 받으세요.');
       syncStampRef.current = result.rev;
-      setSyncInfo(await accountStamp());
+      setSyncInfo(await accountStamp({ full: true }));
       /* Anything the account would not take. Said rather than swallowed: a
          record refused here is one that will never reach another device, and
          "my phone does not have it" is otherwise indistinguishable from "the
@@ -7746,7 +7842,7 @@ ${data.text}` : data.text));
       if (await refreshChatsFromStorage()) { chatsStaleRef.current = false; return true; }
       // Streaming: the end of the reply ('webui:generation-ended') retries.
       if (isGeneratingRef.current) return false;
-      await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+      await new Promise(r => setTimeout(r, 80 * (attempt + 1)));
     }
     return !chatsStaleRef.current;
   };
@@ -8025,11 +8121,26 @@ ${data.text}` : data.text));
     // browser discarding it mid-flight. The `visibilitychange` listener below
     // is what catches it up, and catching up on being looked at is precisely
     // what a phone needs.
+    /* While another device writes an answer, a revision arrives every second.
+       Each used to start its own pull, so several downloads and re-renders of
+       the whole chat list overlapped on a phone. Now one pull runs at a time
+       and whatever arrived meanwhile is fetched by the next, in one go. */
+    let pulling = false;
+    let wanted = 0;
+    const livePull = async (rev) => {
+      wanted = Math.max(wanted, rev);
+      if (pulling || wanted <= syncStampRef.current) return;
+      pulling = true;
+      try {
+        while (!stopped && wanted > syncStampRef.current) {
+          const target = wanted;
+          await check({ known: target });
+          if (syncStampRef.current < target && wanted === target) break;
+        }
+      } finally { pulling = false; }
+    };
     const unsubscribe = subscribeToAccount({
-      onRev: (rev) => {
-        if (rev <= syncStampRef.current) return;
-        check({ known: rev });
-      },
+      onRev: (rev) => { livePull(rev); },
       // Whatever changed while the stream was down was never announced.
       onOpen: () => check(),
     });
@@ -8064,12 +8175,12 @@ ${data.text}` : data.text));
         if (syncRef.current?.pending()) {
           // This device's own edits go up first, so what comes back is whole.
           if (!flushed) { flushed = true; try { syncRef.current?.flush?.(); } catch (e) { /* later */ } }
-          await sleep(300);
+          await sleep(100);
           continue;
         }
         const stamp = await accountStamp();
         if (stopped) return;
-        if (!stamp) { await sleep(800); continue; }
+        if (!stamp) { await sleep(400); continue; }
         if (stamp.ownerId !== accountId) { stopped = true; authSession.refresh(); return; }
         if (Math.max(syncStampRef.current, readRev(profileScope)) >= stamp.rev) { syncStampRef.current = Math.max(syncStampRef.current, stamp.rev); break; }
         onBehind?.();
@@ -8143,7 +8254,7 @@ ${data.text}` : data.text));
     try {
       const result = await syncFully(profileScope);
       syncStampRef.current = result.rev;
-      const stats = await accountStamp();
+      const stats = await accountStamp({ full: true });
       setSyncInfo(stats);
       toast(t('sync.pushed', { chats: stats?.chats ?? 0 }), 'success');
       if (result.changedLocally > 0) {
@@ -8175,7 +8286,7 @@ ${data.text}` : data.text));
       const result = await syncFully(profileScope, { full: mode === 'replace', maxRounds: 200 });
       syncStampRef.current = result.rev;
       settingsPrintRef.current = settingsFingerprint();
-      setSyncInfo(await accountStamp());
+      setSyncInfo(await accountStamp({ full: true }));
 
       if (!result.changedLocally) { toast(t('sync.upToDate'), 'info'); return; }
       showRemoteChanges(result);
@@ -8842,7 +8953,51 @@ ${data.text}` : data.text));
     fitComposer();
   }, [fitComposer]);
 
+  /* Typing re-rendered this whole component -- and with it every message of
+     the chat -- once per keystroke, which on a phone is most of the lag felt
+     in the composer. A render caused by nothing but a keystroke reuses the
+     message list from the render before; anything else rebuilds it. */
+  const typingOnlyRef = useRef(false);
+  const listCacheRef = useRef(null);
+  useLayoutEffect(() => { typingOnlyRef.current = false; });
+  const typingOnlyList = (build) => {
+    const c = listCacheRef.current;
+    if (typingOnlyRef.current && c && c.messages === messages && c.historyStart === historyStart
+      && c.generating === isGenerating && c.sid === currentSessionId && c.starred === starredOnly) return c.out;
+    const out = build();
+    listCacheRef.current = { out, messages, historyStart, generating: isGenerating, sid: currentSessionId, starred: starredOnly };
+    return out;
+  };
+
+  /* Streaming commits a new copy of the last message a few times a second,
+     and each one re-rendered every earlier message of the chat too -- in a
+     long chat that was most of the time a phone spent per commit (measured,
+     scripts/perf-mobile.mjs). A render caused only by a streaming commit
+     reuses the rows whose messages (and neighbours) are the same objects as
+     last time; any other render rebuilds every row. */
+  const streamTickRef = useRef(false);
+  const rowCacheRef = useRef(new Map());
+  useLayoutEffect(() => { streamTickRef.current = false; });
+  const cachedRow = (next, i, build) => {
+    let end = i + 1;
+    while (end < messages.length && (messages[end]?.role === 'assistant'
+      || (messages[end]?.role === 'user' && String(messages[end].content || '').trim().startsWith('<TOOL_RESULT>')))) end++;
+    const deps = messages.slice(Math.max(0, i - 1), Math.min(messages.length, end + 1));
+    const c = rowCacheRef.current.get(i);
+    if (streamTickRef.current && c && c.sid === currentSessionId && c.hs === historyStart && c.starred === starredOnly
+      && c.deps.length === deps.length && c.deps.every((m, k) => m === deps[k])) {
+      next.set(i, c);
+      return c.out;
+    }
+    const out = build();
+    next.set(i, { deps, out, sid: currentSessionId, hs: historyStart, starred: starredOnly });
+    return out;
+  };
+
+  useEffect(() => (isGenerating ? jankPhase('streaming') : undefined), [isGenerating]);
+
   const handleInputResize = (e) => {
+    typingOnlyRef.current = true;
     setInput(e.target.value);
     // Typing means this is your prompt now, not a recalled one: the next up
     // arrow should start again from the newest rather than from wherever the
@@ -11276,6 +11431,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         flushHandle = null;
         if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
         lastCommitAt = Date.now();
+        streamTickRef.current = true;
         const committedContent = holdDrawn ? holdAfterDrawing(assistantContent) : assistantContent;
         reviseSession(currentSessionId, s => {
           const msgs = [...s.messages];
@@ -13989,7 +14145,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
   // The streaming message adds the per-character wrapper itself (it needs the
   // reveal clock; see LiveAnswerMarkdown), so its set is the same.
-  const streamingRehypePlugins = markdownRehypePlugins;
+  /* ...less syntax highlighting: highlight.js re-coloured the whole code
+     block on every commit, a quarter of a streaming commit's script time on a
+     phone (scripts/perf-mobile.mjs). The code is coloured once the reply ends. */
+  const streamingRehypePlugins = useMemo(
+    () => markdownRehypePlugins.filter(p => p !== highlightPlugin),
+    [markdownRehypePlugins],
+  );
 
   const jumpToHit = (next) => {
     if (searchHits.length === 0) return;
@@ -15404,7 +15566,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               {historyStart > 0 && (
                 <HistorySentinel count={historyStart} onShow={() => showEarlier()} label={t('chat.showEarlier', { n: historyStart })} />
               )}
-              {messages.map((msg, i) => {
+              {typingOnlyList(() => { const nextRows = new Map(); const rows = messages.map((msg, i) => cachedRow(nextRows, i, () => {
                 // Earlier than the part of a long chat being shown.
                 if (i < historyStart) return null;
                 const isPureToolResult = (m) => m && m.role === 'user' && m.content.trim().startsWith('<TOOL_RESULT>') && m.content.trim().endsWith('</TOOL_RESULT>');
@@ -15784,6 +15946,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   // and a ref array would have to be kept in step with it.
                   data-message-index={i}
                   onClick={isTapUi ? (e => toggleMessageActions(e, i)) : undefined}
+                  onPointerDown={isTapUi ? (e => pressMessage(e, i)) : undefined}
+                  onPointerUp={isTapUi ? (e => releaseMessage(e, i)) : undefined}
                 >
                   {/* Whose answer this is. Two chats with two personas should
                       not look like the same assistant twice. */}
@@ -15802,10 +15966,23 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           // Worked out above, where the pictures are placed too.
                           const drewInGroup = group.some(g => (g.generated || []).length > 0);
 
-                          const internalBlocks = allBlocks.filter(b => b.type !== 'text');
+                          /* A <think> with nothing in it (an empty reasoning
+                             field, a model that opened and closed the tag, or
+                             one whose only content is steps drawn elsewhere)
+                             is not a thought: it must not raise the fold. */
+                          const internalBlocks = allBlocks.filter(b => {
+                            if (b.type === 'text') return false;
+                            if (b.type !== 'think') return true;
+                            const body = String(b.content || '');
+                            return (hasActivity(body) ? proseOf(body) : body).trim().length > 0
+                              || (!b.isComplete && streamingNow);
+                          });
                           const textBlocks = allBlocks.filter(b => b.type === 'text');
                           const isFetching = group[group.length - 1].isMcpFetching;
-                          const isThinkingOnly = group[group.length - 1].content === '' && !isFetching;
+                          // Only a reply still arriving can be "thinking"; a
+                          // finished one with no words (a picture) is not.
+                          const isThinkingOnly = streamingNow && group[group.length - 1].content === '' && !isFetching
+                            && internalBlocks.some(b => b.type === 'think');
                           const isThinkingIncomplete = internalBlocks.some(b => b.type === 'think' && !b.isComplete);
                           const shouldOpenDropdown = isFetching || isThinkingOnly || isThinkingIncomplete;
                           // Auto-open while the model is still thinking, but an
@@ -15836,7 +16013,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                               {msg.research && <ResearchTrace research={msg.research} />}
                               {msg.chainRun && <ChainTrace run={msg.chainRun} />}
 
-                              {isStreamingRow && !drawing && textBlocks.length === 0 && !isFetching && !isThinkingOnly && !msg.research && !msg.chainRun && (
+                              {isStreamingRow && !drawing && textBlocks.length === 0 && internalBlocks.length === 0 && !isFetching && !isThinkingOnly && !msg.research && !msg.chainRun && (
                                 <div className="stream-dots" aria-label={t('msg.thinking')}>
                                   <span /><span /><span />
                                 </div>
@@ -15850,8 +16027,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                     aria-expanded={thinkIsOpen}
                                     onClick={() => setThinkOverrides(prev => ({ ...prev, [i]: !thinkIsOpen }))}
                                   >
-                                    <RefreshCcw size={14} className={shouldOpenDropdown ? 'spin' : ''} />
-                                    <span>
+                                    {isFetching
+                                      ? <RefreshCcw size={14} className="think-icon spin" />
+                                      : <Brain size={14} className="think-icon" />}
+                                    <span className={shouldOpenDropdown ? 'think-label is-live' : 'think-label'}>
                                       {isFetching ? t('msg.fetching') : (shouldOpenDropdown ? t('msg.thinking') : t('msg.thought'))}
                                     </span>
                                     <ChevronDown size={13} className="think-chevron" />
@@ -16500,15 +16679,26 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     ) : (
                       editingMessageIndex === i ? (
                         <div className="edit-message-box">
-                          <textarea 
-                            className="settings-textarea" 
-                            value={editInput} 
-                            onChange={e => setEditInput(e.target.value)} 
-                            style={{minHeight: '100px'}}
+                          <textarea
+                            className="edit-message-input"
+                            value={editInput}
+                            autoFocus
+                            rows={3}
+                            ref={el => {
+                              if (!el) return;
+                              // Grows with the text, up to most of the screen.
+                              el.style.height = 'auto';
+                              el.style.height = `${Math.min(el.scrollHeight, window.innerHeight * 0.55)}px`;
+                            }}
+                            onChange={e => setEditInput(e.target.value)}
+                            onKeyDown={e => {
+                              if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
+                              else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit(i); }
+                            }}
                           />
                           <div className="edit-actions">
-                            <button className="btn" onClick={cancelEdit} style={{padding: '0.4rem 0.8rem'}}>Cancel</button>
-                            <button className="btn pull-btn" onClick={() => saveEdit(i)} style={{padding: '0.4rem 0.8rem'}}>{t('msg.saveSubmit')}</button>
+                            <button type="button" className="edit-btn" onClick={cancelEdit}>{t('common.cancel')}</button>
+                            <button type="button" className="edit-btn is-primary" onClick={() => saveEdit(i)} disabled={!editInput.trim()}>{t('msg.saveSubmit')}</button>
                           </div>
                         </div>
                       ) : (
@@ -16757,7 +16947,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
                 </div>
                 );
-              })}
+              })); rowCacheRef.current = nextRows; return rows; })}
             </div>
           )}
         </div>

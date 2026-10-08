@@ -13,6 +13,8 @@ import { useEffect, useState } from 'react';
 const EMPTY = Object.freeze([]);
 let plugins = null;
 let pending = null;
+/** The syntax highlighter, so a caller can leave it out (the streaming reply). */
+export let highlightPlugin = null;
 const listeners = new Set();
 
 export const loadRichRehype = () => {
@@ -22,6 +24,7 @@ export const loadRichRehype = () => {
     import('rehype-highlight'),
     import('katex/dist/katex.min.css'),
   ]).then(([katex, highlight]) => {
+    highlightPlugin = highlight.default;
     plugins = Object.freeze([katex.default, highlight.default]);
     listeners.forEach(fn => fn(plugins));
     listeners.clear();

@@ -59,6 +59,12 @@ const toolCallBlock = (tool, attrText, body = '', extra = {}) => {
  * `streaming` is for the message still arriving, the only one that can end in
  * a call whose closing tag has not been written yet.
  */
+/* A thinking tag left in the answer as words is shown as words. Markdown
+   drops raw HTML, so outside code it is written as entities; inside code it is
+   already literal and left alone. */
+const showTags = (text) => text.replace(/<(\/?)think>/gi, (tag, slash, at, all) =>
+  (insideCode(all.slice(0, at)) ? tag : `&lt;${slash}think&gt;`));
+
 export const parseAssistantMessage = (content, { streaming = false } = {}) => {
   const blocks = [];
   // Decoding here as well as at accumulation is what repairs chats that were
@@ -80,9 +86,26 @@ export const parseAssistantMessage = (content, { streaming = false } = {}) => {
       regex.lastIndex = match.index + 1;
       continue;
     }
+    /* A thinking block is opened at the start of a line -- where the app puts
+       a reasoning field, and where models that write the tag themselves put
+       it. One mid-sentence is an answer talking *about* the tag ("where the
+       <think> is turned into a dropdown"), and taking it as a tag swallowed
+       the rest of the answer into the dropdown. And in a finished message an
+       unclosed one past the very start is text too: a real reasoning block
+       that was cut off is closed when the reply ends (see the stop path). */
+    if (match[1] !== undefined) {
+      const lineStart = currentText.lastIndexOf('\n', match.index - 1) + 1;
+      const midLine = currentText.slice(lineStart, match.index).trim() !== '';
+      const unclosed = !match[0].toLowerCase().endsWith('</think>');
+      const atStart = currentText.slice(0, match.index).trim() === '';
+      if (midLine || (unclosed && !atStart)) {
+        regex.lastIndex = match.index + 1;
+        continue;
+      }
+    }
     if (match.index > lastIndex) {
       const beforeText = currentText.substring(lastIndex, match.index).trim();
-      if (beforeText) blocks.push({ type: 'text', content: beforeText });
+      if (beforeText) blocks.push({ type: 'text', content: showTags(beforeText) });
     }
 
     if (match[1] !== undefined) {
@@ -114,7 +137,7 @@ export const parseAssistantMessage = (content, { streaming = false } = {}) => {
       }
     }
     remainingText = remainingText.trim();
-    if (remainingText) blocks.push({ type: 'text', content: remainingText });
+    if (remainingText) blocks.push({ type: 'text', content: showTags(remainingText) });
   }
 
   return blocks;

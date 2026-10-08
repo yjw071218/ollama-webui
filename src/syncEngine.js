@@ -1,3 +1,4 @@
+import { jankPhase } from './jankWatch.js';
 // Keeping this device in step with the account, one record at a time.
 //
 // What this replaces gathered the whole account into a blob, uploaded it, and
@@ -638,8 +639,12 @@ export const syncOnce = async (scope, { full = false, limit = 500, onPhase } = {
 export const syncFully = async (scope, { full = false, maxRounds = 100, limit = 500, onProgress } = {}) => {
   // Seen by the connection banner: a ping slowed by this is not an outage.
   globalThis.__webuiSyncBusy = (globalThis.__webuiSyncBusy || 0) + 1;
+  const endPhase = jankPhase('sync');
   try { return await syncRounds(scope, { full, maxRounds, limit, onProgress }); }
-  finally { globalThis.__webuiSyncBusy = Math.max(0, (globalThis.__webuiSyncBusy || 1) - 1); }
+  finally {
+    endPhase();
+    globalThis.__webuiSyncBusy = Math.max(0, (globalThis.__webuiSyncBusy || 1) - 1);
+  }
 };
 
 const syncRounds = async (scope, { full, maxRounds, limit, onProgress }) => {
@@ -847,9 +852,9 @@ export const subscribeToAccount = ({ onRev, onOpen, onClose } = {}) => {
 };
 
 /** Where the account stands, without downloading anything. */
-export const accountStamp = async () => {
+export const accountStamp = async ({ full = false } = {}) => {
   try {
-    const stats = await api('/api/auth/stats');
+    const stats = await api(full ? '/api/auth/stats' : '/api/auth/stats?rev=1');
     return { rev: stats.rev || 0, ownerId: stats.ownerId, savedAt: stats.savedAt, chats: stats.chats };
   } catch (e) {
     return null;

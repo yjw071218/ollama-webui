@@ -35,7 +35,7 @@ import { verifyGoogleIdToken } from './social.js';
 import { createGoogleHandoffs, nativeGooglePage } from './nativeGoogle.js';
 import { googleNativeRedirect, nativeGoogleDirectPage, nativeGoogleCallbackPage, createRedirectProbe, GOOGLE_LOOPBACK_REDIRECT } from './nativeGoogleDirect.js';
 import {
-  changesSince, applyChanges, accountStats, sweepTombstones,
+  changesSince, applyChanges, accountStats, currentRev, sweepTombstones,
   OwnerMismatch, MAX_RECORD_BYTES, MAX_BATCH_RECORDS,
 } from './records.js';
 import { listRevisions, readRevision, recordsWithHistory } from './recordHistory.js';
@@ -1605,6 +1605,11 @@ export const createApiRoutes = (env = {}, options = {}) => {
     route('/api/auth/stats', (req, res) => {
       const auth = guard(req, res, { methods: ['GET'] });
       if (!auth) return;
+      /* `?rev=1` is the sync's "anything new?": the revision alone is one
+         indexed read, where the full stats sum every stored payload. */
+      if (new URL(req.url, 'http://x').searchParams.get('rev') === '1') {
+        return sendJson(res, { success: true, ownerId: auth.user.id, rev: currentRev(auth.user.id) });
+      }
       sendJson(res, { success: true, ownerId: auth.user.id, ...accountStats(auth.user.id) });
     });
 

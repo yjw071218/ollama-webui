@@ -48,6 +48,6 @@ test('every setting App reads at mount is applied live, with a setter that exist
 test('sync never reloads the page, and the app waits for it at launch', () => {
   assert.doesNotMatch(app, /reloadForRev/);
   assert.match(app, /const \[bootSync, setBootSync\]/);
-  assert.match(app, /check\(\{ boot: true \}\)[\s\S]{0,300}BOOT_SYNC_MAX_MS/);
+  assert.match(app, /catchUp\(Date\.now\(\) \+ BOOT_SYNC_MAX_MS\)/);
   assert.match(app, /\{bootSync && !initialSync && \(/);
 });
