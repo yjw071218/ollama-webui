@@ -1,3 +1,5 @@
+import { localize, tr } from './page-i18n.mjs';
+localize();
 const $ = id => document.getElementById(id);
 const size = bytes => {
   if (!Number.isFinite(bytes) || bytes <= 0) return '0 MB';
@@ -5,8 +7,8 @@ const size = bytes => {
 };
 const eta = seconds => {
   if (!Number.isFinite(seconds) || seconds <= 0) return '';
-  if (seconds < 60) return '약 ' + Math.ceil(seconds) + '초 남음';
-  return '약 ' + Math.ceil(seconds / 60) + '분 남음';
+  if (seconds < 60) return tr('약 ' + Math.ceil(seconds) + '초 남음', 'about ' + Math.ceil(seconds) + 's left');
+  return tr('약 ' + Math.ceil(seconds / 60) + '분 남음', 'about ' + Math.ceil(seconds / 60) + ' min left');
 };
 let cancelId = 'close';
 
@@ -50,31 +52,31 @@ function render(s) {
   switch (s.phase) {
     case 'checking':
       badge.textContent = '…'; badge.classList.add('busy');
-      $('title').textContent = '업데이트 확인 중…';
-      $('subtitle').textContent = 'GitHub에서 최신 버전을 확인하고 있습니다.';
-      buttons([['닫기', 'close']]);
+      $('title').textContent = tr('업데이트 확인 중…', 'Checking for updates…');
+      $('subtitle').textContent = tr('GitHub에서 최신 버전을 확인하고 있습니다.', 'Looking for the latest version on GitHub.');
+      buttons([[tr('닫기', 'Close'), 'close']]);
       break;
     case 'latest':
       badge.textContent = '✓'; badge.classList.add('ok');
-      $('title').textContent = '최신 버전입니다';
-      $('subtitle').textContent = '현재 버전 ' + (s.current || '') + '이(가) 가장 최신입니다.';
-      buttons([['확인', 'close', 'primary']]);
+      $('title').textContent = tr('최신 버전입니다', 'You are up to date');
+      $('subtitle').textContent = tr('현재 버전 ' + (s.current || '') + '이(가) 가장 최신입니다.', 'Version ' + (s.current || '') + ' is the latest.');
+      buttons([[tr('확인', 'OK'), 'close', 'primary']]);
       break;
     case 'available':
       badge.textContent = '↑';
-      $('title').textContent = '새 버전 ' + info.version + ' 사용 가능';
-      $('subtitle').textContent = '현재 ' + info.current + ' → ' + info.version + ' · ' + size(info.size)
-        + (info.kind === 'dev' ? ' · 개발 실행에서는 릴리스 페이지를 엽니다' : '');
+      $('title').textContent = tr('새 버전 ' + info.version + ' 사용 가능', 'Version ' + info.version + ' is available');
+      $('subtitle').textContent = tr('현재 ', 'Now ') + info.current + ' → ' + info.version + ' · ' + size(info.size)
+        + (info.kind === 'dev' ? tr(' · 개발 실행에서는 릴리스 페이지를 엽니다', ' · a development build opens the release page') : '');
       renderNotes(info.notes);
       cancelId = 'later';
-      buttons([['이 버전 건너뛰기', 'skip', 'ghost'], ['나중에', 'later'], [info.kind === 'dev' ? '릴리스 열기' : '지금 업데이트', 'download', 'primary']]);
+      buttons([[tr('이 버전 건너뛰기', 'Skip this version'), 'skip', 'ghost'], [tr('나중에', 'Later'), 'later'], [info.kind === 'dev' ? tr('릴리스 열기', 'Open release') : tr('지금 업데이트', 'Update now'), 'download', 'primary']]);
       break;
     case 'downloading': {
       const p = s.progress || {};
       const percent = Math.max(0, Math.min(100, p.percent ?? 0));
       badge.textContent = '↓'; badge.classList.add('busy');
-      $('title').textContent = info.version + ' 다운로드 중';
-      $('subtitle').textContent = '다운로드가 끝나면 파일 무결성(SHA-256)을 확인합니다.';
+      $('title').textContent = tr(info.version + ' 다운로드 중', 'Downloading ' + info.version);
+      $('subtitle').textContent = tr('다운로드가 끝나면 파일 무결성(SHA-256)을 확인합니다.', 'The file is checked (SHA-256) once it has downloaded.');
       $('progressBox').hidden = false;
       $('fill').style.width = percent + '%';
       $('bar').setAttribute('aria-valuenow', String(percent));
@@ -84,37 +86,37 @@ function render(s) {
       $('detail').textContent = [size(p.received) + ' / ' + size(p.total), speed, remaining].filter(Boolean).join(' · ');
       renderNotes(info.notes);
       cancelId = 'cancel';
-      buttons([['취소', 'cancel']]);
+      buttons([[tr('취소', 'Cancel'), 'cancel']]);
       break;
     }
     case 'ready':
       badge.textContent = '✓'; badge.classList.add('ok');
-      $('title').textContent = info.version + ' 설치 준비 완료';
-      $('subtitle').textContent = '검증을 마쳤습니다. 지금 다시 시작하거나, 앱을 종료할 때 자동으로 설치됩니다.';
+      $('title').textContent = tr(info.version + ' 설치 준비 완료', info.version + ' is ready to install');
+      $('subtitle').textContent = tr('검증을 마쳤습니다. 지금 다시 시작하거나, 앱을 종료할 때 자동으로 설치됩니다.', 'Checked. Restart now, or it installs when you quit the app.');
       $('progressBox').hidden = false;
       $('fill').style.width = '100%';
       $('percent').textContent = '100%';
-      $('detail').textContent = size(info.size) + ' · 검증 완료';
+      $('detail').textContent = size(info.size) + tr(' · 검증 완료', ' · checked');
       renderNotes(info.notes);
       cancelId = 'later';
-      buttons([['종료할 때 설치', 'later'], ['지금 다시 시작하여 설치', 'install', 'primary']]);
+      buttons([[tr('종료할 때 설치', 'Install on quit'), 'later'], [tr('지금 다시 시작하여 설치', 'Restart and install'), 'install', 'primary']]);
       break;
     case 'installing':
       badge.textContent = '…'; badge.classList.add('busy');
-      $('title').textContent = '설치 중…';
-      $('subtitle').textContent = '앱이 종료된 뒤 새 버전으로 다시 시작됩니다.';
+      $('title').textContent = tr('설치 중…', 'Installing…');
+      $('subtitle').textContent = tr('앱이 종료된 뒤 새 버전으로 다시 시작됩니다.', 'The app closes and starts again in the new version.');
       buttons([]);
       break;
     case 'error':
       badge.textContent = '!'; badge.classList.add('err');
-      $('title').textContent = '업데이트 오류';
+      $('title').textContent = tr('업데이트 오류', 'Update error');
       $('subtitle').textContent = s.error || '';
       $('error').hidden = !s.detail;
       $('error').textContent = s.detail || '';
-      buttons([['릴리스 페이지 열기', 'release', 'ghost'], ['닫기', 'close'], ['다시 시도', 'retry', 'primary']]);
+      buttons([[tr('릴리스 페이지 열기', 'Open release page'), 'release', 'ghost'], [tr('닫기', 'Close'), 'close'], [tr('다시 시도', 'Try again'), 'retry', 'primary']]);
       break;
     default:
-      buttons([['닫기', 'close']]);
+      buttons([[tr('닫기', 'Close'), 'close']]);
   }
 }
 

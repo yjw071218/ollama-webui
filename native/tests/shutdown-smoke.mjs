@@ -19,9 +19,11 @@ app.whenReady().then(() => {
     ]) {
       let quits=0, closes=0;
       const current = {close:()=>closes++};
-      const context={setupWindow,connecting,current,gateway:current,app:{quit:()=>quits++}};
+      const win = {};
+      const context={setupWindow,connecting,current,gateway:current,clientWindow:win,win,busy:true,app:{quit:()=>quits++}};
       vm.runInNewContext(body,context);
       assert.equal(quits,expected);assert.equal(closes,1);assert.equal(context.gateway,undefined);
+      assert.equal(context.clientWindow,undefined);assert.equal(context.busy,false);
       cases++;
     }
     console.log('SHUTDOWN_SMOKE passed: '+cases+' cases; original destroyed-window exception reproduced');

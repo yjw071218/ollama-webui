@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Press and hold the launcher icon. The page opens a new chat
+     (MainActivity.ACTION_NEW_CHAT, src/nativeEvents.js). -->
+<shortcuts xmlns:android="http://schemas.android.com/apk/res/android">
+    <shortcut android:shortcutId="new_chat" android:enabled="true" android:icon="@drawable/ic_shortcut_chat"
+        android:shortcutShortLabel="@string/shortcut_new_chat" android:shortcutLongLabel="@string/shortcut_new_chat_long">
+        <intent android:action="io.github.yjw071218.ollamawebui.client.NEW_CHAT"
+            android:targetPackage="io.github.yjw071218.ollamawebui.client"
+            android:targetClass="io.github.yjw071218.ollamawebui.client.MainActivity"/>
+    </shortcut>
+</shortcuts>

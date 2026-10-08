@@ -25,17 +25,76 @@ public final class LoopbackProxy implements Closeable {
     private volatile boolean closed;
     public final String origin, token;
     public static final String COOKIE = "__ollama_native_gate";
+    /*
+     * The server address, and only in the form the server hands out:
+     * <IPv4>.nip.io:<port> (as desktop/proxy.mjs normalizeServer). Any address
+     * used to be taken, and "naver.com" opened Naver as the app and was saved as
+     * the server, with no menu left to change it from. A bare IPv4 address is
+     * written in that form for you ("192.168.0.5:5173" is what people type).
+     */
+    private static final String OCTET = "(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)";
+    private static final java.util.regex.Pattern FORM = java.util.regex.Pattern.compile(
+        "^(?:(https?)://)?(" + OCTET + "(?:\\." + OCTET + "){3})(?:\\.nip\\.io)?:(\\d{1,5})/?$", java.util.regex.Pattern.CASE_INSENSITIVE);
+    private static final java.util.regex.Pattern NIP = java.util.regex.Pattern.compile(
+        "^(" + OCTET + "(?:\\." + OCTET + "){3})\\.nip\\.io$", java.util.regex.Pattern.CASE_INSENSITIVE);
+    public static final String EXAMPLE = "192.168.0.5.nip.io:5173";
     public static String normalize(String raw) throws Exception {
-        String text = raw.trim();
-        // "192.168.0.5:5173" is what people type; it means http.
-        if (!text.isEmpty() && !text.matches("(?i)^[a-z][a-z0-9+.-]*://.*")) text = "http://" + text;
-        URI u = new URI(text);
-        if (!("http".equals(u.getScheme()) || "https".equals(u.getScheme())) || u.getHost() == null ||
-            u.getUserInfo() != null || u.getRawQuery() != null || u.getRawFragment() != null ||
-            !(u.getRawPath() == null || u.getRawPath().isEmpty() || "/".equals(u.getRawPath())) ||
-            u.getPort() < -1 || u.getPort() == 0 || u.getPort() > 65535)
-            throw new IllegalArgumentException("서버 주소를 확인하세요. 예: 192.168.0.5:5173 또는 https://example.com (경로·로그인 정보는 넣지 마세요)");
-        return u.getScheme() + "://" + u.getRawAuthority();
+        java.util.regex.Matcher m = FORM.matcher(raw == null ? "" : raw.trim());
+        int port = m.matches() ? Integer.parseInt(m.group(3)) : 0;
+        if (port < 1 || port > 65535)
+            throw new IllegalArgumentException(L.t("서버 주소는 0.0.0.0.nip.io:0000 형식으로 입력하세요. 예: " + EXAMPLE,
+                "Enter the server address as 0.0.0.0.nip.io:0000, e.g. " + EXAMPLE));
+        String scheme = m.group(1) == null ? "http" : m.group(1).toLowerCase(Locale.ROOT);
+        return scheme + "://" + m.group(2) + ".nip.io:" + port;
+    }
+    /** The address a server had before only nip.io ones were taken, so what was kept under it carries over. */
+    public static String legacy(String server) { return server.replaceAll("(?i)\\.nip\\.io(?=:\\d+$)", ""); }
+    /** 192.168.0.5.nip.io is that address by definition: answered here, without asking nip.io's DNS. */
+    static InetAddress addressOf(String host) throws IOException {
+        java.util.regex.Matcher m = NIP.matcher(host == null ? "" : host);
+        if (!m.matches()) return InetAddress.getByName(host);
+        String[] parts = m.group(1).split("\\.");
+        byte[] bytes = new byte[4];
+        for (int i = 0; i < 4; i++) bytes[i] = (byte) Integer.parseInt(parts[i]);
+        return InetAddress.getByAddress(host, bytes);
+    }
+    /** Something answered, and it was not an Ollama WebUI server. */
+    public static final class NotServerException extends IOException {
+        NotServerException() { super(L.t("이 주소는 Ollama WebUI 서버가 아닙니다. PC에서 서버를 켰을 때 표시되는 주소를 입력하세요.",
+            "This address is not an Ollama WebUI server. Enter the address shown when the server starts on your PC.")); }
+    }
+    /**
+     * Whether the address is an Ollama WebUI server, asked before it is opened
+     * or saved. /api/whoami answers in front of the access-token gate
+     * (server/index.js), so a server that wants a token is still recognised.
+     */
+    public static void probe(String server) throws IOException {
+        URI target = URI.create(server);
+        boolean secure = "https".equals(target.getScheme());
+        int port = target.getPort() < 0 ? (secure ? 443 : 80) : target.getPort();
+        try (Socket raw = new Socket()) {
+            raw.connect(new InetSocketAddress(addressOf(target.getHost()), port), 8000);
+            raw.setSoTimeout(8000);
+            Socket socket = raw;
+            if (secure) {
+                SSLSocket ssl = (SSLSocket) ((SSLSocketFactory) SSLSocketFactory.getDefault()).createSocket(raw, target.getHost(), port, true);
+                SSLParameters parameters = ssl.getSSLParameters(); parameters.setEndpointIdentificationAlgorithm("HTTPS"); ssl.setSSLParameters(parameters);
+                ssl.startHandshake(); socket = ssl;
+            }
+            // HTTP/1.0: the answer comes whole and unchunked, and the connection ends with it.
+            socket.getOutputStream().write(("GET /api/whoami HTTP/1.0\r\nHost: " + target.getRawAuthority() + "\r\nAccept: application/json\r\n\r\n").getBytes(StandardCharsets.US_ASCII));
+            socket.getOutputStream().flush();
+            ByteArrayOutputStream out = new ByteArrayOutputStream();
+            InputStream in = socket.getInputStream(); byte[] buffer = new byte[4096]; int n;
+            while ((n = in.read(buffer)) != -1) { out.write(buffer, 0, n); if (out.size() > 65536) break; }
+            String reply = out.toString("UTF-8");
+            int split = reply.indexOf("\r\n\r\n");
+            if (!reply.startsWith("HTTP/1.") || split < 0 || !reply.substring(0, reply.indexOf(' ') + 4).endsWith(" 200")) throw new NotServerException();
+            // Its two fields, as keys of a JSON object (no org.json: this class is also run on a plain JVM in the tests).
+            String body = reply.substring(split + 4).trim();
+            if (!body.startsWith("{") || !body.matches("(?s).*\"servingPort\"\\s*:.*") || !body.matches("(?s).*\"tokenRequired\"\\s*:.*"))
+                throw new NotServerException();
+        }
     }
     public LoopbackProxy(String server, int port) throws Exception {
         target = new URI(normalize(server));
@@ -144,7 +203,7 @@ public final class LoopbackProxy implements Closeable {
         try {
             // Tokens arrive as many small writes; Nagle would hold each one for the last one's ACK.
             raw.setTcpNoDelay(true);
-            raw.connect(new InetSocketAddress(target.getHost(), port), 15000);
+            raw.connect(new InetSocketAddress(addressOf(target.getHost()), port), 15000);
             if (secure) {
                 SSLSocket ssl = (SSLSocket) ((SSLSocketFactory) SSLSocketFactory.getDefault()).createSocket(raw, target.getHost(), port, true);
                 SSLParameters parameters = ssl.getSSLParameters(); parameters.setEndpointIdentificationAlgorithm("HTTPS"); ssl.setSSLParameters(parameters);
@@ -183,7 +242,7 @@ public final class LoopbackProxy implements Closeable {
         if (up != null && !fresh(up)) { close(up); return null; }
         return up;
     }
-    private static final String OFFLINE = "서버에 연결하지 못했습니다. 주소와 서버 실행 상태를 확인한 뒤 다시 시도하세요.";
+    private static final String OFFLINE = L.t("서버에 연결하지 못했습니다. 주소와 서버 실행 상태를 확인한 뒤 다시 시도하세요.", "Could not reach the server. Check the address and that the server is running, then try again.");
     /** What a page load gets when the server cannot be reached, with the ways out on it. */
     private String offlinePage() {
         String server = target.toString().replace("&", "&amp;").replace("<", "&lt;");
@@ -197,7 +256,16 @@ public final class LoopbackProxy implements Closeable {
             + "<h1>서버에 연결할 수 없습니다</h1><p><code>" + server + "</code></p><p>서버가 켜져 있는지, 같은 네트워크에 있는지 확인하세요.</p>"
             + "<div><button class=\"go\" onclick=\"location.reload()\">다시 시도</button>"
             + "<button class=\"alt\" id=\"change\" hidden onclick=\"window.ollamaNative.changeServer()\">서버 변경</button></div></main>"
-            + "<script>if(window.ollamaNative&&window.ollamaNative.changeServer)document.getElementById('change').hidden=false</script></body></html>";
+            + "<p id=\"wait\" style=\"margin-top:14px;font-size:13px\"></p>"
+            /* Tries again on its own: every 15 seconds, and at once when the
+               phone's network comes back (MainActivity tells the page). A
+               server still starting, or Wi-Fi rejoining, needs no tap. */
+            + "<script>window.__ollamaOffline=true;if(window.ollamaNative&&window.ollamaNative.changeServer)document.getElementById('change').hidden=false;"
+            + "var ko=/^ko/i.test(navigator.language||'');if(!ko){document.documentElement.lang='en';document.title='Not connected';"
+            + "document.querySelector('h1').textContent='The server is not answering';document.querySelectorAll('p')[1].textContent='Check that the server is on and on the same network.';"
+            + "document.querySelector('.go').textContent='Try again';document.getElementById('change').textContent='Change server';}"
+            + "var left=15,w=document.getElementById('wait');setInterval(function(){left--;if(left<=0)location.reload();else w.textContent=ko?left+'초 후 자동으로 다시 시도':'Trying again in '+left+'s';},1000);"
+            + "window.addEventListener('online',function(){location.reload()});</script></body></html>";
     }
     private void serve(Socket client) {
         Upstream up = null; boolean responseStarted = false, parkable = true; String requestPath = null; List<String[]> h = null;

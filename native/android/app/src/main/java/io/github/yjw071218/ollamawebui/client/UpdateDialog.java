@@ -81,7 +81,7 @@ final class UpdateDialog {
 
         notesBox = new LinearLayout(activity); notesBox.setOrientation(LinearLayout.VERTICAL);
         notesBox.setPadding(dp(14), dp(12), dp(14), dp(12)); notesBox.setBackground(round(CARD, 12, BORDER));
-        TextView notesTitle = text(12, MUTED, true); notesTitle.setText("이번 버전 변경 사항"); notesBox.addView(notesTitle);
+        TextView notesTitle = text(12, MUTED, true); notesTitle.setText(L.t("이번 버전 변경 사항", "What is new in this version")); notesBox.addView(notesTitle);
         TextView notes = text(14, TEXT, false); notes.setLineSpacing(0, 1.25f); notes.setPadding(0, dp(6), 0, 0);
         notes.setText(formatNotes(update.notes));
         /* Capped, so long notes scroll inside the box instead of pushing the
@@ -167,24 +167,24 @@ final class UpdateDialog {
     private void spacer() { buttons.addView(new android.view.View(activity), new LinearLayout.LayoutParams(0, 1, 1)); }
 
     private void available() {
-        state("↑", PRIMARY, ON_PRIMARY, "새 버전 " + update.version + " 사용 가능",
-            "현재 " + current + " → " + update.version + " · " + size(update.apkSize));
+        state("↑", PRIMARY, ON_PRIMARY, L.t("새 버전 ", "Version ") + update.version + L.t(" 사용 가능", " is available"),
+            L.t("현재 ", "Now ") + current + " → " + update.version + " · " + size(update.apkSize));
         progressBox.setVisibility(android.view.View.GONE);
-        button("건너뛰기", 0, () -> {
+        button(L.t("건너뛰기", "Skip"), 0, () -> {
             activity.getSharedPreferences("connection", Activity.MODE_PRIVATE).edit().putString("skippedUpdate", update.version).apply();
             dismiss();
         });
         spacer();
-        button("나중에", 1, this::dismiss);
-        button("지금 업데이트", 2, this::download);
+        button(L.t("나중에", "Later"), 1, this::dismiss);
+        button(L.t("지금 업데이트", "Update now"), 2, this::download);
     }
 
     private void download() {
         cancelled = false;
-        state("↓", PRIMARY, ON_PRIMARY, update.version + " 다운로드 중", "다운로드가 끝나면 파일 무결성(SHA-256)을 확인합니다.");
+        state("↓", PRIMARY, ON_PRIMARY, update.version + L.t(" 다운로드 중", " downloading"), L.t("다운로드가 끝나면 파일 무결성(SHA-256)을 확인합니다.", "The file is checked (SHA-256) once it has downloaded."));
         progressBox.setVisibility(android.view.View.VISIBLE);
         bar.setProgress(0); percent.setText("0%"); detail.setText("");
-        button("취소", 1, () -> cancelled = true);
+        button(L.t("취소", "Cancel"), 1, () -> cancelled = true);
         File dir = new File(activity.getCacheDir(), "updates");
         io.execute(() -> {
             try {
@@ -193,7 +193,7 @@ final class UpdateDialog {
                         activity.runOnUiThread(() -> {
                             int p = total > 0 ? (int) Math.min(100, received * 100 / total) : 0;
                             bar.setProgress(p); percent.setText(p + "%");
-                            String eta = bps > 0 && total > received ? " · 약 " + Math.max(1, Math.round((total - received) / bps)) + "초 남음" : "";
+                            String eta = bps > 0 && total > received ? L.t(" · 약 ", " · about ") + Math.max(1, Math.round((total - received) / bps)) + L.t("초 남음", "s left") : "";
                             detail.setText(size(received) + " / " + size(total) + " · " + size(bps) + "/s" + eta);
                         });
                     }
@@ -204,7 +204,7 @@ final class UpdateDialog {
             } catch (Exception e) {
                 activity.runOnUiThread(() -> {
                     if (cancelled) available();
-                    else failed("다운로드하지 못했습니다.", e.getMessage());
+                    else failed(L.t("다운로드하지 못했습니다.", "The download failed."), e.getMessage());
                 });
             }
         });
@@ -217,10 +217,10 @@ final class UpdateDialog {
         int flags = Build.VERSION.SDK_INT >= 28 ? PackageManager.GET_SIGNING_CERTIFICATES : PackageManager.GET_SIGNATURES;
         PackageInfo archive = pm.getPackageArchiveInfo(file.getPath(), flags);
         PackageInfo installed = pm.getPackageInfo(activity.getPackageName(), flags);
-        if (archive == null) throw new Exception("설치 파일을 읽을 수 없습니다.");
-        if (!activity.getPackageName().equals(archive.packageName)) throw new Exception("다른 앱의 설치 파일입니다.");
-        if (!update.version.equals(archive.versionName)) throw new Exception("설치 파일 버전이 릴리스 정보와 다릅니다.");
-        if (!signers(archive).equals(signers(installed))) throw new Exception("설치 파일의 서명이 현재 앱과 다릅니다. 이 파일은 설치하지 않습니다.");
+        if (archive == null) throw new Exception(L.t("설치 파일을 읽을 수 없습니다.", "The installer could not be read."));
+        if (!activity.getPackageName().equals(archive.packageName)) throw new Exception(L.t("다른 앱의 설치 파일입니다.", "The installer is for another app."));
+        if (!update.version.equals(archive.versionName)) throw new Exception(L.t("설치 파일 버전이 릴리스 정보와 다릅니다.", "The installer's version does not match the release."));
+        if (!signers(archive).equals(signers(installed))) throw new Exception(L.t("설치 파일의 서명이 현재 앱과 다릅니다. 이 파일은 설치하지 않습니다.", "The installer is signed differently from this app. It will not be installed."));
     }
     @SuppressWarnings("deprecation")
     private static Set<String> signers(PackageInfo info) throws Exception {
@@ -238,22 +238,22 @@ final class UpdateDialog {
     }
 
     private void ready() {
-        state("✓", Color.rgb(60, 90, 62), Color.rgb(205, 236, 204), update.version + " 설치 준비 완료",
-            "검증을 마쳤습니다. 설치를 누르면 Android 설치 확인 화면이 열립니다.");
+        state("✓", Color.rgb(60, 90, 62), Color.rgb(205, 236, 204), update.version + L.t(" 설치 준비 완료", " is ready to install"),
+            L.t("검증을 마쳤습니다. 설치를 누르면 Android 설치 확인 화면이 열립니다.", "Checked. Tap Install to open Android's install screen."));
         progressBox.setVisibility(android.view.View.VISIBLE);
-        bar.setProgress(100); percent.setText("100%"); detail.setText(size(update.apkSize) + " · 검증 완료");
-        button("나중에", 1, this::dismiss);
-        button("설치", 2, this::install);
+        bar.setProgress(100); percent.setText("100%"); detail.setText(size(update.apkSize) + L.t(" · 검증 완료", " · checked"));
+        button(L.t("나중에", "Later"), 1, this::dismiss);
+        button(L.t("설치", "Install"), 2, this::install);
     }
 
     private void install() {
         if (apk == null || !apk.isFile()) { download(); return; }
         if (!activity.getPackageManager().canRequestPackageInstalls()) {
             awaitingPermission = true;
-            state("!", PRIMARY, ON_PRIMARY, "설치 권한이 필요합니다",
-                "다음 화면에서 '이 출처 허용'을 켠 뒤 돌아오면 설치를 계속합니다.");
-            button("취소", 1, this::dismiss);
-            button("설정 열기", 2, this::askPermission);
+            state("!", PRIMARY, ON_PRIMARY, L.t("설치 권한이 필요합니다", "Permission to install is needed"),
+                L.t("다음 화면에서 '이 출처 허용'을 켠 뒤 돌아오면 설치를 계속합니다.", "Turn on 'Allow from this source' on the next screen, then come back to continue."));
+            button(L.t("취소", "Cancel"), 1, this::dismiss);
+            button(L.t("설정 열기", "Open settings"), 2, this::askPermission);
             askPermission();
             return;
         }
@@ -263,35 +263,35 @@ final class UpdateDialog {
                 .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_ACTIVITY_NEW_TASK);
             activity.startActivity(intent);
             dismiss();
-        } catch (Exception e) { failed("설치 화면을 열지 못했습니다.", e.getMessage()); }
+        } catch (Exception e) { failed(L.t("설치 화면을 열지 못했습니다.", "The install screen did not open."), e.getMessage()); }
     }
     private void askPermission() {
         try {
             activity.startActivityForResult(new Intent(Settings.ACTION_MANAGE_UNKNOWN_APP_SOURCES,
                 Uri.parse("package:" + activity.getPackageName())), INSTALL_PERMISSION);
-        } catch (Exception e) { failed("설정 화면을 열지 못했습니다.", e.getMessage()); }
+        } catch (Exception e) { failed(L.t("설정 화면을 열지 못했습니다.", "Settings did not open."), e.getMessage()); }
     }
     /** Back from the "install unknown apps" setting. */
     void onPermissionResult() {
         if (!awaitingPermission || dialog == null || !dialog.isShowing()) return;
         awaitingPermission = false;
         if (!activity.getPackageManager().canRequestPackageInstalls()) {
-            failed("설치 권한이 허용되지 않았습니다.", "설정에서 이 앱의 '출처를 알 수 없는 앱 설치'를 허용한 뒤 다시 시도하세요.");
+            failed(L.t("설치 권한이 허용되지 않았습니다.", "Installing was not allowed."), L.t("설정에서 이 앱의 '출처를 알 수 없는 앱 설치'를 허용한 뒤 다시 시도하세요.", "Allow 'Install unknown apps' for this app in Settings, then try again."));
             return;
         }
         install();
     }
 
     private void failed(String message, String why) {
-        state("!", Color.rgb(107, 47, 42), Color.rgb(255, 217, 212), "업데이트 오류", message);
+        state("!", Color.rgb(107, 47, 42), Color.rgb(255, 217, 212), L.t("업데이트 오류", "Update error"), message);
         if (why != null && !why.isEmpty()) { error.setText(why); error.setVisibility(android.view.View.VISIBLE); }
         progressBox.setVisibility(android.view.View.GONE);
-        button("릴리스 페이지", 0, () -> {
+        button(L.t("릴리스 페이지", "Release page"), 0, () -> {
             try { activity.startActivity(new Intent(Intent.ACTION_VIEW, Uri.parse(update.pageUrl))); } catch (Exception ignored) { }
         });
         spacer();
-        button("닫기", 1, this::dismiss);
-        button("다시 시도", 2, () -> { if (apk != null && apk.isFile()) install(); else download(); });
+        button(L.t("닫기", "Close"), 1, this::dismiss);
+        button(L.t("다시 시도", "Try again"), 2, () -> { if (apk != null && apk.isFile()) install(); else download(); });
     }
 
     void dismiss() { cancelled = true; if (dialog != null && dialog.isShowing()) dialog.dismiss(); }

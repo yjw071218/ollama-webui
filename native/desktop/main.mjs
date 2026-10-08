@@ -1,22 +1,40 @@
-import { app, BrowserWindow, Menu, ipcMain, session, shell, desktopCapturer, screen } from 'electron';
+import { app, BrowserWindow, Menu, Tray, nativeImage, globalShortcut, ipcMain, session, shell, desktopCapturer, screen } from 'electron';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
-import { normalizeServer, startProxy } from './proxy.mjs';
+import { normalizeServer, legacyServer, probeServer, startProxy } from './proxy.mjs';
 import { createUpdater } from './updater.mjs';
 import { loadTrustedPage } from './navigation.mjs';
 import { createClientWindow, chromeOptions } from './chrome.mjs';
 import { appDialog } from './dialog.mjs';
+import { pickSource } from './capture.mjs';
 import { loadGrants, rememberGrant } from './permissions.mjs';
 import { parseGoogleHandoff, googleAuthorizeUrl, startGoogleLoopback } from './googleLoopback.mjs';
+import { setLanguage, tr } from './i18n.mjs';
+import { addRecent, forgetRecent } from './recent.mjs';
+import { validColor } from './theme.mjs';
+import { clampZoom, zoomStep } from './zoom.mjs';
 const showError = (title, message) => appDialog(clientWindow && !clientWindow.isDestroyed() ? clientWindow : setupWindow, { title, message });
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
 const setupURL = pathToFileURL(path.join(directory, 'setup.html')).href;
+const smoke = process.argv.includes('--native-smoke');
 const smokeProfile = process.argv.find(value => value.startsWith('--smoke-profile='));
-if (process.argv.includes('--native-smoke') && smokeProfile) app.setPath('userData', smokeProfile.slice(16));
-let setupWindow, clientWindow, gateway, settings = { server: '', ports: {} }, connecting = false;
+if (smoke && smokeProfile) app.setPath('userData', smokeProfile.slice(16));
+let setupWindow, clientWindow, gateway, tray = null, quitting = false, lastFailure = null, wantNewChat = process.argv.includes('--new-chat');
+let settings = { server: '', ports: {}, recent: [], zoom: {}, alwaysOnTop: false, closeToTray: false, globalShortcut: true }, connecting = false;
+const configPath = () => path.join(app.getPath('userData'), 'connection.json');
+/* Settings are written a moment after the last change: a theme switch or a
+   zoom with the wheel is a burst of them. */
+let saveTimer = null;
+const save = (now = false) => {
+  clearTimeout(saveTimer);
+  const write = () => writeFile(configPath(), JSON.stringify(settings, null, 2), { mode: 0o600 }).catch(() => {});
+  if (now) return write();
+  saveTimer = setTimeout(write, 400);
+  return undefined;
+};
 /* The window opens where it was left, at the size it was left -- unless that
    place is no longer on any screen (a monitor unplugged since). */
 const savedBounds = () => {
@@ -28,46 +46,55 @@ const savedBounds = () => {
   return visible ? { x: w.x, y: w.y, width: w.width, height: w.height } : { width: w.width, height: w.height };
 };
 const rememberBounds = win => {
-  try {
-    settings.window = { ...win.getNormalBounds(), maximized: win.isMaximized() };
-    writeFile(configPath(), JSON.stringify(settings, null, 2), { mode: 0o600 }).catch(() => {});
-  } catch {}
-};
-const configPath = () => path.join(app.getPath('userData'), 'connection.json');
-/** The page's background colour, kept so the next launch paints it before the page does. */
-/* Runs in the page (executeJavaScript), so it is sent as source text. */
-function pageBackground() {
-  const m = /rgba?\((\d+),\s*(\d+),\s*(\d+)(?:,\s*([\d.]+))?/.exec(getComputedStyle(document.body || document.documentElement).backgroundColor || '');
-  return m && !(m[4] !== undefined && Number(m[4]) === 0) ? '#' + [m[1], m[2], m[3]].map(v => Number(v).toString(16).padStart(2, '0')).join('') : '';
-}
-const PAGE_BACKGROUND = '(' + pageBackground.toString() + ')()';
-const rememberBackground = async contents => {
-  try {
-    const color = await contents.executeJavaScript(PAGE_BACKGROUND, false);
-    if (!/^#[0-9a-f]{6}$/i.test(color) || color === settings.pageBackground) return;
-    settings.pageBackground = color;
-    await writeFile(configPath(), JSON.stringify(settings, null, 2), { mode: 0o600 });
-  } catch {}
+  try { settings.window = { ...win.getNormalBounds(), maximized: win.isMaximized() }; save(); } catch {}
 };
 const sameOrigin = (value, origin) => { try { return new URL(value).origin === origin; } catch { return false; } };
+const hashOf = server => createHash('sha256').update(server).digest('hex');
+/* A server's storage (its port, partition, permissions and zoom). One saved
+   before addresses had to be nip.io ones keeps what it had under its old
+   address, so moving to the new form does not sign anyone out. */
+const serverKey = server => {
+  const key = hashOf(server);
+  if (settings.ports?.[key]) return key;
+  const old = hashOf(legacyServer(server));
+  return settings.ports?.[old] ? old : key;
+};
 async function external(url, owner) {
   if (!/^https?:\/\//i.test(url)) return;
-  const result = await appDialog(owner, { type: 'question', title: '외부 링크', message: '기본 브라우저에서 이 링크를 여시겠습니까?', detail: url, buttons: ['취소', '열기'], defaultId: 0, cancelId: 0 });
+  const result = await appDialog(owner, { type: 'question', title: tr('외부 링크', 'External link'), message: tr('기본 브라우저에서 이 링크를 여시겠습니까?', 'Open this link in your browser?'), detail: url, buttons: [tr('취소', 'Cancel'), tr('열기', 'Open')], defaultId: 0, cancelId: 0 });
   if (result.response === 1) await shell.openExternal(url);
 }
 let updater = null;
 /** In-app update: check, download with progress, verify and install (updater.mjs). */
 function notifyUpdate(manual = false) {
-  if (process.argv.includes('--native-smoke')) return;
+  if (smoke) return;
   updater ??= createUpdater({
     ownerWindow: () => (clientWindow && !clientWindow.isDestroyed() ? clientWindow : setupWindow),
-    beforeInstall: async () => { await gateway?.close(); },
+    beforeInstall: async () => { quitting = true; await gateway?.close(); },
   });
   return updater.check({ manual });
 }
+const liveClient = () => (clientWindow && !clientWindow.isDestroyed() ? clientWindow : null);
+/** Bring the app forward: from the tray, minimised or behind other windows. */
+function reveal() {
+  const win = liveClient() || (setupWindow && !setupWindow.isDestroyed() ? setupWindow : null);
+  if (!win) { if (app.isReady()) openSetup(); return null; }
+  if (win.isMinimized()) win.restore();
+  if (!win.isVisible()) win.show();
+  app.focus({ steal: true });
+  win.focus();
+  return win;
+}
+/** A new chat in the page (src/nativeEvents.js), from the tray, the jump list, the bar or the global key. */
+function newChat() {
+  const win = liveClient();
+  if (!win) { wantNewChat = true; reveal(); return; }
+  reveal();
+  if (!win.clientContents.isDestroyed()) win.clientContents.send('client:action', { type: 'new-chat' });
+}
 function openSetup() {
-  if (setupWindow && !setupWindow.isDestroyed()) { setupWindow.focus(); return; }
-  setupWindow = new BrowserWindow({ ...chromeOptions, icon: path.join(directory, 'icons/app.png'), show: !process.argv.includes('--native-smoke'), width: 700, height: 650, title: '서버 연결',
+  if (setupWindow && !setupWindow.isDestroyed()) { setupWindow.show(); setupWindow.focus(); return; }
+  setupWindow = new BrowserWindow({ ...chromeOptions, icon: path.join(directory, 'icons/app.png'), show: !smoke, width: 700, height: 720, title: tr('서버 연결', 'Server'),
     webPreferences: { preload: path.join(directory, 'setup-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   const win = setupWindow;
   win.once('closed', () => { if (setupWindow === win) setupWindow = undefined; });
@@ -79,18 +106,56 @@ function openSetup() {
 function validSetup(event) {
   return setupWindow && !setupWindow.isDestroyed() && event.sender === setupWindow.webContents && event.senderFrame === setupWindow.webContents.mainFrame && event.senderFrame.url === setupURL;
 }
+/** The page in the app window, and nothing else: its own frame, its own origin. */
+function validClient(event) {
+  const win = liveClient();
+  return !!win && !!gateway && event.sender === win.clientContents && event.senderFrame === win.clientContents.mainFrame && sameOrigin(event.senderFrame.url, gateway.origin);
+}
+
+/* --------------------------------------------------- the taskbar while busy */
+let busy = false;
+function setBusy(value) {
+  const win = liveClient();
+  if (!win || value === busy) return;
+  busy = value;
+  // Indeterminate progress on the taskbar button while an answer is written.
+  win.setProgressBar(busy ? 2 : -1, { mode: busy ? 'indeterminate' : 'none' });
+  tray?.setToolTip(busy ? tr('Ollama WebUI · 답변 작성 중…', 'Ollama WebUI · writing an answer…') : 'Ollama WebUI');
+  // It ended while the reader was elsewhere: the button flashes until they come back.
+  if (!busy && (!win.isFocused() || !win.isVisible())) win.flashFrame(true);
+}
+
+/* ------------------------------------------------------------- page zoom */
+const zoomKey = () => (settings.server ? serverKey(settings.server) : '');
+function setZoom(next) {
+  const win = liveClient();
+  if (!win || win.clientContents.isDestroyed()) return;
+  const factor = clampZoom(next);
+  win.clientContents.setZoomFactor(factor);
+  settings.zoom = { ...(settings.zoom || {}), [zoomKey()]: factor };
+  save();
+}
+const zoomBy = direction => {
+  const win = liveClient();
+  if (win && !win.clientContents.isDestroyed()) setZoom(zoomStep(win.clientContents.getZoomFactor(), direction));
+};
+
 async function connect(value) {
-  if (connecting) throw new Error('연결 중입니다.');
+  if (connecting) throw new Error(tr('연결 중입니다.', 'Already connecting.'));
   connecting = true;
+  let server = '';
   try {
-    const server = normalizeServer(value);
-    const key = createHash('sha256').update(server).digest('hex');
+    server = normalizeServer(value);
+    /* Asked before anything is closed or saved: an address that is not this
+       server leaves the current connection and the saved server alone. */
+    await probeServer(server);
+    const key = serverKey(server);
     const savedPort = settings.ports[key] || 0;
     // Fixed per-server origins preserve IndexedDB and keep different servers isolated.
     if (clientWindow && !clientWindow.isDestroyed()) clientWindow.destroy();
     if (gateway) { await gateway.close(); gateway = undefined; }
     try { gateway = await startProxy(server, savedPort); }
-    catch (error) { if (error.code === 'EADDRINUSE') throw new Error('저장된 앱 포트가 사용 중입니다. 다른 앱 인스턴스를 종료한 후 다시 시도하세요.'); throw error; }
+    catch (error) { if (error.code === 'EADDRINUSE') throw new Error(tr('저장된 앱 포트가 사용 중입니다. 다른 앱 인스턴스를 종료한 후 다시 시도하세요.', 'The app\'s saved port is in use. Close the other copy of the app and try again.')); throw error; }
     const current = gateway;
     const ses = session.fromPartition('persist:server-' + key);
     const supportedPermissions = ['media', 'notifications', 'clipboard-read', 'clipboard-sanitized-write', 'fullscreen', 'pointerLock', 'idle-detection', 'speaker-selection'];
@@ -110,9 +175,9 @@ async function connect(value) {
       const requestingURL = details.requestingUrl || details.securityOrigin || wc?.getURL();
       if (!trusted(wc, requestingURL) || details.isMainFrame === false || !supported.includes(permission)) { callback(false); return; }
       if (grants.has(permission)) { callback(true); return; }
-      const labels = { media: '마이크 / 카메라 (' + (details.mediaTypes || []).join(', ') + ')', notifications: '알림', 'clipboard-read': '클립보드 읽기', 'clipboard-sanitized-write': '클립보드 쓰기', fullscreen: '전체 화면', pointerLock: '마우스 제어' };
+      const labels = { media: tr('마이크 / 카메라', 'Microphone / camera') + ' (' + (details.mediaTypes || []).join(', ') + ')', notifications: tr('알림', 'Notifications'), 'clipboard-read': tr('클립보드 읽기', 'Reading the clipboard'), 'clipboard-sanitized-write': tr('클립보드 쓰기', 'Writing to the clipboard'), fullscreen: tr('전체 화면', 'Full screen'), pointerLock: tr('마우스 제어', 'Pointer lock') };
       try {
-        const result = await appDialog(clientWindow, { type: 'question', title: '권한 요청', message: (labels[permission] || permission) + ' 권한을 허용하시겠습니까?', detail: server + '\n"이번만 허용"은 앱을 다시 시작하면 다시 묻습니다. "항상 허용"을 고르면 이 서버에는 다시 묻지 않습니다.', buttons: ['거부', '이번만 허용', '항상 허용 (다시 묻지 않기)'], defaultId: 0, cancelId: 0 });
+        const result = await appDialog(clientWindow, { type: 'question', title: tr('권한 요청', 'Permission'), message: tr((labels[permission] || permission) + ' 권한을 허용하시겠습니까?', 'Allow ' + (labels[permission] || permission) + '?'), detail: server + '\n' + tr('"이번만 허용"은 앱을 다시 시작하면 다시 묻습니다. "항상 허용"을 고르면 이 서버에는 다시 묻지 않습니다.', '"Allow once" asks again after a restart. "Always allow" does not ask this server again.'), buttons: [tr('거부', 'Deny'), tr('이번만 허용', 'Allow once'), tr('항상 허용 (다시 묻지 않기)', 'Always allow')], defaultId: 0, cancelId: 0 });
         const allowed = (result.response === 1 || result.response === 2) && trusted(wc, requestingURL);
         if (allowed) grants.add(permission);
         // 다시 묻지 않기: remembered for this server across restarts.
@@ -123,21 +188,43 @@ async function connect(value) {
     ses.setDisplayMediaRequestHandler(async (request, callback) => {
       if (!sameOrigin(request.securityOrigin, current.origin) || request.frame !== clientWindow?.clientContents.mainFrame || !request.userGesture) { callback({}); return; }
       try {
-        const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 0, height: 0 } });
-        const choices = sources.slice(0, 20);
-        const result = await appDialog(clientWindow, { type: 'question', title: '화면 캡처', message: '공유할 화면 또는 창을 선택하세요.', detail: server + '\n선택한 화면이 서버에 첨부될 수 있습니다.', buttons: ['취소', ...choices.map(s => s.name)], defaultId: 0, cancelId: 0 });
+        // Pictures of each screen and window, to choose by (capture.mjs).
+        const sources = await desktopCapturer.getSources({ types: ['screen', 'window'], thumbnailSize: { width: 320, height: 180 } });
+        const chosen = await pickSource(clientWindow, sources, server);
         const stillTrusted = !winGone() && request.frame === clientWindow.clientContents.mainFrame && sameOrigin(clientWindow.clientContents.getURL(), current.origin);
-        callback(stillTrusted && result.response > 0 && choices[result.response - 1] ? { video: choices[result.response - 1] } : {});
+        callback(stillTrusted && chosen ? { video: chosen } : {});
       } catch { callback({}); }
     });
     ses.removeAllListeners('will-download');
-    ses.on('will-download', (_event, item) => item.setSaveDialogOptions({ title: '파일 저장' }));
-    clientWindow = createClientWindow({ icon: path.join(directory, 'icons/app.png'), show: !process.argv.includes('--native-smoke'), ...savedBounds(), pageBackground: settings.pageBackground, minWidth: 420, minHeight: 500, title: 'Ollama WebUI Client',
-      webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, allowRunningInsecureContent: false } }, { server: openSetup, updates: () => notifyUpdate(true), menu: win => Menu.getApplicationMenu()?.popup({window:win}) });
+    ses.on('will-download', (_event, item) => item.setSaveDialogOptions({ title: tr('파일 저장', 'Save file') }));
+    clientWindow = createClientWindow({ icon: path.join(directory, 'icons/app.png'), show: !smoke, ...savedBounds(), pageBackground: settings.pageBackground, minWidth: 420, minHeight: 500, title: 'Ollama WebUI Client',
+      webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, allowRunningInsecureContent: false } },
+      { server: openSetup, updates: () => notifyUpdate(true), menu: win => Menu.getApplicationMenu()?.popup({window:win}), newChat });
     const win = clientWindow;
     if (settings.window?.maximized) win.maximize();
-    win.on('close', () => rememberBounds(win));
-    win.clientContents.on('did-finish-load', () => { if (sameOrigin(win.clientContents.getURL(), current.origin)) void rememberBackground(win.clientContents); });
+    win.setAlwaysOnTop(!!settings.alwaysOnTop);
+    win.on('focus', () => win.flashFrame(false));
+    /* Closing hides to the tray when the reader asked for that (app menu); the
+       app keeps its connection and its notifications. */
+    win.on('close', event => {
+      rememberBounds(win);
+      if (settings.closeToTray && tray && !quitting) { event.preventDefault(); win.hide(); }
+    });
+    /* The page's background, as the page changes it: the title bar takes it,
+       and the next launch starts in it (theme.mjs, client-preload.cjs). */
+    const onChrome = (event, color) => {
+      if (event.sender !== win.clientContents || !validClient(event) || !validColor(color)) return;
+      win.setChromeColors(color);
+      if (settings.pageBackground !== color) { settings.pageBackground = color; save(); }
+    };
+    ipcMain.on('client:chrome', onChrome);
+    win.once('closed', () => ipcMain.removeListener('client:chrome', onChrome));
+    // The zoom this server was last read at, and Ctrl+wheel to change it.
+    win.clientContents.on('did-finish-load', () => {
+      const factor = settings.zoom?.[key];
+      if (Number.isFinite(factor)) win.clientContents.setZoomFactor(clampZoom(factor));
+    });
+    win.clientContents.on('zoom-changed', (_event, direction) => zoomBy(direction === 'in' ? 1 : -1));
     /* Google's account chooser in the browser, answered on 127.0.0.1:47615
        (googleLoopback.mjs). If the port is taken, the server's page instead. */
     const googleDirect = async ({ id, clientId }) => {
@@ -179,57 +266,175 @@ async function connect(value) {
     });
     win.on('closed', () => {
       if (clientWindow === win) clientWindow = undefined;
+      busy = false;
       current.close();
       if (gateway === current) gateway = undefined;
       if (!connecting && (!setupWindow || setupWindow.isDestroyed() || !setupWindow.isVisible())) app.quit();
     });
-    settings.server = server;
     settings.ports[key] = current.port;
-    await writeFile(configPath(), JSON.stringify(settings, null, 2), { mode: 0o600 });
     try { await loadTrustedPage({webContents:win.clientContents,loadURL:win.loadClientURL}, current.origin + '/', current.origin); }
     catch (error) {
       if (!win.isDestroyed()) win.destroy();
-      openSetup();
       throw error;
     }
+    settings.server = server;
+    settings.recent = addRecent(settings.recent, server);
+    lastFailure = null;
+    await save(true);
+    watchConnection(win, server);
     setupWindow?.close();
-    if (process.argv.includes('--native-smoke')) {
-      const result = await win.clientContents.executeJavaScript('({secure:isSecureContext,media:!!navigator.mediaDevices?.getUserMedia,clipboard:!!navigator.clipboard,node:typeof process})');
+    if (wantNewChat) { wantNewChat = false; setTimeout(newChat, 1500); }
+    if (smoke) {
+      const result = await win.clientContents.executeJavaScript('({secure:isSecureContext,media:!!navigator.mediaDevices?.getUserMedia,clipboard:!!navigator.clipboard,node:typeof process,native:window.ollamaNative?.platform||""})');
       console.log('NATIVE_SMOKE ' + JSON.stringify(result));
-      if (!result.secure || !result.media || !result.clipboard || result.node !== 'undefined') app.exit(1);
+      if (!result.secure || !result.media || !result.clipboard || result.node !== 'undefined' || result.native !== 'desktop') app.exit(1);
       else app.exit(0);
     }
+  } catch (error) {
+    /* The saved server not answering is said on the address screen, with a
+       retry that also runs on its own (setup.mjs), not in a dialog over it. */
+    if (server && server === settings.server) lastFailure = { server, message: error.message, invalid: !!error.notServer };
+    // Never left with no window at all (the old one was closed to reconnect).
+    if (!liveClient() && !smoke) openSetup();
+    throw error;
   } finally { connecting = false; }
 }
+/* The connection lost after the page had opened (the server stopped, the PC
+   went to sleep): a choice to retry or change server, not a blank window. */
+function watchConnection(win, server) {
+  let asking = false;
+  win.clientContents.on('did-fail-load', async (_event, code, description, _url, mainFrame) => {
+    if (!mainFrame || code === -3 || asking || win.isDestroyed()) return;
+    asking = true;
+    const result = await appDialog(win, { type: 'warning', title: tr('연결 끊김', 'Connection lost'),
+      message: tr('서버에 연결할 수 없습니다.', 'The server is not answering.'), detail: server + '\n' + (description || ('code ' + code)),
+      buttons: [tr('서버 변경', 'Change server'), tr('다시 시도', 'Try again')], defaultId: 1, cancelId: 1 });
+    asking = false;
+    if (win.isDestroyed()) return;
+    if (result.response === 0) openSetup();
+    else win.clientContents.reload();
+  });
+}
+
+/* ------------------------------------------------------------- tray, menus */
+function createTray() {
+  if (tray || smoke) return;
+  const icon = nativeImage.createFromPath(path.join(directory, 'icons/app.png')).resize({ width: 16, height: 16 });
+  tray = new Tray(icon);
+  tray.setToolTip('Ollama WebUI');
+  tray.setContextMenu(Menu.buildFromTemplate([
+    { label: tr('열기', 'Open'), click: reveal },
+    { label: tr('새 대화', 'New chat'), click: newChat },
+    { type: 'separator' },
+    { label: tr('서버 주소 변경', 'Change server'), click: openSetup },
+    { label: tr('업데이트 확인', 'Check for updates'), click: () => notifyUpdate(true) },
+    { type: 'separator' },
+    { label: tr('종료', 'Quit'), click: () => { quitting = true; app.quit(); } },
+  ]));
+  tray.on('click', reveal);
+}
+const GLOBAL_KEY = 'CommandOrControl+Shift+Space';
+/** Ctrl+Shift+Space from anywhere: the app comes forward, or goes back if it already is. */
+function applyGlobalShortcut() {
+  globalShortcut.unregister(GLOBAL_KEY);
+  if (!settings.globalShortcut || smoke) return true;
+  return globalShortcut.register(GLOBAL_KEY, () => {
+    const win = liveClient();
+    if (win && win.isVisible() && win.isFocused() && !win.isMinimized()) {
+      if (settings.closeToTray && tray) win.hide(); else win.minimize();
+    } else reveal();
+  });
+}
+/** Right-click on the taskbar button: a new chat straight away. */
+function setJumpList() {
+  if (process.platform !== 'win32' || smoke) return;
+  const args = (app.isPackaged ? '' : '"' + app.getAppPath() + '" ') + '--new-chat';
+  try {
+    app.setUserTasks([{ program: process.execPath, arguments: args, iconPath: process.execPath, iconIndex: 0,
+      title: tr('새 대화', 'New chat'), description: tr('Ollama WebUI에서 새 대화를 시작합니다', 'Start a new chat in Ollama WebUI') }]);
+  } catch { /* an older Windows shell */ }
+}
+function buildMenu() {
+  const client = () => liveClient()?.clientContents;
+  Menu.setApplicationMenu(Menu.buildFromTemplate([
+    { label: tr('앱', 'App'), submenu: [
+      { label: tr('새 대화', 'New chat'), click: newChat },
+      { label: tr('서버 주소 변경', 'Change server address'), click: openSetup },
+      { label: tr('업데이트 확인', 'Check for updates'), click: () => notifyUpdate(true) },
+      { label: tr('권한 초기화 / 다시 연결', 'Reset permissions / reconnect'), click: () => settings.server && connect(settings.server).catch(e => showError(tr('연결 실패', 'Connection failed'), e.message)) },
+      { type: 'separator' },
+      { label: tr('창을 닫으면 트레이로 보내기', 'Closing the window keeps it in the tray'), type: 'checkbox', checked: !!settings.closeToTray, click: item => { settings.closeToTray = item.checked; save(); } },
+      { label: tr('Ctrl+Shift+Space로 어디서나 불러오기', 'Ctrl+Shift+Space brings the app from anywhere'), type: 'checkbox', checked: settings.globalShortcut !== false, click: item => {
+        settings.globalShortcut = item.checked; save();
+        if (item.checked && !applyGlobalShortcut()) showError(tr('단축키', 'Shortcut'), tr('다른 프로그램이 Ctrl+Shift+Space를 쓰고 있어 등록하지 못했습니다.', 'Another program is using Ctrl+Shift+Space.'));
+        if (!item.checked) applyGlobalShortcut();
+      } },
+      { type: 'separator' },
+      { label: tr('종료', 'Quit'), click: () => { quitting = true; app.quit(); } },
+    ] },
+    { label: tr('편집', 'Edit'), submenu: [{ role: 'undo', label: tr('실행 취소', 'Undo') }, { role: 'redo', label: tr('다시 실행', 'Redo') }, { type: 'separator' }, { role: 'cut', label: tr('잘라내기', 'Cut') }, { role: 'copy', label: tr('복사', 'Copy') }, { role: 'paste', label: tr('붙여넣기', 'Paste') }, { role: 'selectAll', label: tr('모두 선택', 'Select all') }] },
+    { label: tr('보기', 'View'), submenu: [
+      { label: tr('새로고침', 'Reload'), accelerator: 'F5', click: () => client()?.reload() },
+      { label: tr('캐시 무시하고 새로고침', 'Reload ignoring cache'), accelerator: 'CmdOrCtrl+F5', click: () => client()?.reloadIgnoringCache() },
+      { type: 'separator' },
+      // The page's zoom, kept per server across restarts; Ctrl+wheel too.
+      { label: tr('확대', 'Zoom in'), accelerator: 'CmdOrCtrl+=', click: () => zoomBy(1) },
+      { label: tr('축소', 'Zoom out'), accelerator: 'CmdOrCtrl+-', click: () => zoomBy(-1) },
+      { label: tr('원래 크기', 'Actual size'), accelerator: 'CmdOrCtrl+0', click: () => setZoom(1) },
+      { type: 'separator' },
+      { label: tr('항상 위에 표시', 'Always on top'), type: 'checkbox', checked: !!settings.alwaysOnTop, click: item => { settings.alwaysOnTop = item.checked; liveClient()?.setAlwaysOnTop(item.checked); save(); } },
+      { label: tr('전체 화면', 'Full screen'), accelerator: 'F11', click: () => { const w = liveClient(); if (w) w.setFullScreen(!w.isFullScreen()); } },
+    ] },
+  ]));
+}
+
 if (!app.requestSingleInstanceLock()) app.quit();
 else {
   /* Started again while running: bring the open window back, even from
-     minimized or hidden, rather than seeming to do nothing. */
-  app.on('second-instance', () => {
-    const win = [clientWindow, setupWindow].find(w => w && !w.isDestroyed());
-    if (!win) { if (app.isReady()) openSetup(); return; }
-    if (win.isMinimized()) win.restore();
-    if (!win.isVisible()) win.show();
-    app.focus({ steal: true });
-    win.focus();
+     minimized or hidden, rather than seeming to do nothing. From the jump
+     list it also opens a new chat. */
+  app.on('second-instance', (_event, argv) => {
+    if (argv.includes('--new-chat')) newChat(); else reveal();
   });
   app.whenReady().then(async () => {
+    setLanguage(app.getLocale());
     try { settings = { ...settings, ...JSON.parse(await readFile(configPath(), 'utf8')) }; } catch {}
+    if (!Array.isArray(settings.recent)) settings.recent = settings.server ? [settings.server] : [];
+    /* Addresses saved before only nip.io ones were taken: an IPv4 one is
+       written in the new form, anything else (a web site saved as the server)
+       is dropped, so the app opens on the address screen instead of on it. */
+    const valid = value => { try { return normalizeServer(value); } catch { return ''; } };
+    settings.recent = [...new Set(settings.recent.map(valid).filter(Boolean))];
+    if (settings.server) {
+      const migrated = valid(settings.server);
+      if (!migrated) lastFailure = { server: settings.server, message: tr('저장된 주소가 Ollama WebUI 서버 주소 형식이 아닙니다. 0.0.0.0.nip.io:0000 형식으로 다시 입력하세요.', 'The saved address is not an Ollama WebUI server address. Enter it again as 0.0.0.0.nip.io:0000.'), invalid: true };
+      settings.server = migrated;
+    }
     ipcMain.handle('connection:current', event => { if (!validSetup(event)) throw new Error('Forbidden'); return settings.server; });
     ipcMain.handle('connection:connect', (event, value) => { if (!validSetup(event) || typeof value !== 'string') throw new Error('Forbidden'); return connect(value); });
-    Menu.setApplicationMenu(Menu.buildFromTemplate([
-      { label: '앱', submenu: [{ label: '서버 주소 변경', click: openSetup }, { label: '업데이트 확인', click: () => notifyUpdate(true) }, { label: '권한 초기화 / 다시 연결', click: () => settings.server && connect(settings.server).catch(e => showError('연결 실패', e.message)) }, { type: 'separator' }, { role: 'quit', label: '종료' }] },
-      { label: '편집', submenu: [{ role: 'undo' }, { role: 'redo' }, { type: 'separator' }, { role: 'cut' }, { role: 'copy' }, { role: 'paste' }, { role: 'selectAll' }] },
-      { label: '보기', submenu: [{ label: '새로고침', accelerator: 'F5', click: () => clientWindow?.clientContents?.reload() }, { label: '캐시 무시하고 새로고침', accelerator: 'CmdOrCtrl+F5', click: () => clientWindow?.clientContents?.reloadIgnoringCache() }, { role: 'resetZoom' }, { role: 'zoomIn' }, { role: 'zoomOut' }, { role: 'togglefullscreen' }] },
-    ]));
-    if (settings.server && !process.argv.includes('--native-smoke')) {
+    ipcMain.handle('connection:recent', event => { if (!validSetup(event)) throw new Error('Forbidden'); return settings.recent; });
+    ipcMain.handle('connection:failure', event => { if (!validSetup(event)) throw new Error('Forbidden'); return lastFailure; });
+    ipcMain.handle('connection:forget', (event, value) => {
+      if (!validSetup(event) || typeof value !== 'string') throw new Error('Forbidden');
+      settings.recent = forgetRecent(settings.recent, value); save(); return settings.recent;
+    });
+    // What the page asks of the app (client-preload.cjs).
+    ipcMain.handle('client:changeServer', event => { if (!validClient(event)) throw new Error('Forbidden'); openSetup(); return true; });
+    ipcMain.handle('client:checkUpdates', event => { if (!validClient(event)) throw new Error('Forbidden'); notifyUpdate(true); return true; });
+    ipcMain.on('client:busy', (event, value) => { if (validClient(event)) setBusy(!!value); });
+    buildMenu();
+    createTray();
+    applyGlobalShortcut();
+    setJumpList();
+    if (settings.server && !smoke) {
       try { await connect(settings.server); }
-      catch (error) { openSetup(); showError('연결 실패', error.message); }
+      catch { openSetup(); }
     } else openSetup();
     void notifyUpdate();
-    const smoke = process.argv.find(v => v.startsWith('--smoke-server='));
-    if (process.argv.includes('--native-smoke') && smoke) connect(smoke.slice(15)).catch(error => { console.error(error); app.exit(1); });
+    const smokeServer = process.argv.find(v => v.startsWith('--smoke-server='));
+    if (smoke && smokeServer) connect(smokeServer.slice(15)).catch(error => { console.error(error); app.exit(1); });
   });
   app.on('window-all-closed', () => { if (!connecting) app.quit(); });
-  app.on('before-quit', () => gateway?.close());
+  app.on('before-quit', () => { quitting = true; gateway?.close(); });
+  app.on('will-quit', () => globalShortcut.unregisterAll());
 }

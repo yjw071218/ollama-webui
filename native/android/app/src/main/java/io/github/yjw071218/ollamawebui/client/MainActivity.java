@@ -4,9 +4,15 @@ import android.Manifest;
 import android.app.*;
 import android.content.*;
 import android.content.pm.PackageManager;
+import android.content.res.Configuration;
+import android.database.Cursor;
 import android.graphics.Color;
+import android.net.ConnectivityManager;
+import android.net.Network;
 import android.net.Uri;
 import android.os.*;
+import android.provider.MediaStore;
+import android.provider.OpenableColumns;
 import android.view.*;
 import android.webkit.*;
 import android.webkit.CookieManager;
@@ -28,42 +34,71 @@ public class MainActivity extends Activity {
     private android.content.SharedPreferences prefs;
     private final ExecutorService io = Executors.newCachedThreadPool();
     private ValueCallback<Uri[]> fileResult;
+    private WebChromeClient.FileChooserParams fileParams;
+    private Uri cameraOutput;
     private PermissionRequest mediaRequest;
     private String[] requestedResources;
     private Runnable permissionDone;
     private JavaScriptReplyProxy captureReply, saveReply;
     private String captureId, saveId, downloadURL;
     private byte[] saveBytes;
-    private boolean connecting, notificationAllowed, pageReady;
+    private boolean connecting, notificationAllowed, pageReady, onSetup;
     /** The chat a tapped notification is about, until the page can be told. */
     private String pendingChat;
-    private static final int MEDIA = 41, FILE = 42, SAVE = 43, CAPTURE = 44, NOTIFY = 45, AUTH = 46;
+    /** What the page is asked to do once it is there: a new chat, a share (src/nativeEvents.js). */
+    private final List<String> pendingActions = new ArrayList<>();
+    private ConnectivityManager.NetworkCallback network;
+    private static final int MEDIA = 41, FILE = 42, SAVE = 43, CAPTURE = 44, NOTIFY = 45, AUTH = 46, CAMERA_FOR_FILE = 47;
     private static final String EXTRA_CHAT = "chat";
+    static final String ACTION_NEW_CHAT = "io.github.yjw071218.ollamawebui.client.NEW_CHAT";
+    /** A share from another app: 20 MB a file, 25 MB in all, ten files. */
+    private static final int SHARE_FILE_MAX = 20 * 1024 * 1024, SHARE_TOTAL_MAX = 25 * 1024 * 1024, SHARE_FILES_MAX = 10;
+    private static final int RECENT_MAX = 6;
     private int dp(int n) { return (int) (getResources().getDisplayMetrics().density * n); }
 
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences("connection", MODE_PRIVATE);
-        if (state == null) takeChat(getIntent());
+        if (state == null) takeIntent(getIntent());
         getWindow().setStatusBarColor(Color.rgb(17, 24, 39));
         getWindow().setNavigationBarColor(Color.rgb(17, 24, 39));
         // The address screen is for choosing a server, not a gate on every launch:
         // a saved server is opened directly, and "서버 변경" brings the screen back.
+        String rejected = migrateSaved();
         String saved = prefs.getString("server", "");
-        if (saved.isEmpty()) showSetup();
+        if (saved.isEmpty()) { showSetup(); if (rejected != null) message(rejected); }
         else { showSplash(); connect(saved, null); }
+        watchNetwork();
         clearOldUpdates();
         checkUpdates(false);
     }
+    /* ------------------------------------------------------------ palette */
+    /** The phone's own light or dark, for the screens the app draws itself. */
+    private boolean night() {
+        return (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+    }
+    private int bg() { return night() ? Color.rgb(26, 25, 22) : Color.rgb(250, 249, 245); }
+    private int ink() { return night() ? Color.rgb(238, 233, 224) : Color.rgb(36, 33, 29); }
+    private int muted() { return night() ? Color.rgb(185, 179, 167) : Color.rgb(107, 100, 90); }
+    private int field() { return night() ? Color.rgb(41, 38, 32) : Color.WHITE; }
+    private int stroke() { return night() ? Color.rgb(81, 74, 64) : Color.rgb(217, 211, 199); }
+    private int warn() { return night() ? Color.rgb(232, 196, 120) : Color.rgb(154, 106, 18); }
+    @Override public void onConfigurationChanged(Configuration config) {
+        super.onConfigurationChanged(config);
+        // The address screen follows a theme switch made while it is open.
+        if (onSetup && web == null && !connecting) showSetup();
+    }
+
     /** Shown for the moment it takes to open the saved server. */
     private void showSplash() {
+        onSetup = false;
         int color = prefs.getInt("chrome", Color.rgb(26, 25, 22));
         layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
         layout.setGravity(Gravity.CENTER);
         setContentView(layout);
         applyChrome(color);
         layout.addView(new ProgressBar(this));
-        TextView text = label("연결 중…", 15); text.setGravity(Gravity.CENTER);
+        TextView text = label(L.t("연결 중…", "Connecting…"), 15); text.setGravity(Gravity.CENTER);
         text.setTextColor(luminance(color) > 0.6 ? Color.rgb(60, 60, 60) : Color.rgb(220, 220, 220));
         layout.addView(text);
     }
@@ -84,7 +119,7 @@ public class MainActivity extends Activity {
         intent.putExtra("android.support.customtabs.extra.TITLE_VISIBILITY", 1);
         intent.putExtra("androidx.browser.customtabs.extra.INITIAL_ACTIVITY_HEIGHT_PX", (int) (getResources().getDisplayMetrics().heightPixels * 0.88));
         try { startActivityForResult(intent, AUTH); }
-        catch (ActivityNotFoundException e) { message("로그인할 브라우저가 없습니다."); }
+        catch (ActivityNotFoundException e) { message(L.t("로그인할 브라우저가 없습니다.", "There is no browser to sign in with.")); }
     }
     /**
      * Google's account chooser opened directly in the Custom Tab, answered on
@@ -110,7 +145,20 @@ public class MainActivity extends Activity {
         // ollamawebui://auth is only a "come back" signal from the sign-in page; it carries nothing.
         if (intent != null && Intent.ACTION_VIEW.equals(intent.getAction()) && intent.getData() != null
             && "ollamawebui".equals(intent.getData().getScheme())) nudgeAuth();
+        takeIntent(intent);
+    }
+    /** What an intent asks for: a notification's chat, a new chat (launcher shortcut), or a share. */
+    private void takeIntent(Intent intent) {
+        if (intent == null) return;
         if (takeChat(intent)) deliverChat();
+        String action = intent.getAction();
+        if (ACTION_NEW_CHAT.equals(action)) {
+            intent.setAction(Intent.ACTION_MAIN);
+            queueAction("{\"type\":\"new-chat\"}");
+        } else if (Intent.ACTION_SEND.equals(action) || Intent.ACTION_SEND_MULTIPLE.equals(action)) {
+            intent.setAction(Intent.ACTION_MAIN);
+            takeShare(intent);
+        }
     }
     /** A notification's chat, held until the page is there to open it. */
     private boolean takeChat(Intent intent) {
@@ -124,9 +172,69 @@ public class MainActivity extends Activity {
         String chat = JSONObject.quote(pendingChat); pendingChat = null;
         web.evaluateJavascript("window.__ollamaOpenChat=" + chat + ";window.dispatchEvent(new CustomEvent('ollama-native-open-chat',{detail:{chat:" + chat + "}}))", null);
     }
-    /** Dialogs in the page's own light or dark, not the system default. */
+    private void queueAction(String json) { pendingActions.add(json); deliverActions(); }
+    /** Hand the page what it was asked to do, through the queue it reads (src/nativeEvents.js). */
+    private void deliverActions() {
+        if (pendingActions.isEmpty() || web == null || !pageReady || !local(web.getUrl())) return;
+        for (String json : pendingActions)
+            web.evaluateJavascript("(window.__ollamaNative=window.__ollamaNative||[]).push(" + json + ");window.dispatchEvent(new Event('ollama-native-action'))", null);
+        pendingActions.clear();
+    }
+    /**
+     * Text, pictures and documents shared from another app, read off the main
+     * thread and attached to the composer. Kept until a server's page is open
+     * -- a first launch shares into the address screen, then into the page.
+     */
+    private void takeShare(Intent intent) {
+        String text = intent.getStringExtra(Intent.EXTRA_TEXT);
+        String subject = intent.getStringExtra(Intent.EXTRA_SUBJECT);
+        List<Uri> uris = new ArrayList<>();
+        if (Intent.ACTION_SEND_MULTIPLE.equals(intent.getAction())) {
+            ArrayList<Uri> many = intent.getParcelableArrayListExtra(Intent.EXTRA_STREAM);
+            if (many != null) uris.addAll(many);
+        } else {
+            Uri one = intent.getParcelableExtra(Intent.EXTRA_STREAM);
+            if (one != null) uris.add(one);
+        }
+        String fallbackType = intent.getType();
+        io.execute(() -> {
+            try {
+                JSONObject share = new JSONObject().put("type", "share");
+                String body = text != null && !text.trim().isEmpty() ? text : (subject != null ? subject : "");
+                share.put("text", body);
+                JSONArray files = new JSONArray();
+                long total = 0; int skipped = 0;
+                for (Uri uri : uris) {
+                    if (files.length() >= SHARE_FILES_MAX) { skipped++; continue; }
+                    String name = "shared", type = getContentResolver().getType(uri);
+                    try (Cursor c = getContentResolver().query(uri, new String[]{OpenableColumns.DISPLAY_NAME}, null, null, null)) {
+                        if (c != null && c.moveToFirst() && !c.isNull(0)) name = c.getString(0);
+                    } catch (Exception ignored) { }
+                    byte[] bytes;
+                    try (InputStream in = getContentResolver().openInputStream(uri)) {
+                        if (in == null) { skipped++; continue; }
+                        bytes = readBytes(in, SHARE_FILE_MAX);
+                    } catch (IOException tooBig) { skipped++; continue; }
+                    if (total + bytes.length > SHARE_TOTAL_MAX) { skipped++; continue; }
+                    total += bytes.length;
+                    files.put(new JSONObject().put("name", name)
+                        .put("type", type != null ? type : (fallbackType != null && !fallbackType.contains("*") ? fallbackType : "application/octet-stream"))
+                        .put("data", android.util.Base64.encodeToString(bytes, android.util.Base64.NO_WRAP)));
+                }
+                share.put("files", files);
+                final int left = skipped;
+                runOnUiThread(() -> {
+                    if (files.length() > 0 || !body.isEmpty()) queueAction(share.toString());
+                    if (left > 0) Toast.makeText(this, L.t("파일 " + left + "개는 너무 크거나 읽을 수 없어 빠졌습니다 (파일당 20 MB).", left + " file(s) were too large or unreadable and were left out (20 MB each)."), Toast.LENGTH_LONG).show();
+                    if (web == null && !connecting && prefs.getString("server", "").isEmpty())
+                        Toast.makeText(this, L.t("서버에 연결하면 공유한 내용이 입력창에 첨부됩니다.", "Connect to a server and what you shared is attached to the message box."), Toast.LENGTH_LONG).show();
+                });
+            } catch (Exception e) { runOnUiThread(() -> message(L.t("공유한 내용을 읽지 못했습니다: ", "Could not read what was shared: ") + e.getMessage())); }
+        });
+    }
+    /** Dialogs in the page's own light or dark (the phone's, on the address screen). */
     private AlertDialog.Builder dialog() {
-        boolean light = luminance(prefs.getInt("chrome", Color.rgb(26, 25, 22))) > 0.6 && web != null;
+        boolean light = web != null ? luminance(prefs.getInt("chrome", Color.rgb(26, 25, 22))) > 0.6 : !night();
         return new AlertDialog.Builder(this, light ? android.R.style.Theme_DeviceDefault_Light_Dialog_Alert : android.R.style.Theme_DeviceDefault_Dialog_Alert);
     }
     /** System bars, display cutout and keyboard, on every side (landscape puts them left or right). */
@@ -143,6 +251,26 @@ public class MainActivity extends Activity {
         NotificationManager manager = getSystemService(NotificationManager.class);
         return manager == null || manager.areNotificationsEnabled();
     }
+    /**
+     * The network coming back reloads a page that could not reach the server
+     * (LoopbackProxy's offline page marks itself), so Wi-Fi rejoining needs
+     * no tap. The WebView is also told, for the page's own online/offline.
+     */
+    private void watchNetwork() {
+        ConnectivityManager manager = getSystemService(ConnectivityManager.class);
+        if (manager == null) return;
+        network = new ConnectivityManager.NetworkCallback() {
+            @Override public void onAvailable(Network n) {
+                runOnUiThread(() -> {
+                    if (web == null) return;
+                    web.setNetworkAvailable(true);
+                    web.evaluateJavascript("window.__ollamaOffline&&location.reload()", null);
+                });
+            }
+            @Override public void onLost(Network n) { runOnUiThread(() -> { if (web != null) web.setNetworkAvailable(false); }); }
+        };
+        try { manager.registerDefaultNetworkCallback(network); } catch (Exception e) { network = null; }
+    }
     private UpdateDialog updateDialog;
     /** Check GitHub; on news, the in-app update screen (UpdateDialog) downloads and installs it. */
     private void checkUpdates(boolean manual) {
@@ -153,12 +281,12 @@ public class MainActivity extends Activity {
                 ReleaseUpdates.Update update = ReleaseUpdates.check(current);
                 runOnUiThread(() -> {
                     if (isFinishing() || isDestroyed()) return;
-                    if (update == null) { if (manual) message("최신 버전(" + current + ")을 사용 중입니다."); return; }
+                    if (update == null) { if (manual) message(L.t("최신 버전(" + current + ")을 사용 중입니다.", "You have the latest version (" + current + ").")); return; }
                     if (!manual && update.version.equals(prefs.getString("skippedUpdate", ""))) return;
                     updateDialog = new UpdateDialog(this, io, update, current);
                     updateDialog.show();
                 });
-            } catch (Exception e) { if (manual) runOnUiThread(() -> message("업데이트 확인에 실패했습니다. 네트워크 연결 또는 GitHub 요청 제한을 확인하세요.")); }
+            } catch (Exception e) { if (manual) runOnUiThread(() -> message(L.t("업데이트 확인에 실패했습니다. 네트워크 연결 또는 GitHub 요청 제한을 확인하세요.", "Could not check for updates. Check the network, or the GitHub request limit."))); }
         });
     }
     /** Installer files from an earlier update are not needed once this version runs. */
@@ -168,11 +296,62 @@ public class MainActivity extends Activity {
             if (old != null) for (File f : old) f.delete();
         });
     }
+    /**
+     * Addresses saved before only <IPv4>.nip.io:<port> was taken
+     * (LoopbackProxy.normalize). An IPv4 one is written in the new form and
+     * keeps its app port -- and so its sign-in and data, which belong to that
+     * port's origin. Anything else (a web site saved as the server) is
+     * dropped: the app opens on the address screen, saying why, instead of
+     * on that site with no way back. Returns that sentence, or null.
+     */
+    private String migrateSaved() {
+        String saved = prefs.getString("server", "");
+        SharedPreferences.Editor edit = prefs.edit();
+        String rejected = null;
+        if (!saved.isEmpty()) {
+            try {
+                String server = LoopbackProxy.normalize(saved);
+                if (!server.equals(saved)) {
+                    edit.putString("server", server);
+                    int port = prefs.getInt("port:" + saved, 0);
+                    if (port != 0 && !prefs.contains("port:" + server)) edit.putInt("port:" + server, port);
+                }
+            } catch (Exception e) {
+                edit.remove("server");
+                rejected = saved + "\n" + L.t("저장된 주소가 Ollama WebUI 서버 주소 형식이 아니어서 지웠습니다. 0.0.0.0.nip.io:0000 형식으로 다시 입력하세요.",
+                    "The saved address is not an Ollama WebUI server address and was removed. Enter it again as 0.0.0.0.nip.io:0000.");
+            }
+        }
+        List<String> list = new ArrayList<>();
+        try { JSONArray a = new JSONArray(prefs.getString("recent", "[]")); for (int i = 0; i < a.length(); i++) {
+            try { String s = LoopbackProxy.normalize(a.getString(i)); if (!list.contains(s)) list.add(s); } catch (Exception ignored) { }
+        } } catch (Exception ignored) { }
+        edit.putString("recent", new JSONArray(list).toString()).apply();
+        return rejected;
+    }
+    /* ----------------------------------------------------- recent servers */
+    private List<String> recent() {
+        List<String> list = new ArrayList<>();
+        try { JSONArray a = new JSONArray(prefs.getString("recent", "[]")); for (int i = 0; i < a.length(); i++) list.add(a.getString(i)); }
+        catch (Exception ignored) { }
+        String saved = prefs.getString("server", "");
+        if (list.isEmpty() && !saved.isEmpty()) list.add(saved);
+        return list;
+    }
+    private void saveRecent(List<String> list) { prefs.edit().putString("recent", new JSONArray(list).toString()).apply(); }
+    private void rememberRecent(String server) {
+        List<String> list = recent(); list.remove(server); list.add(0, server);
+        while (list.size() > RECENT_MAX) list.remove(list.size() - 1);
+        saveRecent(list);
+    }
+
     private void showSetup() {
+        onSetup = true;
         denyMedia();
+        getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
         if (fileResult != null) { fileResult.onReceiveValue(null); fileResult = null; }
         stopService(new Intent(this, CaptureService.class));
-        if (captureReply != null) { reply(captureReply, captureId, null, "연결을 종료했습니다."); captureReply = null; }
+        if (captureReply != null) { reply(captureReply, captureId, null, L.t("연결을 종료했습니다.", "Disconnected.")); captureReply = null; }
         if (web != null) { web.loadUrl("about:blank"); web.destroy(); web = null; }
         if (proxy != null) { proxy.close(); proxy = null; }
         notificationAllowed = false;
@@ -181,7 +360,7 @@ public class MainActivity extends Activity {
         ScrollView scroll = new ScrollView(this); scroll.setFillViewport(true);
         scroll.addView(layout);
         setContentView(scroll);
-        int background = Color.rgb(26, 25, 22);
+        int background = bg();
         scroll.setBackgroundColor(background);
         applyChrome(background);
         scroll.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -190,25 +369,52 @@ public class MainActivity extends Activity {
             return insets;
         });
         TextView title = label("Ollama WebUI", 28); title.setTypeface(android.graphics.Typeface.DEFAULT_BOLD); layout.addView(title);
-        TextView intro = label("연결할 서버 주소를 입력하세요. PC에서 서버를 켰을 때 표시되는 주소입니다.", 15);
-        intro.setTextColor(Color.rgb(185, 179, 167)); layout.addView(intro);
+        TextView intro = label(L.t("연결할 서버 주소를 입력하세요. PC에서 서버를 켰을 때 표시되는 주소입니다.", "Enter the server's address -- the one shown when the server starts on your PC."), 15);
+        intro.setTextColor(muted()); layout.addView(intro);
         EditText address = new EditText(this); address.setSingleLine(true);
-        address.setTextColor(Color.rgb(238, 233, 224)); address.setHintTextColor(Color.rgb(120, 114, 104));
+        address.setTextColor(ink()); address.setHintTextColor(night() ? Color.rgb(120, 114, 104) : Color.rgb(163, 154, 139));
         address.setInputType(android.text.InputType.TYPE_CLASS_TEXT | android.text.InputType.TYPE_TEXT_VARIATION_URI);
         address.setImeOptions(android.view.inputmethod.EditorInfo.IME_ACTION_GO);
-        address.setHint("예: 192.168.0.5:5173");
-        address.setBackground(rounded(Color.rgb(41, 38, 32), 12, Color.rgb(81, 74, 64)));
+        address.setHint(L.t("예: ", "e.g. ") + LoopbackProxy.EXAMPLE);
+        address.setBackground(rounded(field(), 12, stroke()));
         address.setPadding(dp(14), dp(12), dp(14), dp(12));
         address.setText(prefs.getString("server", ""));
-        LinearLayout.LayoutParams field = new LinearLayout.LayoutParams(-1, -2); field.topMargin = dp(8); field.bottomMargin = dp(4);
-        layout.addView(address, field);
-        TextView warning = label("http://로 연결하면 내용이 암호화되지 않습니다. 집 밖에서 쓰거나 비밀번호를 보호하려면 https://를 쓰세요. 신뢰하는 서버에만 연결하세요.\n\n서버를 바꾸면 로그인 정보가 지워지고, 서버마다 앱 데이터가 따로 저장됩니다.", 13);
-        warning.setTextColor(Color.rgb(232, 196, 120)); layout.addView(warning);
-        Button connect = button("연결하기", true);
+        LinearLayout.LayoutParams fieldParams = new LinearLayout.LayoutParams(-1, -2); fieldParams.topMargin = dp(8); fieldParams.bottomMargin = dp(4);
+        layout.addView(address, fieldParams);
+        TextView form = label(L.t("0.0.0.0.nip.io:0000 형식으로 입력하세요. IP만 입력하면(192.168.0.5:5173) 자동으로 바꿔 줍니다.",
+            "Enter it as 0.0.0.0.nip.io:0000. An IP address alone (192.168.0.5:5173) is written that way for you."), 13);
+        form.setTextColor(muted()); form.setPadding(0, 0, 0, dp(4)); layout.addView(form);
+        TextView warning = label(L.t("http://로 연결하면 내용이 암호화되지 않습니다. 집 밖에서 쓰거나 비밀번호를 보호하려면 https://를 쓰세요. 신뢰하는 서버에만 연결하세요.\n\n서버를 바꾸면 로그인 정보가 지워지고, 서버마다 앱 데이터가 따로 저장됩니다.",
+            "Over http:// nothing is encrypted. Use https:// away from home or to protect passwords, and connect only to servers you trust.\n\nChanging server signs you out, and each server keeps its own app data."), 13);
+        warning.setTextColor(warn()); layout.addView(warning);
+        Button connect = button(L.t("연결하기", "Connect"), true);
         LinearLayout.LayoutParams primary = new LinearLayout.LayoutParams(-1, dp(50)); primary.topMargin = dp(8);
         layout.addView(connect, primary);
-        Button updates = button("업데이트 확인", false);
-        LinearLayout.LayoutParams secondary = new LinearLayout.LayoutParams(-1, dp(46)); secondary.topMargin = dp(10);
+        // Servers used before, newest first: a tap connects, a long press removes.
+        List<String> servers = recent();
+        if (!servers.isEmpty()) {
+            TextView heading = label(L.t("최근 연결한 서버", "Recent servers"), 13);
+            heading.setTextColor(muted()); heading.setPadding(0, dp(18), 0, dp(4)); layout.addView(heading);
+            for (String server : servers) {
+                Button item = button(server, false);
+                item.setGravity(Gravity.START | Gravity.CENTER_VERTICAL); item.setPadding(dp(14), 0, dp(14), 0);
+                item.setTypeface(android.graphics.Typeface.MONOSPACE); item.setTextSize(14);
+                item.setSingleLine(true); item.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                item.setOnClickListener(v -> { address.setText(server); connect.performClick(); });
+                item.setOnLongClickListener(v -> {
+                    dialog().setTitle(L.t("목록에서 지우기", "Remove from the list")).setMessage(server)
+                        .setNegativeButton(L.t("취소", "Cancel"), null)
+                        .setPositiveButton(L.t("지우기", "Remove"), (d, w) -> { List<String> list = recent(); list.remove(server); saveRecent(list); showSetup(); }).show();
+                    return true;
+                });
+                LinearLayout.LayoutParams p = new LinearLayout.LayoutParams(-1, dp(46)); p.topMargin = dp(6);
+                layout.addView(item, p);
+            }
+            TextView tip = label(L.t("길게 누르면 목록에서 지웁니다.", "Press and hold to remove one."), 12);
+            tip.setTextColor(muted()); tip.setPadding(0, dp(6), 0, 0); layout.addView(tip);
+        }
+        Button updates = button(L.t("업데이트 확인", "Check for updates"), false);
+        LinearLayout.LayoutParams secondary = new LinearLayout.LayoutParams(-1, dp(46)); secondary.topMargin = dp(18);
         layout.addView(updates, secondary);
         updates.setOnClickListener(v -> checkUpdates(true));
         address.setOnEditorActionListener((v, action, event) -> {
@@ -221,15 +427,15 @@ public class MainActivity extends Activity {
             try {
                 String server = LoopbackProxy.normalize(address.getText().toString());
                 address.setText(server);
-                if (server.startsWith("http:")) dialog().setTitle("암호화되지 않은 연결")
-                    .setMessage(server + "\n신뢰하는 서버인지 확인하세요. HTTP는 도청·변조 위험이 있습니다.")
-                    .setNegativeButton("취소", null).setPositiveButton("연결", (d,w) -> connect(server, connect)).show();
+                if (server.startsWith("http:")) dialog().setTitle(L.t("암호화되지 않은 연결", "Unencrypted connection"))
+                    .setMessage(server + "\n" + L.t("신뢰하는 서버인지 확인하세요. HTTP는 도청·변조 위험이 있습니다.", "Make sure you trust this server. HTTP can be read and altered on the way."))
+                    .setNegativeButton(L.t("취소", "Cancel"), null).setPositiveButton(L.t("연결", "Connect"), (d,w) -> connect(server, connect)).show();
                 else connect(server, connect);
             } catch (Exception e) { address.setError(e.getMessage()); }
         });
     }
     private TextView label(String text, int size) {
-        TextView view = new TextView(this); view.setText(text); view.setTextSize(size); view.setTextColor(Color.WHITE);
+        TextView view = new TextView(this); view.setText(text); view.setTextSize(size); view.setTextColor(onSetup ? ink() : Color.WHITE);
         view.setPadding(0, dp(12), 0, dp(12)); return view;
     }
     private android.graphics.drawable.GradientDrawable rounded(int color, int radius, int stroke) {
@@ -242,16 +448,22 @@ public class MainActivity extends Activity {
     private Button button(String text, boolean primary) {
         Button b = new Button(this); b.setText(text); b.setAllCaps(false); b.setTextSize(15);
         b.setStateListAnimator(null);
-        b.setBackground(primary ? rounded(Color.rgb(217, 119, 87), 12, 0) : rounded(Color.rgb(41, 38, 32), 12, Color.rgb(81, 74, 64)));
-        b.setTextColor(primary ? Color.WHITE : Color.rgb(238, 233, 224));
+        b.setBackground(primary ? rounded(Color.rgb(217, 119, 87), 12, 0) : rounded(field(), 12, stroke()));
+        b.setTextColor(primary ? Color.WHITE : ink());
         if (primary) b.setTypeface(android.graphics.Typeface.DEFAULT_BOLD);
         return b;
     }
     private void connect(String server, Button button) {
         connecting = true;
-        if (button != null) { button.setEnabled(false); button.setText("연결 중…"); }
+        if (button != null) { button.setEnabled(false); button.setText(L.t("연결 중…", "Connecting…")); }
         io.execute(() -> {
             try {
+                /* Is it an Ollama WebUI server? Asked before anything is opened or
+                   saved. A saved server that does not answer is still opened: the
+                   page that says so retries by itself (LoopbackProxy). */
+                try { LoopbackProxy.probe(server); }
+                catch (LoopbackProxy.NotServerException notServer) { throw notServer; }
+                catch (IOException unreachable) { if (button != null) throw new IOException(L.t("서버에 연결할 수 없습니다. 주소와 서버 실행 상태를 확인하세요.", "The server is not answering. Check the address and that the server is running."), unreachable); }
                 int port = prefs.getInt("port:" + server, 0);
                 LoopbackProxy candidate = new LoopbackProxy(server, port);
                 if (port == 0) {
@@ -260,7 +472,7 @@ public class MainActivity extends Activity {
                         if (entry.getKey().startsWith("port:") && entry.getValue() instanceof Integer) used.add((Integer) entry.getValue());
                     for (int attempt = 0; used.contains(candidate.port()); attempt++) {
                         candidate.close();
-                        if (attempt > 50) throw new IOException("사용할 앱 포트가 없습니다.");
+                        if (attempt > 50) throw new IOException(L.t("사용할 앱 포트가 없습니다.", "No free port for the app."));
                         candidate = new LoopbackProxy(server, 0);
                     }
                 }
@@ -270,10 +482,11 @@ public class MainActivity extends Activity {
                     proxy = ready;
                     Runnable open = () -> {
                         prefs.edit().putString("server", server).putInt("port:" + server, ready.port()).apply();
+                        rememberRecent(server);
                         CookieManager cm = CookieManager.getInstance();
                         cm.setCookie(ready.origin, LoopbackProxy.COOKIE + "=" + ready.token + "; Path=/; HttpOnly; SameSite=Strict", ok -> {
                             connecting = false;
-                            if (!ok) { showSetup(); message("앱 연결 쿠키를 설정하지 못했습니다."); return; }
+                            if (!ok) { showSetup(); message(L.t("앱 연결 쿠키를 설정하지 못했습니다.", "Could not set the app's connection cookie.")); return; }
                             cm.flush(); showWeb(server);
                         });
                     };
@@ -283,8 +496,10 @@ public class MainActivity extends Activity {
                 });
             } catch (Exception e) {
                 runOnUiThread(() -> { connecting = false;
-                    if (button != null) { button.setEnabled(true); button.setText("연결하기"); } else showSetup();
-                    message(e instanceof BindException ? "저장된 앱 포트가 사용 중입니다. 앱을 완전히 종료하고 다시 열어 주세요." : "연결 준비 실패: " + e.getMessage()); });
+                    if (button != null) { button.setEnabled(true); button.setText(L.t("연결하기", "Connect")); } else showSetup();
+                    message(e instanceof BindException ? L.t("저장된 앱 포트가 사용 중입니다. 앱을 완전히 종료하고 다시 열어 주세요.", "The app's saved port is in use. Close the app completely and open it again.")
+                        : e instanceof LoopbackProxy.NotServerException || e.getCause() != null ? server + "\n" + e.getMessage()
+                        : L.t("연결 준비 실패: ", "Could not prepare the connection: ") + e.getMessage()); });
             }
         });
     }
@@ -307,12 +522,13 @@ public class MainActivity extends Activity {
         decor.setSystemUiVisibility(flags);
     }
     private void confirmChangeServer(Runnable cancelled) {
-        dialog().setTitle("서버 변경").setMessage("현재 연결과 진행 중인 녹음·화면 캡처를 종료하고 서버 주소 화면으로 이동할까요?")
-            .setNegativeButton("취소", (d,w) -> { if (cancelled != null) cancelled.run(); })
+        dialog().setTitle(L.t("서버 변경", "Change server")).setMessage(L.t("현재 연결과 진행 중인 녹음·화면 캡처를 종료하고 서버 주소 화면으로 이동할까요?", "End this connection, and any recording or screen capture, and go to the server address screen?"))
+            .setNegativeButton(L.t("취소", "Cancel"), (d,w) -> { if (cancelled != null) cancelled.run(); })
             .setOnCancelListener(d -> { if (cancelled != null) cancelled.run(); })
-            .setPositiveButton("변경", (d,w) -> { stopService(new Intent(this, CaptureService.class)); showSetup(); }).show();
+            .setPositiveButton(L.t("변경", "Change"), (d,w) -> { stopService(new Intent(this, CaptureService.class)); showSetup(); }).show();
     }
     private void showWeb(String server) {
+        onSetup = false;
         layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
         setContentView(layout);
         layout.setOnApplyWindowInsetsListener((v, insets) -> {
@@ -352,24 +568,25 @@ public class MainActivity extends Activity {
                 if (url.startsWith(server + "/") || url.equals(server)) { view.loadUrl(proxy.origin + url.substring(server.length())); return true; }
                 if ("intent".equals(request.getUrl().getScheme())) return true;
                 if ("http".equals(request.getUrl().getScheme()) || "https".equals(request.getUrl().getScheme()))
-                    dialog().setTitle("외부 링크").setMessage(url).setNegativeButton("취소", null)
-                        .setPositiveButton("브라우저로 열기", (d,w) -> { try { startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl())); } catch (Exception e) { message("링크를 열 앱이 없습니다."); } }).show();
+                    dialog().setTitle(L.t("외부 링크", "External link")).setMessage(url).setNegativeButton(L.t("취소", "Cancel"), null)
+                        .setPositiveButton(L.t("브라우저로 열기", "Open in browser"), (d,w) -> { try { startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl())); } catch (Exception e) { message(L.t("링크를 열 앱이 없습니다.", "There is no app to open the link.")); } }).show();
                 return true;
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) { pageReady = false; }
             @Override public void onPageFinished(WebView view, String url) {
                 pageReady = local(url);
                 deliverChat();
+                deliverActions();
             }
             @Override public void onReceivedError(WebView view, WebResourceRequest request, WebResourceError error) {
                 if (!request.isForMainFrame() || isFinishing() || isDestroyed()) return;
-                dialog().setTitle("연결 실패").setMessage(server + "\n" + error.getDescription())
+                dialog().setTitle(L.t("연결 실패", "Connection failed")).setMessage(server + "\n" + error.getDescription())
                     .setCancelable(false)
-                    .setNegativeButton("서버 변경", (d,w) -> { stopService(new Intent(MainActivity.this, CaptureService.class)); showSetup(); })
-                    .setPositiveButton("다시 시도", (d,w) -> { if (web != null) web.reload(); }).show();
+                    .setNegativeButton(L.t("서버 변경", "Change server"), (d,w) -> { stopService(new Intent(MainActivity.this, CaptureService.class)); showSetup(); })
+                    .setPositiveButton(L.t("다시 시도", "Try again"), (d,w) -> { if (web != null) web.reload(); }).show();
             }
             @Override public void onReceivedSslError(WebView view, android.webkit.SslErrorHandler handler, android.net.http.SslError error) {
-                handler.cancel(); message("서버 인증서를 확인할 수 없습니다. 인증서 검증을 우회하지 않습니다.");
+                handler.cancel(); message(L.t("서버 인증서를 확인할 수 없습니다. 인증서 검증을 우회하지 않습니다.", "The server's certificate could not be verified. The check is not bypassed."));
             }
         });
         web.setWebChromeClient(new WebChromeClient() {
@@ -383,28 +600,50 @@ public class MainActivity extends Activity {
                     }
                     if (resources.isEmpty()) { request.deny(); return; }
                     mediaRequest = request; requestedResources = resources.toArray(new String[0]);
-                    dialog().setTitle("마이크 / 카메라 접근")
-                        .setMessage(server + "\n이 서버에 요청한 마이크·카메라 권한을 허용할까요?")
-                        .setNegativeButton("거부", (d,w) -> denyMedia())
+                    /* "항상 허용" is kept per server and per kind (microphone,
+                       camera): voice input used to ask on every tap. Android's
+                       own permission is still asked for, and still decides. */
+                    List<String> always = new ArrayList<>();
+                    for (String p : permissions) always.add("always:media:" + p + ":" + server);
+                    boolean remembered = true;
+                    for (String key : always) remembered &= prefs.getBoolean(key, false);
+                    String[] needed = permissions.toArray(new String[0]);
+                    if (remembered) { requestPermissions(needed, MEDIA); return; }
+                    String what = permissions.size() == 2 ? L.t("마이크·카메라", "microphone and camera")
+                        : permissions.contains(Manifest.permission.CAMERA) ? L.t("카메라", "camera") : L.t("마이크", "microphone");
+                    dialog().setTitle(L.t("마이크 / 카메라 접근", "Microphone / camera"))
+                        .setMessage(server + "\n" + L.t("이 서버가 " + what + "를 사용하도록 허용할까요?", "Let this server use the " + what + "?"))
+                        .setNegativeButton(L.t("거부", "Deny"), (d,w) -> denyMedia())
                         .setOnCancelListener(d -> denyMedia())
-                        .setPositiveButton("허용", (d,w) -> {
+                        .setNeutralButton(L.t("항상 허용", "Always allow"), (d,w) -> {
                             if (mediaRequest != request || web == null || !local(web.getUrl())) return;
-                            requestPermissions(permissions.toArray(new String[0]), MEDIA);
+                            SharedPreferences.Editor edit = prefs.edit();
+                            for (String key : always) edit.putBoolean(key, true);
+                            edit.apply();
+                            requestPermissions(needed, MEDIA);
+                        })
+                        .setPositiveButton(L.t("이번만 허용", "Allow once"), (d,w) -> {
+                            if (mediaRequest != request || web == null || !local(web.getUrl())) return;
+                            requestPermissions(needed, MEDIA);
                         }).show();
                 });
             }
             @Override public void onPermissionRequestCanceled(PermissionRequest request) { if (mediaRequest == request) mediaRequest = null; }
             @Override public boolean onShowFileChooser(WebView view, ValueCallback<Uri[]> callback, FileChooserParams parameters) {
-                if (fileResult != null) fileResult.onReceiveValue(null); fileResult = callback;
-                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);
-                intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, parameters.getMode() == FileChooserParams.MODE_OPEN_MULTIPLE);
-                String[] types = Arrays.stream(parameters.getAcceptTypes()).filter(t -> t.contains("/")).toArray(String[]::new);
-                if (types.length > 0) intent.putExtra(Intent.EXTRA_MIME_TYPES, types);
-                try { startActivityForResult(intent, FILE); } catch (Exception e) { fileResult.onReceiveValue(null); fileResult = null; }
+                if (fileResult != null) fileResult.onReceiveValue(null);
+                fileResult = callback; fileParams = parameters;
+                // A picture can be taken there and then: the camera is offered beside the files.
+                if (wantsImages(parameters) && checkSelfPermission(Manifest.permission.CAMERA) != PackageManager.PERMISSION_GRANTED
+                    && !prefs.getBoolean("cameraAsked", false)) {
+                    prefs.edit().putBoolean("cameraAsked", true).apply();
+                    requestPermissions(new String[]{Manifest.permission.CAMERA}, CAMERA_FOR_FILE);
+                    return true;
+                }
+                openFileChooser();
                 return true;
             }
             @Override public boolean onJsAlert(WebView view, String url, String text, JsResult result) {
-                dialog().setMessage(text).setPositiveButton("확인", (d,w) -> result.confirm()).setOnCancelListener(d -> result.cancel()).show(); return true;
+                dialog().setMessage(text).setPositiveButton(L.t("확인", "OK"), (d,w) -> result.confirm()).setOnCancelListener(d -> result.cancel()).show(); return true;
             }
         });
         if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER) && WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -417,14 +656,53 @@ public class MainActivity extends Activity {
                     // The page learns at once that it may notify, before its first check.
                     .replace("static permission = 'default';", "static permission = '" + (notificationAllowed ? "granted" : "default") + "';");
                 WebViewCompat.addDocumentStartJavaScript(web, js, Collections.singleton(proxy.origin));
-            } catch (Exception e) { message("앱 확장 초기화 실패: " + e.getMessage()); }
-        } else message("Android System WebView를 업데이트해야 화면 캡처·공유·알림 확장을 사용할 수 있습니다.");
+            } catch (Exception e) { message(L.t("앱 확장 초기화 실패: ", "The app extension did not start: ") + e.getMessage()); }
+        } else message(L.t("Android System WebView를 업데이트해야 화면 캡처·공유·알림 확장을 사용할 수 있습니다.", "Update Android System WebView to use screen capture, sharing and notifications."));
         web.setDownloadListener((url, agent, disposition, type, length) -> {
-            if (!local(url)) { message("외부 다운로드는 기본 브라우저에서 열어 주세요."); return; }
-            if (saveId != null || downloadURL != null) { message("다른 저장 작업이 진행 중입니다."); return; }
+            if (!local(url)) { message(L.t("외부 다운로드는 기본 브라우저에서 열어 주세요.", "Open outside downloads in your browser.")); return; }
+            if (saveId != null || downloadURL != null) { message(L.t("다른 저장 작업이 진행 중입니다.", "Another save is in progress.")); return; }
             downloadURL = url; chooseSave(URLUtil.guessFileName(url, disposition, type), type);
         });
         web.loadUrl(proxy.origin + "/");
+    }
+    /* ------------------------------------------------------- file chooser */
+    private static boolean wantsImages(WebChromeClient.FileChooserParams p) {
+        if (p == null) return false;
+        String[] types = p.getAcceptTypes();
+        if (types == null || types.length == 0) return true;
+        boolean any = false;
+        for (String t : types) {
+            if (t == null || t.trim().isEmpty()) continue;
+            any = true;
+            String v = t.trim().toLowerCase(Locale.ROOT);
+            if (v.startsWith("image/") || v.equals("*/*") || v.matches("\\.(png|jpe?g|webp|heic|gif)")) return true;
+        }
+        return !any;
+    }
+    /** Files, with the camera offered beside them when pictures are wanted and allowed. */
+    private void openFileChooser() {
+        if (fileResult == null) return;
+        WebChromeClient.FileChooserParams parameters = fileParams;
+        Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT).setType("*/*").addCategory(Intent.CATEGORY_OPENABLE);
+        intent.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, parameters != null && parameters.getMode() == WebChromeClient.FileChooserParams.MODE_OPEN_MULTIPLE);
+        String[] types = parameters == null ? new String[0] : Arrays.stream(parameters.getAcceptTypes()).filter(t -> t.contains("/")).toArray(String[]::new);
+        if (types.length > 0) intent.putExtra(Intent.EXTRA_MIME_TYPES, types);
+        Intent chooser = intent;
+        cameraOutput = null;
+        if (wantsImages(parameters) && checkSelfPermission(Manifest.permission.CAMERA) == PackageManager.PERMISSION_GRANTED) {
+            try {
+                File dir = new File(getCacheDir(), "camera"); dir.mkdirs();
+                File[] old = dir.listFiles(); if (old != null) for (File f : old) f.delete();
+                File photo = new File(dir, "photo-" + System.currentTimeMillis() + ".jpg");
+                cameraOutput = FileProvider.getUriForFile(this, getPackageName() + ".files", photo);
+                Intent camera = new Intent(MediaStore.ACTION_IMAGE_CAPTURE).putExtra(MediaStore.EXTRA_OUTPUT, cameraOutput)
+                    .addFlags(Intent.FLAG_GRANT_WRITE_URI_PERMISSION | Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                camera.setClipData(ClipData.newRawUri("photo", cameraOutput));
+                chooser = Intent.createChooser(intent, L.t("첨부할 파일 또는 사진", "Attach a file or a photo"));
+                chooser.putExtra(Intent.EXTRA_INITIAL_INTENTS, new Intent[]{camera});
+            } catch (Exception e) { cameraOutput = null; chooser = intent; }
+        }
+        try { startActivityForResult(chooser, FILE); } catch (Exception e) { fileResult.onReceiveValue(null); fileResult = null; }
     }
     private void denyMedia() { if (mediaRequest != null) { mediaRequest.deny(); mediaRequest = null; } }
     private void reply(JavaScriptReplyProxy proxy, String id, Object value, String error) {
@@ -437,12 +715,12 @@ public class MainActivity extends Activity {
     private void handle(String data, JavaScriptReplyProxy reply) {
         String id = "";
         try {
-            if (data.length() > 29000000) throw new IllegalArgumentException("파일이 너무 큽니다.");
+            if (data.length() > 29000000) throw new IllegalArgumentException(L.t("파일이 너무 큽니다.", "The file is too large."));
             JSONObject request = new JSONObject(data); id = request.getString("id");
             String method = request.getString("method"), requestId = id;
             switch (method) {
                 case "capture":
-                    if (captureReply != null) throw new IllegalStateException("화면 캡처가 이미 진행 중입니다.");
+                    if (captureReply != null) throw new IllegalStateException(L.t("화면 캡처가 이미 진행 중입니다.", "A screen capture is already running."));
                     captureReply = reply; captureId = id;
                     startActivityForResult(((MediaProjectionManager) getSystemService(MEDIA_PROJECTION_SERVICE)).createScreenCaptureIntent(), CAPTURE); break;
                 case "share":
@@ -458,9 +736,9 @@ public class MainActivity extends Activity {
                         send.setType(file.optString("type", "application/octet-stream")); send.putExtra(Intent.EXTRA_STREAM, uri);
                         send.setClipData(ClipData.newRawUri("shared", uri)); send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
                     } else send.setType("text/plain");
-                    startActivity(Intent.createChooser(send, "공유")); reply(reply, id, true, null); break;
+                    startActivity(Intent.createChooser(send, L.t("공유", "Share"))); reply(reply, id, true, null); break;
                 case "save":
-                    if (saveId != null || downloadURL != null) throw new IllegalStateException("다른 저장 작업이 진행 중입니다.");
+                    if (saveId != null || downloadURL != null) throw new IllegalStateException(L.t("다른 저장 작업이 진행 중입니다.", "Another save is in progress."));
                     saveBytes = decode(request.getString("data")); saveReply = reply; saveId = id;
                     chooseSave(request.optString("name", "download"), request.optString("type")); break;
                 case "clipboardWrite":
@@ -474,27 +752,27 @@ public class MainActivity extends Activity {
                         reply(reply, requestId, clip != null && clip.getItemCount() > 0 ? clip.getItemAt(0).coerceToText(this).toString() : "", null);
                     };
                     if (prefs.getBoolean(always, false)) { readClip.run(); break; }
-                    dialog().setTitle("클립보드 읽기").setMessage("현재 서버가 클립보드의 텍스트를 읽도록 허용할까요?")
-                        .setNegativeButton("거부", (d,w) -> reply(reply, requestId, null, "클립보드 읽기를 거부했습니다."))
-                        .setOnCancelListener(d -> reply(reply, requestId, null, "취소했습니다."))
-                        .setNeutralButton("항상 허용", (d,w) -> { prefs.edit().putBoolean(always, true).apply(); readClip.run(); })
-                        .setPositiveButton("이번만 허용", (d,w) -> readClip.run()).show(); break;
+                    dialog().setTitle(L.t("클립보드 읽기", "Read the clipboard")).setMessage(L.t("현재 서버가 클립보드의 텍스트를 읽도록 허용할까요?", "Let this server read the text on the clipboard?"))
+                        .setNegativeButton(L.t("거부", "Deny"), (d,w) -> reply(reply, requestId, null, L.t("클립보드 읽기를 거부했습니다.", "Reading the clipboard was denied.")))
+                        .setOnCancelListener(d -> reply(reply, requestId, null, L.t("취소했습니다.", "Cancelled.")))
+                        .setNeutralButton(L.t("항상 허용", "Always allow"), (d,w) -> { prefs.edit().putBoolean(always, true).apply(); readClip.run(); })
+                        .setPositiveButton(L.t("이번만 허용", "Allow once"), (d,w) -> readClip.run()).show(); break;
                 }
                 case "notificationPermission": {
-                    if (permissionDone != null) throw new IllegalStateException("권한 요청이 진행 중입니다.");
+                    if (permissionDone != null) throw new IllegalStateException(L.t("권한 요청이 진행 중입니다.", "A permission request is in progress."));
                     String key = "notify:" + prefs.getString("server", "");
                     if (notificationAllowed && notificationsAllowedBySystem()) { reply(reply, id, "granted", null); break; }
-                    dialog().setTitle("완료 알림").setMessage("이 서버에서 작업 완료 알림을 표시하도록 허용할까요?")
-                        .setNegativeButton("거부", (d,w) -> reply(reply, requestId, "denied", null))
+                    dialog().setTitle(L.t("완료 알림", "Notifications")).setMessage(L.t("이 서버에서 작업 완료 알림을 표시하도록 허용할까요?", "Let this server notify you when work is done?"))
+                        .setNegativeButton(L.t("거부", "Deny"), (d,w) -> reply(reply, requestId, "denied", null))
                         .setOnCancelListener(d -> reply(reply, requestId, "denied", null))
-                        .setPositiveButton("허용", (d,w) -> {
+                        .setPositiveButton(L.t("허용", "Allow"), (d,w) -> {
                             permissionDone = () -> {
                                 notificationAllowed = notificationsAllowedBySystem();
                                 // Kept per server, so the next launch does not quietly forget it.
                                 prefs.edit().putBoolean(key, notificationAllowed).apply();
                                 if (!notificationAllowed && Build.VERSION.SDK_INT >= 33
                                     && checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED)
-                                    message("휴대폰 설정에서 이 앱의 알림이 꺼져 있습니다. 설정 › 앱 › Ollama WebUI › 알림에서 켜 주세요.");
+                                    message(L.t("휴대폰 설정에서 이 앱의 알림이 꺼져 있습니다. 설정 › 앱 › Ollama WebUI › 알림에서 켜 주세요.", "Notifications for this app are off. Turn them on in Settings › Apps › Ollama WebUI › Notifications."));
                                 reply(reply, requestId, notificationAllowed ? "granted" : "denied", null);
                             };
                             if (Build.VERSION.SDK_INT >= 33) requestPermissions(new String[]{Manifest.permission.POST_NOTIFICATIONS}, NOTIFY);
@@ -502,9 +780,9 @@ public class MainActivity extends Activity {
                         }).show(); break;
                 }
                 case "notify": {
-                    if (!notificationAllowed || !notificationsAllowedBySystem()) throw new SecurityException("알림 권한이 없습니다.");
+                    if (!notificationAllowed || !notificationsAllowedBySystem()) throw new SecurityException(L.t("알림 권한이 없습니다.", "Notifications are not allowed."));
                     NotificationManager manager = getSystemService(NotificationManager.class);
-                    manager.createNotificationChannel(new NotificationChannel("jobs", "작업 완료", NotificationManager.IMPORTANCE_DEFAULT));
+                    manager.createNotificationChannel(new NotificationChannel("jobs", L.t("작업 완료", "Work done"), NotificationManager.IMPORTANCE_DEFAULT));
                     String tag = request.optString("tag", "ollama"), chat = request.optString("chat", "");
                     // Tapping it opens the chat it is about; one PendingIntent per tag so their chats differ.
                     Intent target = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
@@ -517,35 +795,40 @@ public class MainActivity extends Activity {
                         .setContentIntent(open).setAutoCancel(true).build());
                     reply(reply, id, true, null); break;
                 }
+                case "busy":
+                    // The screen stays on while an answer is being written, and only then.
+                    if (request.optBoolean("value")) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    reply(reply, id, true, null); break;
                 case "changeServer":
                     confirmChangeServer(() -> reply(reply, requestId, false, null)); break;
                 case "checkUpdates":
                     checkUpdates(true); reply(reply, id, true, null); break;
                 case "chrome": {
                     String value = request.optString("color");
-                    if (!value.matches("#[0-9a-fA-F]{6}")) throw new IllegalArgumentException("잘못된 색상입니다.");
+                    if (!value.matches("#[0-9a-fA-F]{6}")) throw new IllegalArgumentException(L.t("잘못된 색상입니다.", "Not a colour."));
                     int color = Color.parseColor(value);
                     prefs.edit().putInt("chrome", color).apply(); applyChrome(color);
                     reply(reply, id, true, null); break;
                 }
-                default: throw new IllegalArgumentException("지원하지 않는 앱 요청입니다.");
+                default: throw new IllegalArgumentException(L.t("지원하지 않는 앱 요청입니다.", "Not something the app can do."));
             }
         } catch (Exception e) { reply(reply, id, null, e.getMessage()); }
     }
     private static String safeName(String name) { return name.replaceAll("[^a-zA-Z0-9._가-힣-]", "_").replaceAll("^\\.+", "_"); }
     private static byte[] decode(String value) {
-        if (value.length() > 28000000) throw new IllegalArgumentException("파일당 20 MB까지 지원합니다.");
+        if (value.length() > 28000000) throw new IllegalArgumentException(L.t("파일당 20 MB까지 지원합니다.", "Up to 20 MB a file."));
         return android.util.Base64.decode(value, android.util.Base64.DEFAULT);
     }
     private void chooseSave(String name, String type) {
         try { startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
             .setType(type == null || type.isEmpty() ? "application/octet-stream" : type).putExtra(Intent.EXTRA_TITLE, safeName(name)), SAVE); }
-        catch (Exception e) { reply(saveReply, saveId, null, e.getMessage()); resetSave(); message("저장 위치를 선택할 수 없습니다."); }
+        catch (Exception e) { reply(saveReply, saveId, null, e.getMessage()); resetSave(); message(L.t("저장 위치를 선택할 수 없습니다.", "Could not choose where to save.")); }
     }
     private void resetSave() { saveId = null; saveReply = null; saveBytes = null; downloadURL = null; }
     private static byte[] readBytes(InputStream in, int limit) throws IOException {
         ByteArrayOutputStream out = new ByteArrayOutputStream(); byte[] buf = new byte[8192]; int n;
-        while ((n = in.read(buf)) != -1) { if (out.size() + n > limit) throw new IOException("파일이 너무 큽니다."); out.write(buf, 0, n); }
+        while ((n = in.read(buf)) != -1) { if (out.size() + n > limit) throw new IOException(L.t("파일이 너무 큽니다.", "The file is too large.")); out.write(buf, 0, n); }
         return out.toByteArray();
     }
     @Override public void onRequestPermissionsResult(int code, String[] permissions, int[] results) {
@@ -556,13 +839,21 @@ public class MainActivity extends Activity {
             mediaRequest = null;
         }
         if (code == NOTIFY && permissionDone != null) { permissionDone.run(); permissionDone = null; }
+        // Allowed or not, the files open; with the camera beside them if it was allowed.
+        if (code == CAMERA_FOR_FILE) openFileChooser();
     }
     @Override protected void onActivityResult(int code, int result, Intent intent) {
         super.onActivityResult(code, result, intent);
         if (code == AUTH) { nudgeAuth(); return; }
         if (code == UpdateDialog.INSTALL_PERMISSION) { if (updateDialog != null) updateDialog.onPermissionResult(); return; }
         if (code == FILE && fileResult != null) {
-            fileResult.onReceiveValue(WebChromeClient.FileChooserParams.parseResult(result, intent)); fileResult = null;
+            Uri[] picked = WebChromeClient.FileChooserParams.parseResult(result, intent);
+            // A photo just taken comes back with no data: it is in the file it was given.
+            if ((picked == null || picked.length == 0) && result == RESULT_OK && cameraOutput != null) {
+                File photo = new File(new File(getCacheDir(), "camera"), cameraOutput.getLastPathSegment());
+                if (photo.length() > 0) picked = new Uri[]{cameraOutput};
+            }
+            fileResult.onReceiveValue(picked); fileResult = null; cameraOutput = null;
         }
         if (code == CAPTURE) {
             if (result != RESULT_OK || intent == null) { reply(captureReply, captureId, null, null); captureReply = null; return; }
@@ -570,29 +861,29 @@ public class MainActivity extends Activity {
             startForegroundService(new Intent(this, CaptureService.class).putExtra("code", result).putExtra("data", intent));
         }
         if (code == SAVE) {
-            if (result != RESULT_OK || intent == null || intent.getData() == null) { reply(saveReply, saveId, null, "저장을 취소했습니다."); resetSave(); return; }
+            if (result != RESULT_OK || intent == null || intent.getData() == null) { reply(saveReply, saveId, null, L.t("저장을 취소했습니다.", "Saving was cancelled.")); resetSave(); return; }
             Uri dest = intent.getData(); byte[] bytes = saveBytes; String url = downloadURL;
             String cookies = url == null ? null : CookieManager.getInstance().getCookie(url);
             JavaScriptReplyProxy callback = saveReply; String id = saveId; resetSave();
             io.execute(() -> {
                 try (OutputStream out = getContentResolver().openOutputStream(dest)) {
-                    if (out == null) throw new IOException("저장 파일을 열 수 없습니다.");
+                    if (out == null) throw new IOException(L.t("저장 파일을 열 수 없습니다.", "Could not open the file to save into."));
                     if (bytes != null) out.write(bytes);
                     else {
                         HttpURLConnection connection = (HttpURLConnection) new URL(url).openConnection();
                         connection.setConnectTimeout(15000); connection.setReadTimeout(300000); connection.setInstanceFollowRedirects(false);
                         if (cookies != null) connection.setRequestProperty("Cookie", cookies);
                         try {
-                            if (connection.getResponseCode() != 200) throw new IOException("다운로드 HTTP " + connection.getResponseCode());
+                            if (connection.getResponseCode() != 200) throw new IOException(L.t("다운로드 HTTP ", "Download HTTP ") + connection.getResponseCode());
                             try (InputStream in = connection.getInputStream()) { byte[] buffer = new byte[32768]; int n; while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n); }
                         } finally { connection.disconnect(); }
                     }
-                    runOnUiThread(() -> { reply(callback, id, true, null); Toast.makeText(this, "저장했습니다.", Toast.LENGTH_SHORT).show(); });
-                } catch (Exception e) { runOnUiThread(() -> { reply(callback, id, null, e.getMessage()); message("저장 실패: " + e.getMessage()); }); }
+                    runOnUiThread(() -> { reply(callback, id, true, null); Toast.makeText(this, L.t("저장했습니다.", "Saved."), Toast.LENGTH_SHORT).show(); });
+                } catch (Exception e) { runOnUiThread(() -> { reply(callback, id, null, e.getMessage()); message(L.t("저장 실패: ", "Could not save: ") + e.getMessage()); }); }
             });
         }
     }
-    private void message(String text) { if (!isFinishing() && !isDestroyed()) dialog().setMessage(text).setPositiveButton("확인", null).show(); }
+    private void message(String text) { if (!isFinishing() && !isDestroyed()) dialog().setMessage(text).setPositiveButton(L.t("확인", "OK"), null).show(); }
     /**
      * Back closes what is open in the page first -- a dialog, a menu, the
      * sidebar -- one per press (App.jsx answers 'ollama-native-back'). With
@@ -611,6 +902,7 @@ public class MainActivity extends Activity {
         denyMedia();
         if (fileResult != null) fileResult.onReceiveValue(null);
         stopService(new Intent(this, CaptureService.class)); CaptureService.result = null;
+        if (network != null) { try { getSystemService(ConnectivityManager.class).unregisterNetworkCallback(network); } catch (Exception ignored) { } }
         if (web != null) web.destroy();
         if (proxy != null) proxy.close();
         io.shutdownNow(); super.onDestroy();

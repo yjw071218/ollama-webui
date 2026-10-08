@@ -1,0 +1,6 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="shortcut_new_chat">새 대화</string>
+    <string name="shortcut_new_chat_long">새 대화 시작</string>
+    <string name="share_label">Ollama WebUI</string>
+</resources>

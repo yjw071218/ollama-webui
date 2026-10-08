@@ -1,4 +1,5 @@
 import { app, BrowserWindow, ipcMain, shell } from 'electron';
+import { tr } from './i18n.mjs';
 import { spawn } from 'node:child_process';
 import { mkdir, readFile, writeFile, rm } from 'node:fs/promises';
 import path from 'node:path';
@@ -37,7 +38,7 @@ export function createUpdater({ ownerWindow, beforeInstall = async () => {} }) {
     win = new BrowserWindow({
       parent: owner && !owner.isDestroyed() ? owner : undefined, modal: false, show: false, frame: false,
       width: 560, height: 560, minWidth: 420, minHeight: 420, resizable: true, backgroundColor: '#292620',
-      title: '업데이트', icon: path.join(root, 'icons/app.png'),
+      title: tr('업데이트', 'Update'), icon: path.join(root, 'icons/app.png'),
       webPreferences: { preload: path.join(root, 'update-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true },
     });
     win.setMenu(null);
@@ -65,7 +66,7 @@ export function createUpdater({ ownerWindow, beforeInstall = async () => {} }) {
       open();
       send({ phase: 'available', error: '', info: describe(found) });
     } catch (error) {
-      if (manual) send({ phase: 'error', error: '업데이트를 확인하지 못했습니다. 네트워크 연결 또는 GitHub 요청 제한을 확인하세요.', detail: error.message });
+      if (manual) send({ phase: 'error', error: tr('업데이트를 확인하지 못했습니다. 네트워크 연결 또는 GitHub 요청 제한을 확인하세요.', 'Could not check for updates. Check the network, or the GitHub request limit.'), detail: error.message });
     }
   };
 
@@ -85,7 +86,7 @@ export function createUpdater({ ownerWindow, beforeInstall = async () => {} }) {
       send({ phase: 'ready', progress: { ...state.progress, percent: 100 } });
     } catch (error) {
       if (controller?.signal.aborted) send({ phase: 'available', error: '', progress: null });
-      else send({ phase: 'error', error: '다운로드하지 못했습니다.', detail: error.message });
+      else send({ phase: 'error', error: tr('다운로드하지 못했습니다.', 'The download failed.'), detail: error.message });
     } finally { controller = null; }
   };
 
@@ -120,7 +121,7 @@ export function createUpdater({ ownerWindow, beforeInstall = async () => {} }) {
     if (!valid(event)) return;
     if (action === 'download' || action === 'retry') { if (update) download(); else check({ manual: true }); }
     else if (action === 'cancel') controller?.abort();
-    else if (action === 'install') install().catch(error => send({ phase: 'error', error: '설치를 시작하지 못했습니다.', detail: error.message }));
+    else if (action === 'install') install().catch(error => send({ phase: 'error', error: tr('설치를 시작하지 못했습니다.', 'The installer did not start.'), detail: error.message }));
     else if (action === 'skip' && update) { await savePrefs({ ...(await prefs()), skipped: update.version }); win?.close(); }
     else if (action === 'release') shell.openExternal(update?.url || 'https://github.com/yjw071218/ollama-webui/releases');
     else if (action === 'later' || action === 'close') win?.close();

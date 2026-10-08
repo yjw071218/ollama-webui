@@ -1,17 +1,78 @@
 import http from 'node:http';
+import { tr } from './i18n.mjs';
 import https from 'node:https';
 import net from 'node:net';
+import dns from 'node:dns';
 import tls from 'node:tls';
 import { randomBytes, timingSafeEqual } from 'node:crypto';
 
+/*
+ * The server address, and only in the form this server hands out:
+ * `<IPv4>.nip.io:<port>` (server/networkSetup.mjs), as on Android
+ * (LoopbackProxy.normalize).
+ *
+ * Any address used to be taken. "naver.com" opened Naver inside the app and was
+ * saved as the server -- and a page that is not this server has no menu to
+ * change the server from, so the app was stuck on it. A bare IPv4 address is
+ * written the same way for you ("192.168.0.5:5173" is what people type), and
+ * nothing else is accepted.
+ */
+const OCTET = '(?:25[0-5]|2[0-4]\\d|1\\d\\d|[1-9]?\\d)';
+const SERVER_FORM = new RegExp(`^(?:(https?)://)?(${OCTET}(?:\\.${OCTET}){3})(?:\\.nip\\.io)?:(\\d{1,5})/?$`, 'i');
+export const SERVER_EXAMPLE = '192.168.0.5.nip.io:5173';
 export function normalizeServer(value) {
-  const url = new URL(String(value).trim());
-  if (!['http:', 'https:'].includes(url.protocol) || url.username || url.password)
-    throw new Error('사용자 정보가 없는 http:// 또는 https:// 주소를 입력하세요.');
-  if (url.pathname !== '/' || url.search || url.hash)
-    throw new Error('서버의 기본 주소만 입력하세요. 경로·쿼리·해시는 지원하지 않습니다.');
-  return url.origin;
+  const m = SERVER_FORM.exec(String(value ?? '').trim());
+  const port = m ? Number(m[3]) : 0;
+  if (!m || port < 1 || port > 65535)
+    throw new Error(tr('서버 주소는 0.0.0.0.nip.io:0000 형식으로 입력하세요. 예: ' + SERVER_EXAMPLE,
+      'Enter the server address as 0.0.0.0.nip.io:0000, e.g. ' + SERVER_EXAMPLE));
+  return `${(m[1] || 'http').toLowerCase()}://${m[2]}.nip.io:${port}`;
 }
+/** The same server as it was saved before addresses had to be nip.io ones, so its storage carries over. */
+export const legacyServer = server => server.replace(/\.nip\.io(?=:\d+$)/i, '');
+
+/*
+ * Whether the address is an Ollama WebUI server at all, asked before it is
+ * opened or saved. `/api/whoami` answers in front of the access-token gate
+ * (server/index.js), so a server that wants a token is still recognised.
+ * Rejects with `notServer` when something answered and it was not this.
+ */
+export async function probeServer(server, { timeoutMs = 6000 } = {}) {
+  const target = new URL(server);
+  const body = await new Promise((resolve, reject) => {
+    const req = (target.protocol === 'https:' ? https : http).get(new URL('/api/whoami', target), {
+      lookup: nipLookup, timeout: timeoutMs, headers: { Accept: 'application/json' },
+    }, res => {
+      if (res.statusCode !== 200) { res.resume(); resolve(null); return; }
+      let text = '';
+      res.setEncoding('utf8');
+      res.on('data', chunk => { text += chunk; if (text.length > 65536) req.destroy(); });
+      res.on('end', () => { try { resolve(JSON.parse(text)); } catch { resolve(null); } });
+    });
+    req.on('timeout', () => req.destroy(Object.assign(new Error('timed out'), { code: 'ETIMEDOUT' })));
+    req.on('error', error => reject(new Error(tr('서버에 연결할 수 없습니다: ', 'The server is not answering: ') + (error.code || error.message))));
+  });
+  if (!body || typeof body !== 'object' || !('servingPort' in body) || !('tokenRequired' in body)) {
+    const error = new Error(tr('이 주소는 Ollama WebUI 서버가 아닙니다. PC에서 서버를 켰을 때 표시되는 주소를 입력하세요.',
+      'This address is not an Ollama WebUI server. Enter the address shown when the server starts on your PC.'));
+    error.notServer = true;
+    throw error;
+  }
+  return body;
+}
+
+/* `192.168.0.5.nip.io` is that address by definition, so it is answered
+   here rather than by asking nip.io's DNS: a home network without internet,
+   or a DNS that will not answer for private addresses, still connects. The
+   name itself is what the server is sent (its PUBLIC_ORIGIN is that name). */
+export function nipLookup(hostname, options, callback) {
+  if (typeof options === 'function') { callback = options; options = {}; }
+  const m = new RegExp(`^(${OCTET}(?:\\.${OCTET}){3})\\.nip\\.io$`, 'i').exec(String(hostname || ''));
+  if (!m) return dns.lookup(hostname, options, callback);
+  if (options?.all) return process.nextTick(callback, null, [{ address: m[1], family: 4 }]);
+  return process.nextTick(callback, null, m[1], 4);
+}
+
 export async function startProxy(value, port = 0) {
   const target = new URL(normalizeServer(value));
   const token = randomBytes(32).toString('hex');
@@ -20,7 +81,7 @@ export async function startProxy(value, port = 0) {
      connection asks: a request does not pay for a new TCP (and TLS) handshake.
      lifo hands out the most recently used socket, the one least likely to have
      been closed by the server's keep-alive timeout in the meantime. */
-  const agent = new (target.protocol === 'https:' ? https : http).Agent({ keepAlive: true, keepAliveMsecs: 30000, scheduling: 'lifo', maxFreeSockets: 16 });
+  const agent = new (target.protocol === 'https:' ? https : http).Agent({ lookup: nipLookup, keepAlive: true, keepAliveMsecs: 30000, scheduling: 'lifo', maxFreeSockets: 16 });
   let origin;
   const track = socket => {
     sockets.add(socket);
@@ -62,7 +123,7 @@ export async function startProxy(value, port = 0) {
     let current;
     const send = (retried) => {
     const upstream = current = transport.request(target, {
-      path: req.url, method: req.method, headers, agent,
+      path: req.url, method: req.method, headers, agent, lookup: nipLookup,
     }, response => {
       const headers = { ...response.headers };
       if (headers.location) {
@@ -94,7 +155,7 @@ export async function startProxy(value, port = 0) {
   server.on('upgrade', (req, client, head) => {
     if (!authorized(req) || req.headers.upgrade?.toLowerCase() !== 'websocket') { client.destroy(); return; }
     const secure = target.protocol === 'https:';
-    const options = { host: target.hostname, port: Number(target.port) || (secure ? 443 : 80) };
+    const options = { host: target.hostname, port: Number(target.port) || (secure ? 443 : 80), lookup: nipLookup };
     client.setNoDelay(true); // Small frames go out at once instead of waiting on Nagle.
     const connected = () => {
       upstream.setNoDelay(true);

@@ -7,11 +7,42 @@ import { spawn, spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import path from 'node:path';
 import { existsSync, mkdirSync } from 'node:fs';
-import { startProxy, normalizeServer } from '../desktop/proxy.mjs';
+import { startProxy, normalizeServer, probeServer } from '../desktop/proxy.mjs';
 
-test('server addresses are restricted to http(s) origins', () => {
-  assert.equal(normalizeServer(' http://example.com:5173/ '), 'http://example.com:5173');
-  for (const value of ['file:///secret', 'javascript:alert(1)', 'http://user:secret@example.com', 'https://example.com/path', 'https://example.com/?secret=1', 'https://example.com/#x']) assert.throws(() => normalizeServer(value));
+/* Only the form the server hands out, <IPv4>.nip.io:<port>: "naver.com" was
+   taken, opened Naver as the app, and was saved as the server. */
+const ACCEPTED = [
+  [' http://192.168.0.5.nip.io:5173/ ', 'http://192.168.0.5.nip.io:5173'],
+  ['192.168.0.5.nip.io:5173', 'http://192.168.0.5.nip.io:5173'],
+  ['192.168.0.5:5173', 'http://192.168.0.5.nip.io:5173'],
+  ['HTTPS://8.8.8.8.NIP.IO:443', 'https://8.8.8.8.nip.io:443'],
+];
+const REJECTED = ['naver.com', 'https://naver.com', 'http://naver.com:80', 'localhost:5173', 'example.com:5173',
+  '192.168.0.5', '192.168.0.5.nip.io', '256.1.1.1:5173', '1.2.3.4:0', '1.2.3.4:70000', '01.2.3.4:5173',
+  '192.168.0.5.nip.io:5173/path', '192.168.0.5.nip.io:5173/?q=1', 'http://u:p@1.2.3.4.nip.io:5173', 'ftp://1.2.3.4.nip.io:21',
+  'file:///secret', 'javascript:alert(1)', '1.2.3.4.evil.com:5173', 'evil.1.2.3.4.nip.io:5173'];
+test('server addresses must be <IPv4>.nip.io:<port>', () => {
+  for (const [given, want] of ACCEPTED) assert.equal(normalizeServer(given), want, given);
+  for (const value of [...REJECTED, '']) assert.throws(() => normalizeServer(value), /nip\.io/, value);
+});
+const whoami = (req, res) => {
+  if (req.url !== '/api/whoami') return false;
+  res.setHeader('content-type', 'application/json');
+  res.end(JSON.stringify({ youAppearAs: '127.0.0.1', tokenRequired: false, servingPort: 1 }));
+  return true;
+};
+test('desktop: an address is opened only if an Ollama WebUI server answers there', async () => {
+  const ours = http.createServer((req, res) => { if (!whoami(req, res)) res.end('page'); });
+  const other = http.createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end('<html>NAVER</html>'); });
+  for (const s of [ours, other]) { s.listen(0, '127.0.0.1'); await once(s, 'listening'); }
+  try {
+    // Resolved without DNS: the name says what the address is (nipLookup).
+    assert.equal((await probeServer('http://127.0.0.1.nip.io:' + ours.address().port)).servingPort, 1);
+    await assert.rejects(probeServer('http://127.0.0.1.nip.io:' + other.address().port), e => e.notServer === true);
+    const spare = net.createServer(); spare.listen(0, '127.0.0.1'); await once(spare, 'listening');
+    const dead = spare.address().port; await new Promise(resolve => spare.close(resolve));
+    await assert.rejects(probeServer('http://127.0.0.1.nip.io:' + dead), e => !e.notServer);
+  } finally { for (const s of [ours, other]) s.close(); }
 });
 const root = fileURLToPath(new URL('..', import.meta.url));
 const javaHome = process.env.JAVA_HOME || path.join(root, '.tools/jdk');
@@ -19,7 +50,7 @@ const java = path.join(javaHome, 'bin', process.platform === 'win32' ? 'java.exe
 const javac = path.join(javaHome, 'bin', process.platform === 'win32' ? 'javac.exe' : 'javac');
 async function javaProxy(url) {
   const out = path.join(root, 'artifacts/java-tests'); mkdirSync(out, { recursive: true });
-  const result = spawnSync(javac, ['-d', out, path.join(root, 'android/app/src/main/java/io/github/yjw071218/ollamawebui/client/LoopbackProxy.java'), path.join(root, 'tests/ProxyHarness.java')], { encoding:'utf8' });
+  const result = spawnSync(javac, ['-d', out, path.join(root, 'android/app/src/main/java/io/github/yjw071218/ollamawebui/client/LoopbackProxy.java'), path.join(root, 'android/app/src/main/java/io/github/yjw071218/ollamawebui/client/L.java'), path.join(root, 'tests/ProxyHarness.java')], { encoding:'utf8' });
   assert.equal(result.status, 0, result.stderr);
   const child = spawn(java, ['-cp', out, 'ProxyHarness', url], { stdio: ['pipe','pipe','pipe'] });
   const [buffer] = await once(child.stdout, 'data');
@@ -69,7 +100,7 @@ for (const kind of ['desktop', 'android']) test(kind + ' gateway integration', {
     socket.on('data', bytes => socket.write(bytes));
   });
   backend.listen(0, '127.0.0.1'); await once(backend, 'listening');
-  const target = 'http://127.0.0.1:' + backend.address().port;
+  const target = 'http://127.0.0.1.nip.io:' + backend.address().port;
   const gateway = await (kind === 'desktop' ? startProxy : javaProxy)(target);
   const auth = kind === 'desktop' ? { 'x-native-gateway': gateway.token } : { cookie: '__ollama_native_gate=' + gateway.token + '; session=abc' };
   t.after(async () => { await gateway.close(); for (const socket of backendSockets) socket.destroy(); await new Promise(resolve => backend.close(resolve)); });
@@ -136,13 +167,30 @@ for (const kind of ['desktop', 'android']) test(kind + ' gateway integration', {
       assert.equal(JSON.parse(flaky.body).url, '/flaky');
     } finally { backend.off('connection', count); agent.destroy(); }
   });
-  if (kind === 'android') await t.test('normalizes addresses typed without a scheme', async () => {
+  if (kind === 'android') await t.test('takes only <IPv4>.nip.io:<port>, as the desktop does, and asks the server', async () => {
     const out = path.join(root, 'artifacts/java-tests');
     const probe = path.join(out, 'NormalizeProbe.java');
-    (await import('node:fs')).writeFileSync(probe, 'public class NormalizeProbe { public static void main(String[] a) throws Exception { for (String s : a) System.out.println(io.github.yjw071218.ollamawebui.client.LoopbackProxy.normalize(s)); } }');
+    const P = 'io.github.yjw071218.ollamawebui.client.LoopbackProxy';
+    (await import('node:fs')).writeFileSync(probe, 'public class NormalizeProbe { public static void main(String[] a) throws Exception {'
+      + ' if (a[0].equals("probe")) { try { ' + P + '.probe(a[1]); System.out.println("server"); }'
+      + ' catch (' + P + '.NotServerException e) { System.out.println("not-server"); } catch (java.io.IOException e) { System.out.println("unreachable"); } return; }'
+      + ' for (String s : a) { try { System.out.println(' + P + '.normalize(s)); } catch (IllegalArgumentException e) { System.out.println("REJECTED"); } } } }');
     assert.equal(spawnSync(javac, ['-cp', out, '-d', out, probe]).status, 0);
-    const run = spawnSync(java, ['-cp', out, 'NormalizeProbe', '192.168.0.5:5173', ' https://example.com/ ', 'localhost:5173/'], { encoding: 'utf8' });
-    assert.deepEqual(run.stdout.trim().split(/\r?\n/), ['http://192.168.0.5:5173', 'https://example.com', 'http://localhost:5173']);
+    const run = spawnSync(java, ['-cp', out, 'NormalizeProbe', ...ACCEPTED.map(([given]) => given), ...REJECTED], { encoding: 'utf8' });
+    assert.deepEqual(run.stdout.trim().split(/\r?\n/), [...ACCEPTED.map(([, want]) => want), ...REJECTED.map(() => 'REJECTED')]);
+    const ours = http.createServer((req, res) => { if (!whoami(req, res)) res.end('page'); });
+    const other = http.createServer((_req, res) => { res.end('<html>NAVER</html>'); });
+    for (const s of [ours, other]) { s.listen(0, '127.0.0.1'); await once(s, 'listening'); }
+    try {
+      const ask = async port => {
+        const child = spawn(java, ['-cp', out, 'NormalizeProbe', 'probe', 'http://127.0.0.1.nip.io:' + port]);
+        let text = ''; child.stdout.on('data', c => { text += c; });
+        await once(child, 'exit');
+        return text.trim();
+      };
+      assert.equal(await ask(ours.address().port), 'server');
+      assert.equal(await ask(other.address().port), 'not-server');
+    } finally { for (const s of [ours, other]) s.close(); }
   });
   await t.test('tunnels websocket upgrade and binary bytes', async () => {
     await new Promise((resolve, reject) => {

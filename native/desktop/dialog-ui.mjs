@@ -1,3 +1,5 @@
+import { localize } from './page-i18n.mjs';
+localize();
 window.appDialog.ready(data=>{
  document.getElementById('title').textContent=data.title;
  document.getElementById('message').textContent=data.message;

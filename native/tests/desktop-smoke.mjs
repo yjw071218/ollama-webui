@@ -6,7 +6,11 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('..', import.meta.url));
 await mkdir(root + '/artifacts', {recursive:true});
 const profile = await mkdtemp(root + '/artifacts/smoke-');
-const server = http.createServer((_req, res) => { res.setHeader('content-type', 'text/html'); res.end('<!doctype html><h1>Native smoke test</h1>'); });
+const server = http.createServer((req, res) => {
+  // The app asks whether this is an Ollama WebUI server before it opens it (proxy.mjs probeServer).
+  if (req.url === '/api/whoami') { res.setHeader('content-type', 'application/json'); res.end(JSON.stringify({ servingPort: server.address().port, tokenRequired: false })); return; }
+  res.setHeader('content-type', 'text/html'); res.end('<!doctype html><h1>Native smoke test</h1>');
+});
 server.listen(0, '127.0.0.1'); await once(server, 'listening');
 const exe = process.env.NATIVE_EXE || root + '/desktop/node_modules/electron/dist/electron.exe';
 const args = process.env.NATIVE_EXE ? [] : [root + '/desktop'];

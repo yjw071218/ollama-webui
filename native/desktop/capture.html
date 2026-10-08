@@ -1,0 +1,14 @@
+<!doctype html><html lang="ko"><meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self' data:">
+<title data-en="Screen capture">화면 캡처</title><link rel="stylesheet" href="capture.css">
+<main role="dialog" aria-modal="true" aria-labelledby="title">
+  <header><img src="icons/app.png" alt=""><span>Ollama WebUI</span><button id="close" class="icon" aria-label="닫기" data-en-label="Close">×</button></header>
+  <section>
+    <h1 id="title" data-en="Choose what to share">공유할 화면 또는 창을 선택하세요</h1>
+    <p id="detail" class="muted"></p>
+    <h2 id="screensTitle" data-en="Screens">화면</h2><div id="screens" class="grid" role="listbox" aria-labelledby="screensTitle"></div>
+    <h2 id="windowsTitle" data-en="Windows">창</h2><div id="windows" class="grid" role="listbox" aria-labelledby="windowsTitle"></div>
+  </section>
+  <footer><button id="cancel" data-en="Cancel">취소</button><button id="share" class="primary" disabled data-en="Share">공유</button></footer>
+</main>
+<script src="capture-ui.mjs" type="module"></script></html>

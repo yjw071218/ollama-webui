@@ -1,10 +1,20 @@
 <!doctype html><html lang="ko"><meta charset="utf-8">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self';">
-<meta name="viewport" content="width=device-width,initial-scale=1"><title>Ollama WebUI 연결</title>
+<meta name="viewport" content="width=device-width,initial-scale=1"><title data-en="Connect to Ollama WebUI">Ollama WebUI 연결</title>
 <link rel="stylesheet" href="setup.css">
-<header class="app-titlebar">Ollama WebUI <span>서버 연결</span></header><main><h1>Ollama WebUI</h1><p>사용할 서버 주소를 입력하세요.</p>
-<form id="connect"><label for="url">서버 주소</label><input id="url" type="url" required placeholder="http://0.0.0.0:5173/" autocomplete="url">
-<p>0.0.0.0은 형식 예시입니다. 실제 서버의 주소로 바꿔 입력하세요.</p>
-<p class="warning">HTTP 연결은 대화·비밀번호·첨부 파일이 암호화되지 않습니다. 신뢰하는 서버에만 연결하세요. 가능하면 HTTPS를 사용하세요.</p>
-<button>연결하기</button><p id="status" role="status"></p></form>
-<p>서버 변경: 앱 메뉴 → 서버 주소 변경<br>마이크·카메라·화면 캡처 권한은 요청할 때 선택합니다.</p></main><script src="setup.mjs" type="module"></script></html>
+<header class="app-titlebar">Ollama WebUI <span data-en="Server">서버 연결</span></header>
+<main>
+<section id="failure" class="failure" role="alert" hidden>
+  <h2 data-en="The server is not answering">서버에 연결할 수 없습니다</h2>
+  <p id="failureServer" class="failure-server"></p>
+  <p id="failureMessage" class="failure-message"></p>
+  <div class="failure-actions"><button id="retry" type="button" data-en="Try again">다시 시도</button><span id="countdown" class="countdown"></span></div>
+  <p class="hint" data-en="Is the server running on the PC? You can also connect to a different address below.">PC에서 서버가 켜져 있는지 확인하세요. 아래에서 다른 주소로 연결할 수도 있습니다.</p>
+</section>
+<h1>Ollama WebUI</h1><p data-en="Enter the address of the server to use.">사용할 서버 주소를 입력하세요.</p>
+<form id="connect"><label for="url" data-en="Server address">서버 주소</label><input id="url" type="text" inputmode="url" spellcheck="false" required placeholder="192.168.0.5.nip.io:5173" autocomplete="url">
+<p class="hint" data-en="Enter it as 0.0.0.0.nip.io:0000, the address shown when the server starts. An IP address alone (192.168.0.5:5173) is written that way for you. Add https:// for a secure server.">서버를 켰을 때 표시되는 0.0.0.0.nip.io:0000 형식으로 입력하세요. IP만 입력하면(192.168.0.5:5173) 자동으로 바꿔 줍니다. 보안 서버는 https://를 붙이세요.</p>
+<p class="warning" data-en="An HTTP connection does not encrypt chats, passwords or attachments. Connect only to servers you trust, and use HTTPS where you can.">HTTP 연결은 대화·비밀번호·첨부 파일이 암호화되지 않습니다. 신뢰하는 서버에만 연결하세요. 가능하면 HTTPS를 사용하세요.</p>
+<button id="submit" data-en="Connect">연결하기</button><p id="status" role="status"></p></form>
+<section id="recentBox" hidden><h2 data-en="Recent servers">최근 연결한 서버</h2><ul id="recent" class="recent"></ul></section>
+<p class="hint" data-en="Change server later from the app menu. Microphone, camera and screen capture are asked for when needed.">서버 변경: 앱 메뉴 → 서버 주소 변경<br>마이크·카메라·화면 캡처 권한은 요청할 때 선택합니다.</p></main><script src="setup.mjs" type="module"></script></html>

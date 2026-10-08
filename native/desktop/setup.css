@@ -1,1 +1,19 @@
-.app-titlebar{position:fixed;top:0;left:0;right:0;height:44px;box-sizing:border-box;padding:12px 150px 12px 16px;background:#211f1c;color:#ede8df;font:600 13px system-ui;app-region:drag}.app-titlebar span{margin-left:12px;color:#b9ad9b;font-weight:400}body{padding-top:44px;box-sizing:border-box;margin:0;background:#111827;color:#e5e7eb;font:16px system-ui;display:grid;min-height:100vh;place-items:center}main{width:min(540px,85vw)}h1{font-size:32px}label{display:block;margin:24px 0 8px}input,button{box-sizing:border-box;width:100%;padding:14px;border-radius:10px;font:inherit}input{background:#1f2937;color:white;border:1px solid #6b7280}button{background:#93c5fd;color:#111827;border:0;cursor:pointer}p{line-height:1.7;color:#cbd5e1}.warning{font-size:14px;color:#fcd34d}#status{color:#fca5a5}
+[hidden]{display:none!important}
+.app-titlebar{position:fixed;top:0;left:0;right:0;height:44px;box-sizing:border-box;padding:12px 150px 12px 16px;background:#211f1c;color:#ede8df;font:600 13px system-ui;app-region:drag}.app-titlebar span{margin-left:12px;color:#b9ad9b;font-weight:400}
+body{padding:64px 0 32px;box-sizing:border-box;margin:0;background:#1a1916;color:#eee9e0;font:16px system-ui,"Segoe UI","Malgun Gothic",sans-serif;display:grid;min-height:100vh;place-items:center}
+main{width:min(540px,85vw)}h1{font-size:32px;margin:8px 0}h2{font-size:15px;margin:0 0 8px}
+label{display:block;margin:20px 0 8px}
+input,button{box-sizing:border-box;width:100%;padding:14px;border-radius:10px;font:inherit}
+input{background:#292620;color:#eee9e0;border:1px solid #514a40}input:focus{outline:2px solid #d97757;outline-offset:1px}
+button{background:#d97757;color:#fff;border:0;cursor:pointer;font-weight:600}button:disabled{opacity:.6;cursor:default}button:hover:not(:disabled){filter:brightness(1.08)}
+p{line-height:1.7;color:#cfc6b8}.hint{font-size:13px;color:#a39a8b;margin:6px 0}
+.warning{font-size:14px;color:#e8c478}#status{color:#f4a39a;white-space:pre-wrap}
+.failure{background:#3a2420;border:1px solid #7a3b32;border-radius:12px;padding:16px 18px;margin-bottom:12px}
+.failure h2{color:#ffd9d4}.failure-server{margin:0;font-family:ui-monospace,Consolas,monospace;color:#ffe9e5;overflow-wrap:anywhere}
+.failure-message{margin:4px 0 12px;font-size:14px;color:#f1c3bc;overflow-wrap:anywhere}
+.failure-actions{display:flex;align-items:center;gap:12px}.failure-actions button{width:auto;padding:10px 18px}.countdown{font-size:13px;color:#d9a79f}
+#recentBox{margin-top:22px}.recent{list-style:none;margin:0;padding:0;display:grid;gap:6px}
+.recent li{display:flex;gap:6px}
+.recent-open{flex:1;min-width:0;text-align:left;background:#292620;color:#eee9e0;border:1px solid #514a40;font-weight:400;padding:11px 14px;font-family:ui-monospace,Consolas,monospace;font-size:14px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.recent-remove{width:44px;flex:none;background:transparent;color:#a39a8b;border:1px solid #3d3932;font-size:18px;padding:0}
+.recent-remove:hover{color:#eee9e0;background:#3b352d}

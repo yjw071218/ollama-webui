@@ -23,18 +23,18 @@ public class CaptureService extends Service {
     @Override public IBinder onBind(Intent intent) { return null; }
     @Override public int onStartCommand(Intent intent, int flags, int startId) {
         NotificationManager manager = getSystemService(NotificationManager.class);
-        manager.createNotificationChannel(new NotificationChannel("capture", "화면 캡처", NotificationManager.IMPORTANCE_LOW));
+        manager.createNotificationChannel(new NotificationChannel("capture", L.t("화면 캡처", "Screen capture"), NotificationManager.IMPORTANCE_LOW));
         Notification notification = new Notification.Builder(this, "capture").setSmallIcon(android.R.drawable.ic_menu_camera)
-            .setContentTitle("화면을 한 장 캡처하는 중").setContentText("캡처 후 화면 공유가 즉시 종료됩니다.").build();
+            .setContentTitle(L.t("화면을 한 장 캡처하는 중", "Capturing the screen once")).setContentText(L.t("캡처 후 화면 공유가 즉시 종료됩니다.", "Screen sharing ends as soon as the picture is taken.")).build();
         if (Build.VERSION.SDK_INT >= 29) startForeground(7301, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_MEDIA_PROJECTION);
         else startForeground(7301, notification);
         try {
-            if (intent == null) throw new IOException("화면 캡처 요청이 없습니다.");
+            if (intent == null) throw new IOException(L.t("화면 캡처 요청이 없습니다.", "There is no capture request."));
             Intent consent = intent.getParcelableExtra("data");
             projection = getSystemService(MediaProjectionManager.class).getMediaProjection(intent.getIntExtra("code", 0), consent);
-            if (projection == null) throw new IOException("화면 캡처 권한이 없습니다.");
+            if (projection == null) throw new IOException(L.t("화면 캡처 권한이 없습니다.", "Screen capture is not allowed."));
             projection.registerCallback(new MediaProjection.Callback() {
-                @Override public void onStop() { finish(null, "화면 공유가 종료되었습니다."); }
+                @Override public void onStop() { finish(null, L.t("화면 공유가 종료되었습니다.", "Screen sharing ended.")); }
             }, handler);
             DisplayMetrics metrics = getResources().getDisplayMetrics();
             int width = metrics.widthPixels, height = metrics.heightPixels;
@@ -63,7 +63,7 @@ public class CaptureService extends Service {
             }, handler);
             display = projection.createVirtualDisplay("Ollama WebUI screenshot", width, height, metrics.densityDpi,
                 DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR, reader.getSurface(), null, handler);
-            handler.postDelayed(() -> finish(null, "화면 캡처 시간이 초과되었습니다."), 15000);
+            handler.postDelayed(() -> finish(null, L.t("화면 캡처 시간이 초과되었습니다.", "The screen capture timed out.")), 15000);
         } catch (Exception e) { finish(null, e.getMessage()); }
         return START_NOT_STICKY;
     }
@@ -81,5 +81,5 @@ public class CaptureService extends Service {
         if (projection != null) { projection.stop(); projection = null; }
         stopForeground(STOP_FOREGROUND_REMOVE);
     }
-    @Override public void onDestroy() { finish(null, "화면 캡처를 취소했습니다."); cleanup(); super.onDestroy(); }
+    @Override public void onDestroy() { finish(null, L.t("화면 캡처를 취소했습니다.", "The screen capture was cancelled.")); cleanup(); super.onDestroy(); }
 }

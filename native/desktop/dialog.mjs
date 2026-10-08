@@ -1,4 +1,5 @@
 import {BrowserWindow,ipcMain} from 'electron';
+import {tr} from './i18n.mjs';
 import path from 'node:path';
 import {fileURLToPath,pathToFileURL} from 'node:url';
 const root=path.dirname(fileURLToPath(import.meta.url));
@@ -13,7 +14,7 @@ export function appDialog(owner,options={}) {
 }
 function show(owner,options) {
   return new Promise(resolve=>{
-    const buttons=options.buttons?.length?options.buttons:['확인'];
+    const buttons=options.buttons?.length?options.buttons:[tr('확인','OK')];
     const cancelId=options.cancelId??0;
     if(owner.isDestroyed()){resolve({response:cancelId});return;}
     const win=new BrowserWindow({parent:owner,modal:true,show:false,frame:false,width:520,height:Math.min(680,290+buttons.length*30),
