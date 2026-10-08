@@ -118,4 +118,44 @@
     if (!this.isConnected && savable(this)) { saveLink(this.href, this.download); return; }
     return click.call(this);
   };
+  /* Pull down from the very top to reload. Only when nothing under the finger
+     is scrolled away from its top and it is not a text field: a chat scrolls
+     inside its own element, so the page itself is always at its top. */
+  (() => {
+    const PULL = 96;
+    let startY = 0, startX = 0, armed = false, shown = 0, ring = null;
+    const scrolledUp = el => {
+      for (let n = el; n && n.nodeType === 1; n = n.parentElement) {
+        if (n.scrollTop > 0) return true;
+        if (n.closest && n.closest('input,textarea,select,[contenteditable=""],[contenteditable="true"],[role="dialog"],canvas')) return true;
+      }
+      return (document.scrollingElement?.scrollTop || 0) > 0;
+    };
+    const draw = d => {
+      if (!ring) {
+        ring = document.createElement('div');
+        ring.setAttribute('aria-hidden', 'true');
+        ring.style.cssText = 'position:fixed;left:50%;top:0;z-index:2147483647;width:36px;height:36px;margin-left:-18px;border-radius:50%;background:#fff;color:#d97757;box-shadow:0 2px 8px rgba(0,0,0,.3);display:grid;place-items:center;font:20px/1 system-ui;pointer-events:none;transition:opacity .15s';
+        ring.textContent = '↻';
+        document.documentElement.appendChild(ring);
+      }
+      const p = Math.min(1, d / PULL);
+      ring.style.opacity = String(p);
+      ring.style.transform = 'translateY(' + Math.min(d, PULL) * 0.8 + 'px) rotate(' + p * 270 + 'deg)';
+    };
+    const hide = () => { if (ring) { ring.remove(); ring = null; } shown = 0; };
+    addEventListener('touchstart', e => {
+      armed = e.touches.length === 1 && !scrolledUp(e.target);
+      if (armed) { startY = e.touches[0].clientY; startX = e.touches[0].clientX; }
+    }, { passive: true, capture: true });
+    addEventListener('touchmove', e => {
+      if (!armed) return;
+      const dy = e.touches[0].clientY - startY, dx = Math.abs(e.touches[0].clientX - startX);
+      if (dy < 0 || dx > dy) { armed = false; hide(); return; }
+      if (dy > 12) { shown = dy; draw(dy - 12); }
+    }, { passive: true, capture: true });
+    const end = () => { const go = armed && shown - 12 >= PULL; armed = false; hide(); if (go) location.reload(); };
+    addEventListener('touchend', end, { passive: true, capture: true });
+    addEventListener('touchcancel', () => { armed = false; hide(); }, { passive: true, capture: true });
+  })();
 })();

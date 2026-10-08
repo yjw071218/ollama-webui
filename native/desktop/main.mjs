@@ -1,4 +1,5 @@
-import { app, BrowserWindow, Menu, Tray, nativeImage, globalShortcut, ipcMain, session, shell, desktopCapturer, screen } from 'electron';
+import { app, BrowserWindow, Menu, Tray, nativeImage, globalShortcut, ipcMain, session, shell, desktopCapturer, screen, clipboard } from 'electron';
+import { menuItems } from './contextMenu.mjs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
@@ -22,6 +23,10 @@ const setupURL = pathToFileURL(path.join(directory, 'setup.html')).href;
 const smoke = process.argv.includes('--native-smoke');
 const smokeProfile = process.argv.find(value => value.startsWith('--smoke-profile='));
 if (smoke && smokeProfile) app.setPath('userData', smokeProfile.slice(16));
+/* The taskbar groups a window with a pinned shortcut by their AppUserModelID.
+   The installer's shortcuts carry the appId (package.json build.appId); the
+   app set none, so a pinned app opened as a second, separate icon. */
+if (process.platform === 'win32') app.setAppUserModelId('io.github.yjw071218.ollamawebui.client');
 let setupWindow, clientWindow, gateway, tray = null, quitting = false, lastFailure = null, wantNewChat = process.argv.includes('--new-chat');
 let settings = { server: '', ports: {}, recent: [], zoom: {}, alwaysOnTop: false, closeToTray: false, globalShortcut: true }, connecting = false;
 const configPath = () => path.join(app.getPath('userData'), 'connection.json');
@@ -65,6 +70,7 @@ async function external(url, owner) {
   if (result.response === 1) await shell.openExternal(url);
 }
 let updater = null;
+const UPDATE_EVERY = 6 * 60 * 60 * 1000;
 /** In-app update: check, download with progress, verify and install (updater.mjs). */
 function notifyUpdate(manual = false) {
   if (smoke) return;
@@ -314,6 +320,39 @@ function watchConnection(win, server) {
     if (result.response === 0) openSetup();
     else win.clientContents.reload();
   });
+  /* The page's process ended (out of memory, a GPU fault): the window used to
+     stay blank until F5. Reloaded on its own -- unless it keeps happening,
+     when the reader is asked rather than caught in a loop. */
+  let crashes = [];
+  win.clientContents.on('render-process-gone', async (_event, details) => {
+    if (win.isDestroyed() || details.reason === 'clean-exit') return;
+    const now = Date.now();
+    crashes = [...crashes.filter(t => now - t < 60000), now];
+    if (crashes.length <= 2) { win.clientContents.reload(); return; }
+    const result = await appDialog(win, { type: 'warning', title: tr('페이지 오류', 'The page stopped'),
+      message: tr('페이지가 반복해서 종료되었습니다.', 'The page keeps stopping.'), detail: server + '\n' + details.reason,
+      buttons: [tr('서버 변경', 'Change server'), tr('다시 불러오기', 'Reload')], defaultId: 1, cancelId: 1 });
+    if (win.isDestroyed()) return;
+    if (result.response === 0) openSetup(); else { crashes = []; win.clientContents.reload(); }
+  });
+  win.clientContents.on('context-menu', (_event, params) => showContextMenu(win, params));
+}
+
+/** The right-click menu (contextMenu.mjs), acted on for this page only. */
+function showContextMenu(win, params) {
+  const wc = win.clientContents;
+  if (wc.isDestroyed() || !gateway || !sameOrigin(wc.getURL(), gateway.origin)) return;
+  const act = (action, arg) => {
+    if (action === 'replace') wc.replaceMisspelling(arg);
+    else if (action === 'learn') wc.session.addWordToSpellCheckerDictionary(arg);
+    else if (action === 'openLink') external(arg, win);
+    else if (action === 'copyText') clipboard.writeText(arg);
+    else if (action === 'copyImage') wc.copyImageAt(params.x, params.y);
+    else if (action === 'saveImage') wc.downloadURL(arg);
+    else if (['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll'].includes(action)) wc[action]();
+  };
+  const template = menuItems(params).map(i => i.type === 'separator' ? i : { label: i.label, enabled: i.enabled !== false, click: () => act(i.action, i.arg) });
+  if (template.length) Menu.buildFromTemplate(template).popup({ window: win });
 }
 
 /* ------------------------------------------------------------- tray, menus */
@@ -431,6 +470,8 @@ else {
       catch { openSetup(); }
     } else openSetup();
     void notifyUpdate();
+    // Kept running for days in the tray, it still hears of a new version.
+    if (!smoke) setInterval(() => { void notifyUpdate(); }, UPDATE_EVERY);
     const smokeServer = process.argv.find(v => v.startsWith('--smoke-server='));
     if (smoke && smokeServer) connect(smokeServer.slice(15)).catch(error => { console.error(error); app.exit(1); });
   });

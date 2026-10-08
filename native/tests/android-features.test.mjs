@@ -72,3 +72,15 @@ test('only <IPv4>.nip.io:<port> is taken, the server is asked first, and a site 
   assert.match(proxy, /raw\.connect\(new InetSocketAddress\(addressOf\(target\.getHost\(\)\), port\), 15000\);/, 'no DNS needed for a nip.io name');
   assert.doesNotMatch(main, / \+ "\r?\n" \+ /, 'no string broken across lines');
 });
+
+test('a crashed WebView is replaced instead of ending the app', () => {
+  assert.match(main, /public boolean onRenderProcessGone\(WebView view, RenderProcessGoneDetail detail\)[\s\S]{0,900}view\.destroy\(\);[\s\S]{0,400}else showWeb\(server\);\s*return true;/);
+});
+
+test('updates are checked again after six hours away, and pull down reloads', () => {
+  assert.match(main, /onResume\(\)[\s\S]{0,200}UPDATE_EVERY\) checkUpdates\(false\)/);
+  const js = src('assets/native.js');
+  assert.match(js, /addEventListener\('touchstart'[\s\S]{0,200}passive: true/);
+  assert.match(js, /if \(go\) location\.reload\(\)/);
+  assert.match(js, /scrolledUp/);
+});

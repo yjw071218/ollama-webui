@@ -271,9 +271,18 @@ public class MainActivity extends Activity {
         };
         try { manager.registerDefaultNetworkCallback(network); } catch (Exception e) { network = null; }
     }
+    private final List<Long> crashes = new ArrayList<>();
+    /** Left open for days, the app still hears of a new version: checked again on return after six hours. */
+    private static final long UPDATE_EVERY = 6L * 60 * 60 * 1000;
+    private long lastUpdateCheck;
+    @Override protected void onResume() {
+        super.onResume();
+        if (lastUpdateCheck > 0 && System.currentTimeMillis() - lastUpdateCheck > UPDATE_EVERY) checkUpdates(false);
+    }
     private UpdateDialog updateDialog;
     /** Check GitHub; on news, the in-app update screen (UpdateDialog) downloads and installs it. */
     private void checkUpdates(boolean manual) {
+        lastUpdateCheck = System.currentTimeMillis();
         if (updateDialog != null && updateDialog.showing()) return;
         io.execute(() -> {
             try {
@@ -584,6 +593,21 @@ public class MainActivity extends Activity {
                     .setCancelable(false)
                     .setNegativeButton(L.t("서버 변경", "Change server"), (d,w) -> { stopService(new Intent(MainActivity.this, CaptureService.class)); showSetup(); })
                     .setPositiveButton(L.t("다시 시도", "Try again"), (d,w) -> { if (web != null) web.reload(); }).show();
+            }
+            /* The page's process died (out of memory, mostly). Not handled, Android
+               ends the whole app; instead the page is opened again in a fresh
+               WebView -- unless it keeps happening, then the address screen. */
+            @Override public boolean onRenderProcessGone(WebView view, RenderProcessGoneDetail detail) {
+                long now = System.currentTimeMillis();
+                crashes.removeIf(t -> now - t > 60000); crashes.add(now);
+                if (web == view) web = null;
+                ViewParent parent = view.getParent();
+                if (parent instanceof ViewGroup) ((ViewGroup) parent).removeView(view);
+                view.destroy();
+                if (isFinishing() || isDestroyed()) return true;
+                if (crashes.size() > 2 || proxy == null) { crashes.clear(); showSetup(); message(L.t("페이지가 반복해서 종료되어 연결을 닫았습니다.", "The page kept stopping, so the connection was closed.")); }
+                else showWeb(server);
+                return true;
             }
             @Override public void onReceivedSslError(WebView view, android.webkit.SslErrorHandler handler, android.net.http.SslError error) {
                 handler.cancel(); message(L.t("서버 인증서를 확인할 수 없습니다. 인증서 검증을 우회하지 않습니다.", "The server's certificate could not be verified. The check is not bypassed."));

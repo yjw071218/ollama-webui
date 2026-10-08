@@ -21,6 +21,7 @@ export function createUpdater({ ownerWindow, beforeInstall = async () => {} }) {
   const dir = () => path.join(app.getPath('temp'), 'OllamaWebUI-Update');
   let win = null, update = null, controller = null, ready = null, quitting = false;
   let state = { phase: 'idle' };
+  let offered = '';
 
   const prefs = async () => { try { return JSON.parse(await readFile(stateFile(), 'utf8')); } catch { return {}; } };
   const savePrefs = async (value) => writeFile(stateFile(), JSON.stringify(value), { mode: 0o600 }).catch(() => {});
@@ -56,12 +57,15 @@ export function createUpdater({ ownerWindow, beforeInstall = async () => {} }) {
 
   /** Check GitHub; open the window when there is news or when asked. */
   const check = async ({ manual = false } = {}) => {
-    if (state.phase === 'downloading' || state.phase === 'ready') { open(); return; }
+    if (state.phase === 'downloading' || state.phase === 'ready' || state.phase === 'installing') { if (manual) open(); return; }
     if (manual) { open(); send({ phase: 'checking', error: '' }); }
     try {
       const found = await checkUpdate(app.getVersion(), fetch, kind === 'portable' ? 'portable' : 'windows');
       if (!found) { if (manual) send({ phase: 'latest', current: app.getVersion() }); return; }
       if (!manual && (await prefs()).skipped === found.version) return;
+      // The periodic check (main.mjs) offers a version once a run; "later" means later.
+      if (!manual && offered === found.version) return;
+      offered = found.version;
       update = found;
       open();
       send({ phase: 'available', error: '', info: describe(found) });

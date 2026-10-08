@@ -64,3 +64,30 @@ test('main wires the client features to the page, checked by origin', () => {
   assert.match(read('chrome.mjs'), /preload: path\.join\(root, 'client-preload\.cjs'\)/);
   assert.match(read('client-preload.cjs'), /platform: 'desktop'/);
 });
+
+test('right-click menu: editing, selection, links, images, spelling', async () => {
+  const { menuItems } = await import('../desktop/contextMenu.mjs');
+  setLanguage('en');
+  const acts = p => menuItems(p).filter(i => i.action).map(i => i.action);
+  assert.deepEqual(menuItems({}), [], 'nothing to offer, no menu');
+  assert.deepEqual(acts({ selectionText: 'hi' }), ['copy']);
+  assert.deepEqual(acts({ isEditable: true, editFlags: { canPaste: true } }), ['undo', 'redo', 'cut', 'copy', 'paste', 'selectAll']);
+  assert.equal(menuItems({ isEditable: true, editFlags: { canPaste: true } }).find(i => i.action === 'paste').enabled, true);
+  assert.deepEqual(acts({ linkURL: 'https://a.example' }), ['openLink', 'copyText']);
+  assert.deepEqual(acts({ linkURL: 'javascript:alert(1)' }), [], 'only http(s) links');
+  assert.deepEqual(acts({ mediaType: 'image', srcURL: 'http://x/a.png' }), ['copyImage', 'saveImage']);
+  const spell = menuItems({ isEditable: true, misspelledWord: 'teh', dictionarySuggestions: ['the', 'ten'] });
+  assert.deepEqual(spell.slice(0, 3).map(i => i.arg), ['the', 'ten', 'teh']);
+  setLanguage('ko');
+});
+
+test('a crashed page reloads, updates are checked again, an offered version is not re-shown', () => {
+  const main = read('main.mjs'), updater = read('updater.mjs');
+  assert.match(main, /'render-process-gone'[\s\S]{0,400}crashes\.length <= 2\) \{ win\.clientContents\.reload\(\)/);
+  assert.match(main, /'context-menu', \(_event, params\) => showContextMenu\(win, params\)/);
+  assert.match(main, /setInterval\(\(\) => \{ void notifyUpdate\(\); \}, UPDATE_EVERY\)/);
+  assert.match(updater, /if \(!manual && offered === found\.version\) return;/);
+  assert.match(updater, /\{ if \(manual\) open\(\); return; \}/, 'a background check does not pop a download window');
+  assert.match(main, /setAppUserModelId\('io\.github\.yjw071218\.ollamawebui\.client'\)/);
+  assert.equal(JSON.parse(readFileSync(new URL('../desktop/package.json', import.meta.url), 'utf8')).build.appId, 'io.github.yjw071218.ollamawebui.client', 'the ID matches the installer shortcut');
+});
