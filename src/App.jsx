@@ -76,6 +76,7 @@ import { CliApprovals } from './CliAgent.jsx';
 import { CliLimitBadge, formatUsd, cliOf } from './CliLimits.jsx';
 import { CliTurnExtras, CliChips } from './CliTurn.jsx';
 import { cliHeadersOf } from './cliTurn.js';
+import { cliActivityLabel } from './cliActivity.js';
 
 // 113312 -> "113K", 1220 -> "1.2K", 1927279 -> "1.9M"; under 1000 as is.
 const compactFormat = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
@@ -98,7 +99,7 @@ const textBlocksOfGroup = (group) => group
    end, so the live figure is estimated from the text received (marked "~");
    the exact one replaces it in the metrics row when the answer finishes.
    It keeps its own clock, so only this line re-renders every tick. */
-function LiveWorkStatus({ text, answer = '', startedAt }) {
+function LiveWorkStatus({ text, answer = '', startedAt, activity }) {
   /* The generation's own start, saved in localStorage, so a page reload keeps
      counting from where it was instead of starting again at 0. */
   const [start] = useState(() => {
@@ -150,6 +151,9 @@ function LiveWorkStatus({ text, answer = '', startedAt }) {
   return (
     <div className={`live-work-status${stalled ? ' is-stalled' : ''}`} aria-live="off">
       <span className="live-work-spark" aria-hidden="true">✻</span>
+      {cliActivityLabel(activity?.phase) && (
+        <span className={`live-work-phase is-${activity.phase}`}>{cliActivityLabel(activity.phase)}</span>
+      )}
       <span className="live-work-time">{elapsed}</span>
       <span className="dot">•</span>
       <span className="live-work-tokens" title="Estimated while streaming; exact count appears when the answer finishes">↓ ~{compactCount(tokens)} tok</span>
@@ -2908,7 +2912,7 @@ function App() {
    * it takes over on its own. */
   const messages = useMemo(() => {
     const stored = currentSession?.messages || [];
-    if (!followed?.content || followed.chat !== String(currentSessionId)) return stored;
+    if (!followed || (!followed.content && !followed.live) || followed.chat !== String(currentSessionId)) return stored;
     const index = stored.findLastIndex(m => m.role === 'assistant');
     /* The answer to the question just asked, not the one before it: the
        writing device's empty reply may not have synced yet, and the words were
@@ -2921,7 +2925,7 @@ function App() {
          kept on screen until its stored copy lands; a question asked since
          is a new turn, and the old words are not its answer. */
       if (!followed.live && askedCount(stored) > (followed.asked ?? Infinity)) return stored;
-      return [...stored, { role: 'assistant', content: followed.content, followedOnly: true }];
+      return [...stored, { role: 'assistant', content: followed.content, cliStarted: followed.cliStarted, cliActivity: followed.cliActivity, followedOnly: true }];
     }
     if ((stored[index].content || '').length >= followed.content.length) return stored;
     const shown = [...stored];
@@ -3140,7 +3144,7 @@ function App() {
       isGeneratingRef.current = true;
       const reader = resumableChatReader(null, saved.jobId, controller.signal);
       const decoder = new TextDecoder();
-      let buffer = '', thinking = '', content = '', metrics = null, terminal = false;
+      let buffer = '', thinking = '', content = '', metrics = null, terminal = false, cliActivity = null, cliStarted = null;
       const commit = () => {
         const restoredContent = (saved.prefix || '') + (thinking
           ? (terminal || content ? `<think>\n${fenceThinking(decodeByteFallback(thinking))}\n</think>\n\n`
@@ -3154,8 +3158,11 @@ function App() {
           const previous = messages[index] || { role: 'assistant', content: '', model: saved.model };
           // While replay catches up, the already saved answer stays on screen.
           // Preserve a longer completed variant/continuation and its metrics.
-          if ((previous.content || '').length > restoredContent.length) return session;
-          messages[index] = { ...previous, content: restoredContent,
+          if ((previous.content || '').length > restoredContent.length) {
+            messages[index] = { ...previous, cliActivity, ...(cliStarted ? { cliStarted } : {}) };
+            return { ...session, messages };
+          }
+          messages[index] = { ...previous, content: restoredContent, cliActivity, ...(cliStarted ? { cliStarted } : {}),
             ...(measured ? { metrics: { ...previous.metrics, ...measured } } : {}), isMcpFetching: false };
           return { ...session, messages };
         });
@@ -3173,6 +3180,9 @@ function App() {
             try { frame = JSON.parse(line); } catch { continue; }
             thinking += frame.message?.thinking || '';
             content += frame.message?.content || '';
+            if (frame.cli_activity) cliActivity = frame.cli_activity;
+            if (frame.cli_started) cliStarted = frame.cli_started;
+            if (frame.done || frame.error) cliActivity = null;
             if (frame.done) terminal = true;
             if (frame.error) addLog(frame.error, 'error');
             if (frame.eval_count !== undefined || frame.total_duration !== undefined) metrics = {
@@ -3477,7 +3487,7 @@ function App() {
       if (!turnStart) turnStart = startedAt;
       const reader = resumableChatReader(null, id, controller.signal);
       const decoder = new TextDecoder();
-      let buffer = '', thinking = '', content = '', terminal = false;
+      let buffer = '', thinking = '', content = '', terminal = false, cliActivity = null, cliStarted = null;
       /* The same two fields the writing device composes from: Ollama streams
          reasoning separately, and an open <think> is what keeps the dropdown
          spinning while the model is still in it. */
@@ -3499,13 +3509,16 @@ function App() {
             try { frame = JSON.parse(line); } catch { continue; }
             thinking += frame.message?.thinking || '';
             content += frame.message?.content || '';
+            if (frame.cli_activity) cliActivity = frame.cli_activity;
+            if (frame.cli_started) cliStarted = frame.cli_started;
+            if (frame.done || frame.error) cliActivity = null;
             if (frame.done) terminal = true;
           }
           /* `live` is what the composer's stop button reads: the words stay
              on screen after the stream ends, but there is nothing left to
              stop by then. */
           setFollowed({
-            chat, id, content: compose(), live: !(done || terminal), startedAt: turnStart,
+            chat, id, content: compose(), live: !(done || terminal), startedAt: turnStart, cliActivity, cliStarted,
             // How many questions the chat had here as these words came in (see `messages`).
             asked: askedCount(sessionsRef.current.find(s => String(s.id) === chat)?.messages || []),
           });
@@ -11303,12 +11316,15 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
           /* A CLI run began: which one, and its time limit -- the clock under
              the answer while it works (src/CliTurn.jsx). */
-          if (parsed.cli_started) {
-            const cliStarted = { ...parsed.cli_started, clientAt: Date.now() };
+          if (parsed.cli_started || parsed.cli_activity) {
+            const cliStarted = parsed.cli_started;
             reviseSession(currentSessionId, s => {
               const msgs = [...s.messages];
               if (!msgs[newMessageIndex]) return s;
-              msgs[newMessageIndex] = { ...msgs[newMessageIndex], cliStarted };
+              msgs[newMessageIndex] = { ...msgs[newMessageIndex],
+                ...(cliStarted ? { cliStarted, cliActivity: null } : {}),
+                ...(parsed.cli_activity ? { cliActivity: parsed.cli_activity } : {}),
+              };
               return { ...s, messages: msgs };
             });
           }
@@ -16521,6 +16537,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     {msg.role === 'assistant' && answerLiveHere && i + group.length - 1 >= messages.length - 1 && (
                       <LiveWorkStatus
                         key={`live-${currentSessionId}-${messages.length}`}
+                        activity={isThisChatGenerating ? group[group.length - 1].cliActivity : remoteAnswer?.cliActivity}
                         startedAt={(() => {
                           try {
                             const saved = JSON.parse(localStorage.getItem(generationStorageKey) || 'null');

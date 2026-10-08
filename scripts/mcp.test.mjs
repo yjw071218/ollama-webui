@@ -288,7 +288,7 @@ check('with its prompts and their arguments',
   stubStatus?.prompts?.[0]?.name === 'greet' && stubStatus.prompts[0].arguments[0].required === true);
 check('and its resource count', stubStatus?.resources === 2);
 check('a disabled server is listed as such', listed.servers.find(s => s.name === 'off')?.state === 'disabled');
-check('a broken one as failed, with why', listed.servers.find(s => s.name === 'broken')?.state === 'failed');
+check('a broken one is reconnecting with an error and retry time', listed.servers.some(s => s.name === 'broken' && s.state === 'reconnecting' && s.error && s.retryAt > Date.now()));
 const prompt = await pool.getPrompt('stub', 'greet', { who: 'Minsu' });
 check('a prompt comes back filled in', prompt.text === 'Please greet Minsu.', JSON.stringify(prompt));
 

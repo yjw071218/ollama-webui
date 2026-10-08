@@ -109,7 +109,11 @@ test('text replay restores the answer without navigating away from the selected 
   const navigations = [], writes = [];
   let forgotten = false, busy = false;
   const saved = { jobId: 'finished', sessionId: 'A', messageIndex: 0 };
-  const frames = [new TextEncoder().encode('{"message":{"content":"복구된 답변"},"done":true}\n')];
+  const frames = [
+    { cli_started: { provider: 'codex', startedAt: 123 }, cli_activity: { phase: 'thinking', at: 124 } },
+    { cli_activity: { phase: 'running', at: 125 } },
+    { message: { content: '복구된 답변' }, done: true },
+  ].map(frame => new TextEncoder().encode(JSON.stringify(frame) + '\n'));
   vm.runInNewContext(source, {
     isStorageLoaded: true, generationStorageKey: 'generation',
     localStorage: { getItem: () => JSON.stringify(saved) },
@@ -131,6 +135,10 @@ test('text replay restores the answer without navigating away from the selected 
   assert.deepEqual(navigations, []);
   assert.equal(writes.at(-1).id, 'A');
   assert.equal(writes.at(-1).session.messages[0].content, '복구된 답변');
+  assert.equal(writes[0].session.messages[0].cliActivity.phase, 'thinking');
+  assert.equal(writes[1].session.messages[0].cliActivity.phase, 'running');
+  assert.equal(writes.at(-1).session.messages[0].cliActivity, null);
+  assert.equal(writes.at(-1).session.messages[0].cliStarted.startedAt, 123);
   assert.equal(busy, false);
   assert.equal(forgotten, true);
 });

@@ -420,6 +420,19 @@ eq('but not over "off"', C.effortOf(false, C.PROVIDERS.codex, { CLI_EFFORT: 'hig
     eq('execution rules do not widen the built-in sandbox', run.session.thread.sandbox, 'read-only');
     eq('execution rules do not change approval policy', run.session.thread.approvalPolicy, 'never');
   }
+  // Built-in tools remain available even with MCP off, including resumed chats.
+  for (const resume of ['', 'existing-thread']) {
+    const run = C.buildInvocation(C.PROVIDERS.codex, 'test-model',
+      { system: 'Be brief.', prompt: '알겠어' },
+      { files: scratch2, env: { CLI_FULL_ACCESS: 'true', CLI_MCP: 'off' }, resume });
+    eq('full chat clears replaced native prompt ' + resume, run.session.thread.baseInstructions, null);
+    check('full chat gets execution rules without MCP ' + resume,
+      run.session.thread.developerInstructions.includes('A promise or plan is not execution') &&
+      run.session.thread.developerInstructions.includes('already-described task'));
+    const handshake = run.session.accept({ id: 1, result: {} }).write[1];
+    eq('new/resumed RPC carries native prompt reset', handshake.params.baseInstructions, null);
+    check('new/resumed RPC carries execution rules', handshake.params.developerInstructions.includes('already-described task'));
+  }
   const configFile = withTools.args[withTools.args.indexOf('--mcp-config') + 1];
   check('the servers are handed over in a file', fs.existsSync(configFile) && JSON.parse(fs.readFileSync(configFile, 'utf8')).mcpServers.files);
   eq('and allowed', withTools.args[withTools.args.indexOf('--allowedTools') + 1],

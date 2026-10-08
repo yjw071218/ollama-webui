@@ -10219,3 +10219,9 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
   }
 }
+
+/* CLI activity labels follow protocol events; shimmer is purely presentational. */
+.live-work-phase { color: var(--text-muted); animation: cli-phase-pulse 1.8s ease-in-out infinite; }
+.live-work-phase.is-running { animation-duration: 1.2s; }
+@keyframes cli-phase-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
+@media (prefers-reduced-motion: reduce) { .live-work-phase { animation: none; } }

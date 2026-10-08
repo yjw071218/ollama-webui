@@ -8,7 +8,7 @@
  * when a shell command's result comes back, reports what differs.
  *
  * Only git work trees: their status says which files to look at, so a run
- * never walks a whole drive. Each tracker belongs to one run (ClaudeReader).
+ * never walks a whole drive. Each tracker belongs to one ClaudeReader, CodexSession or agy transcript run.
  */
 import { execFileSync } from 'node:child_process';
 import fs from 'node:fs';
@@ -25,8 +25,16 @@ const git = (cwd, args) => execFileSync('git', args, { cwd, encoding: 'utf8', ti
 export const pathsIn = (command = '') => {
   const out = new Set();
   const text = String(command);
+  // Quoted paths may contain spaces; POSIX paths also occur in Python scripts.
+  for (const m of text.matchAll(/(["'])([A-Za-z]:[\\/][^"'\r\n]+|\/(?!\/)[^"'\r\n]+)\1/g)) {
+    const p = m[2];
+    out.add(/^\/[a-zA-Z]\//.test(p) ? `${p[1].toUpperCase()}:${p.slice(2)}` : p);
+  }
   for (const m of text.matchAll(/(?:^|[\s"'`=(])([A-Za-z]:[\\/][^\s"'`;|&<>)]*)/g)) out.add(m[1]);
   for (const m of text.matchAll(/(?:^|[\s"'`=(])\/([a-zA-Z])\/([^\s"'`;|&<>)]*)/g)) out.add(`${m[1].toUpperCase()}:/${m[2]}`);
+  if (process.platform !== 'win32') {
+    for (const m of text.matchAll(/(?:^|[\s"'`=(])(\/(?!\/)[^\s"'`;|&<>)]*)/g)) out.add(m[1]);
+  }
   return [...out].map(p => p.replace(/[\\/]+$/, '')).filter(Boolean);
 };
 

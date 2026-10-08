@@ -209,7 +209,7 @@ await check('with full access, chat CLIs can write anywhere and are never stoppe
   ok(a.includes('--permission-mode bypassPermissions') && a.includes('--add-dir') && !claude.args.includes('--tools'), a);
   const codex = M.buildInvocation(M.PROVIDERS.codex, 'gpt-5.5', { system: 'Be brief.', prompt: 'x' }, { files, env: full });
   eq([codex.session.thread.sandbox, codex.session.thread.approvalPolicy], ['danger-full-access', 'never']);
-  ok(/full read and write access/.test(codex.session.thread.baseInstructions) && !/read-only sandbox/.test(codex.session.thread.baseInstructions));
+  ok(/full read and write access/.test(codex.session.thread.developerInstructions) && !/read-only sandbox/.test(codex.session.thread.developerInstructions));
 });
 await check('with full access, project runs write anywhere without asking -- but plan still only plans', () => {
   const full = { ...env, CLI_FULL_ACCESS: 'true' };

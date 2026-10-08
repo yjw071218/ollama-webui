@@ -759,8 +759,10 @@ const connectHttp = (name, config, { onNotification, cwd }) => {
       return text ? JSON.parse(text) : null;
     } catch (e) {
       if (e.name === 'AbortError') {
+        dead = dead || 'the HTTP connection timed out';
         throw new Error(`${name}: '${payload.method}' did not answer within ${Math.round(timeoutMs / 1000)}s`);
       }
+      if (e instanceof TypeError || /^HTTP 5\d\d/.test(e.message)) dead = dead || e.message;
       throw e;
     } finally {
       clearTimeout(timer);
@@ -976,6 +978,9 @@ export const createMcpPool = (env = {}, { cwd = process.cwd(), home = os.homedir
   const live = new Map();          // name -> entry
   const starting = new Map();      // name -> Promise, so two turns at once start one process
   const failures = new Map();      // name -> the last reason it could not start
+  const recovery = new Map();
+  let closed = false;
+  let generation = 0;
 
   const config = () => readConfig(env, { cwd, home });
   const configFor = (name) => config().servers[name] || null;
@@ -1079,6 +1084,7 @@ export const createMcpPool = (env = {}, { cwd = process.cwd(), home = os.homedir
   };
 
   const connect = async (name) => {
+    if (closed) throw new Error('MCP pool is closed');
     const c = configFor(name);
     const existing = live.get(name);
     if (existing && !existing.connection.dead && c && !c.disabled && existing.fingerprint === fingerprint(c)) {
@@ -1102,9 +1108,23 @@ export const createMcpPool = (env = {}, { cwd = process.cwd(), home = os.homedir
       throw new Error(`The MCP server '${name}' has neither a 'command' nor a 'url'`);
     }
 
+    const retry = recovery.get(name);
+    if (retry?.nextAt > Date.now()) throw new Error(failures.get(name) || 'MCP reconnecting');
+    const epoch = generation;
     const attempt = handshake(name, c)
-      .then((entry) => { live.set(name, entry); failures.delete(name); return entry; })
-      .catch((e) => { failures.set(name, e.message || String(e)); throw e; })
+      .then((entry) => {
+        if (closed || epoch !== generation || fingerprint(configFor(name)) !== fingerprint(c)) {
+          entry.connection.close();
+          throw new Error('MCP configuration changed while connecting');
+        }
+        live.set(name, entry); failures.delete(name); recovery.delete(name); return entry;
+      })
+      .catch((e) => {
+        failures.set(name, e.message || String(e));
+        const attempts = (recovery.get(name)?.attempts || 0) + 1;
+        recovery.set(name, { attempts, nextAt: Date.now() + Math.min(30000, 1000 * 2 ** Math.min(attempts - 1, 5)) });
+        throw e;
+      })
       .finally(() => starting.delete(name));
 
     starting.set(name, attempt);
@@ -1176,7 +1196,7 @@ export const createMcpPool = (env = {}, { cwd = process.cwd(), home = os.homedir
       } else {
         const reason = result.reason?.message || String(result.reason);
         problems.push({ server: name, error: reason });
-        status.push({ name, source: c.source, transport: c.transport, state: 'failed', error: reason, stats: statsOf(name), tools: 0, resources: 0, prompts: [] });
+        status.push({ name, source: c.source, transport: c.transport, state: recovery.has(name) ? 'reconnecting' : 'failed', retryAt: recovery.get(name)?.nextAt, error: reason, stats: statsOf(name), tools: 0, resources: 0, prompts: [] });
       }
     });
     for (const [name, c] of Object.entries(servers)) {
@@ -1289,13 +1309,32 @@ export const createMcpPool = (env = {}, { cwd = process.cwd(), home = os.homedir
 
   /** Stop one server, or all of them, so the next request starts it afresh. */
   const restart = (name) => {
-    if (name) { drop(name); failures.delete(name); return; }
+    if (name) { drop(name); failures.delete(name); recovery.delete(name); void connect(name).catch(() => {}); return; }
     for (const key of [...live.keys()]) drop(key);
     failures.clear();
+    recovery.clear();
     importCache.clear();
+    for (const [key, c] of Object.entries(config().servers)) if (!c.disabled) void connect(key).catch(() => {});
   };
 
+  // Keep previously requested servers alive without replaying a failed tool call.
+  const watchdog = setInterval(() => {
+    if (closed) return;
+    const servers = config().servers;
+    for (const name of new Set([...live.keys(), ...recovery.keys()])) {
+      const c = servers[name];
+      if (!c || c.disabled) { drop(name); recovery.delete(name); failures.delete(name); continue; }
+      if (starting.has(name) || recovery.get(name)?.nextAt > Date.now()) continue;
+      const entry = live.get(name);
+      if (!entry || entry.connection.dead || entry.fingerprint !== fingerprint(c)) void connect(name).catch(() => {});
+    }
+  }, 1000);
+  watchdog.unref?.();
   const close = () => {
+    closed = true;
+    generation++;
+    clearInterval(watchdog);
+    recovery.clear();
     for (const [, entry] of live) entry.connection.close();
     live.clear();
   };

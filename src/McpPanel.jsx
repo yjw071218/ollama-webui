@@ -1,4 +1,4 @@
-﻿import React from 'react';
+﻿import React, { useEffect } from 'react';
 import { RefreshCcw, RotateCw, TriangleAlert, Server, Wrench, FileText, MessageSquarePlus, ShieldCheck } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
 import { promptDialog } from './ConfirmDialog.jsx';
@@ -28,6 +28,12 @@ import { promptDialog } from './ConfirmDialog.jsx';
  */
 export const McpPanel = ({ tools, problems, config, loading, onRefresh, onRestart, onInsertPrompt }) => {
   const { t } = useI18n();
+  const recovering = config?.servers?.some(server => server.state === 'reconnecting');
+  useEffect(() => {
+    if (!recovering || !onRefresh || loading) return undefined;
+    const timer = setTimeout(onRefresh, 3000);
+    return () => clearTimeout(timer);
+  }, [recovering, onRefresh, loading, config]);
 
   const byServer = new Map();
   for (const tool of tools || []) {

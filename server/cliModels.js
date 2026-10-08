@@ -4,6 +4,7 @@ import crypto from 'node:crypto';
 import path from 'node:path';
 import { spawn, execFile } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
+import { StringDecoder } from 'node:string_decoder';
 import { readRequestBody } from './requestBody.js';
 import { signedInFile } from './cliAuth.js';
 import { ownerOfRequest } from './session.js';
@@ -14,6 +15,7 @@ import {
 import { readConfig as readMcpConfig } from './mcp.js';
 import { fileChangesIn, commandIn } from './workbench.js';
 import { ShellChanges, pathsIn } from './shellChanges.js';
+import { CliActivity } from './cliActivity.js';
 import { listCommands, stopCommand, noteCommand, readLog } from './liveCommands.js';
 import { readPolicy, writePolicy, effectiveAccess, hasBackup, restoreBackup, sweepBackups, listBackups } from './workbenchState.js';
 import { resumeEnabled, historyKey, splitForResume, tailRequest, sessions } from './cliSessions.js';
@@ -791,11 +793,12 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
 
   // Keep this in the invocation, not only the browser prompt: resumed and
   // API-driven chats need the same distinction between intent and execution.
-  if (hasServers && !project) system = [
+  if (!project && (hasServers || fullAccessOf(env))) system = [
     system || 'You are a helpful assistant.',
     '[Tool execution]',
     'When the user asks you to perform work, use the available tools to do it in this turn, within the user-authorized scope. A promise or plan is not execution.',
     'A brief progress message must be followed by the actual tool call, not a final answer saying you will start.',
+    'If the user says continue, proceed, okay, or agrees to work you previously proposed, treat that as authorization for the already-described task, not a request for another acknowledgement. Do not repeat the proposal or ask for the same confirmation. Respect explicit plan-only requests and changed scope.',
     'Use the project path and task already supplied in the conversation or its summary. Inspect that location with an available tool before asking the user to resend source files or a path.',
     'After a tool result, continue the requested work until complete or genuinely blocked. If blocked, report the attempted operation and actual error, and ask only for the missing information.',
     'Do not infer that every MCP server can write: use only capabilities actually offered, and respect permissions, plan-only requests, cancellations and required approvals.',
@@ -860,8 +863,8 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
     /* Not `codex exec`: its `--json` hands each message over whole when it is
        finished, so an answer appeared all at once after a long blank. The app
        server speaks JSON-RPC on stdio and sends `item/agentMessage/delta` per
-       token -- and takes a system prompt that replaces Codex's own, which is
-       about being a coding agent, rather than being prepended to it. */
+       token. Restricted chat replaces the coding prompt; full-access chat
+       preserves it and adds the app instructions as developer instructions. */
     const input = [{ type: 'text', text: prompt, text_elements: [] }];
     images.forEach((data, i) => {
       const ext = imageMime(data).split('/')[1] || 'png';
@@ -886,7 +889,10 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
           sandbox: fullAccessOf(env) ? 'danger-full-access' : 'read-only',
           approvalPolicy: 'never',
           ephemeral: !(persist || resume),
-          baseInstructions: fullAccessOf(env) ? (system || 'You are a helpful assistant.') + FULL_ACCESS_NOTE : [
+          // Full-access chat is also a coding agent. Keep its native tool-use
+          // and persistence instructions; null clears an old chat override on resume.
+          ...(fullAccessOf(env) ? { baseInstructions: null } : {}),
+          [fullAccessOf(env) ? 'developerInstructions' : 'baseInstructions']: fullAccessOf(env) ? (system || 'You are a helpful assistant.') + FULL_ACCESS_NOTE : [
             system || 'You are a helpful assistant.',
             /* The read-only sandbox is only Codex's own shell. Told nothing,
                Codex read "sandbox: read-only" in its context and refused to
@@ -1803,6 +1809,8 @@ export class CodexSession {
     this.usage = {};
     this.lastError = '';
     this.commands = new Set();   // commands started and not yet completed
+    this.shell = new ShellChanges();
+    this.cwd = thread?.cwd || '';
   }
 
   /* The run is over (finished, stopped or timed out). A command Codex never
@@ -1878,6 +1886,7 @@ export class CodexSession {
         if (item.type === 'webSearch') return { thinking: toolNote('web search', item.query) };
         if (item.type === 'commandExecution') {
           const command = Array.isArray(item.command) ? item.command.join(' ') : String(item.command || '');
+          try { this.shell.watch([item.cwd || this.cwd, ...pathsIn(command)].filter(Boolean)); } catch { /* unavailable git */ }
           // Watched live like the workbench's (server/liveCommands.js).
           noteCommand({ id: item.id, command, cwd: item.cwd || '', status: 'running' });
           if (item.id) this.commands.add(item.id);
@@ -1908,7 +1917,10 @@ export class CodexSession {
           noteCommand({ id: item.id, command, output, code, status: failed ? 'failed' : 'done' });
           this.commands.delete(item.id);
           const end = String(output || '').trim().split('\n').slice(-15).join('\n');
-          return { thinking: commandNoteOf(command, item.status === 'declined' ? 'declined' : `exit ${code ?? '?'}`, end) };
+          let content = '';
+          try { content = changesAsMarkdown(this.shell.collect().join('\n\n')); } catch { /* unavailable git */ }
+          if (content) this.messages++;
+          return { ...(content ? { content } : {}), thinking: commandNoteOf(command, item.status === 'declined' ? 'declined' : `exit ${code ?? '?'}`, end) };
         }
         /* What an edit changed, as Claude Code's edits show it: each file's
            diff (kept short), or why it did not go through. */
@@ -1916,11 +1928,20 @@ export class CodexSession {
           if (item.status === 'failed' || item.status === 'declined') {
             return { thinking: toolNote('tool failed', `edit ${item.status}: ${(item.changes || []).map(c => c.path).join(', ')}`) };
           }
-          const diffs = (item.changes || []).map((c) => {
-            const d = String(c.diff || c.unified_diff || '').split('\n').slice(0, 40).join('\n');
-            return `${c.kind?.type || c.kind || 'update'} ${c.path}${d ? `\n${d}` : ''}`;
-          }).join('\n\n');
-          return diffs ? { thinking: `\n${resultNote(diffs)}` } : null;
+          for (const c of item.changes || []) {
+            try { this.shell.seen(path.resolve(this.cwd || '.', c.path)); } catch { /* unavailable path */ }
+          }
+          const reports = (item.changes || []).map(c => {
+            const diff = String(c.diff || c.unified_diff || '');
+            if (!diff || !c.path) return '';
+            const lines = diff.split('\n');
+            const added = lines.filter(l => l.startsWith('+') && !l.startsWith('+++')).length;
+            const removed = lines.filter(l => l.startsWith('-') && !l.startsWith('---')).length;
+            return `[file-change] ${c.path} (+${added} -${removed})\n\`\`\`diff\n${diff}\n\`\`\``;
+          }).filter(Boolean);
+          const content = changesAsMarkdown(reports.join('\n\n'));
+          if (content) this.messages++;
+          return content ? { content } : null;
         }
         if (item.type === 'mcpToolCall' && item.status === 'failed') {
           return { thinking: toolNote('tool failed', item.error?.message || `${item.server} / ${item.tool}`) };
@@ -2130,19 +2151,99 @@ export const agyEditCards = (step = {}) => {
     if (!file) continue;
     if (call.name === 'write_to_file') out += agyCard(file, [], [a.CodeContent]);
     else if (call.name === 'replace_file_content') out += agyCard(file, [a.TargetContent], [a.ReplacementContent]);
-    else if (call.name === 'multi_replace_file_content' && Array.isArray(a.ReplacementChunks)) {
-      out += agyCard(file, a.ReplacementChunks.map(c => c?.TargetContent), a.ReplacementChunks.map(c => c?.ReplacementContent));
+    else if (call.name === 'multi_replace_file_content' && Array.isArray(a.ReplacementChunks || a.Replacements)) {
+      const chunks = a.ReplacementChunks || a.Replacements;
+      out += agyCard(file, chunks.map(c => c?.TargetContent), chunks.map(c => c?.ReplacementContent));
     }
   }
   return out;
 };
 
+/** agy's transcript pairs planner tool_calls with subsequent result steps.
+ * Track the actual files on disk, including writes made by shell/Python calls.
+ * A planned edit is not a completed edit; only its result may emit a card. */
+export class AgyTranscriptState {
+  constructor({ cwd = '', paths = [], activity = new CliActivity('agy'), onActivity = () => {} } = {}) {
+    this.cwd = cwd;
+    this.activity = activity;
+    this.onActivity = onActivity;
+    this.shell = new ShellChanges();
+    this.pending = [];
+    this.calls = new Set();
+    this.results = new Map();
+    try { this.shell.watch([cwd, ...paths].filter(Boolean)); } catch { /* unavailable git */ }
+  }
+  phase(value) { if (value !== undefined) this.onActivity(value); }
+  collect() {
+    try { return changesAsMarkdown(this.shell.collect().join('\n\n')); } catch { return ''; }
+  }
+  accept(step) {
+    if (step.type === 'PLANNER_RESPONSE') {
+      for (const [index, call] of (Array.isArray(step.tool_calls) ? step.tool_calls : []).entries()) {
+        const id = `agy:${step.step_index}:${index}`;
+        if (this.calls.has(id)) continue;
+        this.calls.add(id);
+        const a = call.args || {};
+        const paths = [a.Cwd, a.TargetFile, a.AbsolutePath, a.DirectoryPath, a.SearchDirectory,
+          ...pathsIn(a.CommandLine || '')].filter(p => typeof p === 'string' && p)
+          .map(p => p.replace(/^file:\/\/\//, ''));
+        try { this.shell.watch(paths); } catch { /* unavailable git */ }
+        this.pending.push({ id, call });
+        this.activity.items.delete('step');
+        this.phase(this.activity.toolStarted(id, call.name, a));
+      }
+      return '';
+    }
+    if (AGY_QUIET_STEPS.has(step.type)) return '';
+    let result = this.results.get(step.step_index);
+    if (!result) {
+      result = { entry: this.pending.shift(), done: false };
+      this.results.set(step.step_index, result);
+    }
+    if (result.done || step.status === 'RUNNING') return '';
+    result.done = true;
+    const entry = result.entry;
+    if (entry) this.phase(this.activity.set(entry.id, ''));
+    const reports = fileChangesIn(agyStepBody(step.content));
+    for (const report of reports) { try { this.shell.seen(report.file); } catch { /* unavailable file */ } }
+    const reported = changesAsMarkdown(agyStepBody(step.content));
+    // Also collect partial writes when a command failed after changing a file.
+    const actual = this.collect();
+    if (!entry || step.status !== 'DONE' || step.type === 'ERROR_MESSAGE') return reported + actual;
+    const target = typeof entry.call.args?.TargetFile === 'string' ? entry.call.args.TargetFile.replace(/^file:\/\/\//, '') : '';
+    // In git trees the measured diff is authoritative. Outside them retain
+    // agy's native edit cards, now only after a successful tool result.
+    const tracked = target && this.shell.rootOf(target);
+    return reported + actual + (!tracked && !reported ? agyEditCards({ tool_calls: [entry.call] }) : '');
+  }
+  finish() {
+    const cards = this.collect();
+    for (const { id } of this.pending) this.activity.items.delete(id);
+    for (const { entry } of this.results.values()) if (entry) this.activity.items.delete(entry.id);
+    this.phase(this.activity.update());
+    return cards;
+  }
+}
+
 /* Finds the transcript of the run that began at `startedAt` -- its own
-   conversation when agy has said which, else the newest one started since --
+   conversation when agy has said which, else the sole changed transcript --
    and hands each new step's notes to `emit`. `finish()` reads what is left. */
-export const watchAgyTranscript = ({ env = {}, startedAt = Date.now(), conversation = () => '', streamedThinking = () => false, emit }) => {
+export const watchAgyTranscript = ({ env = {}, startedAt = Date.now(), conversation = () => '', streamedThinking = () => false, emit,
+  cwd = '', paths = [], activity, onActivity }) => {
   const brain = agyBrainDir(env);
+  const state = new AgyTranscriptState({ cwd, paths, activity, onActivity });
   let file = '', offset = 0, partial = '';
+  let decoder = new StringDecoder('utf8');
+  // Resume from each file's current end. Old steps from the preceding turn
+  // must not be mistaken for new calls merely because their timestamps match.
+  const initialOffsets = new Map();
+  try {
+    for (const d of fs.readdirSync(brain, { withFileTypes: true })) {
+      if (!d.isDirectory()) continue;
+      const f = path.join(brain, d.name, AGY_TRANSCRIPT);
+      try { initialOffsets.set(f, fs.statSync(f).size); } catch { /* not a transcript */ }
+    }
+  } catch { /* first run */ }
   const seen = new Set();
   const since = startedAt - 5000;   // created_at has whole seconds
 
@@ -2150,9 +2251,9 @@ export const watchAgyTranscript = ({ env = {}, startedAt = Date.now(), conversat
     const id = conversation();
     if (id) {
       const own = path.join(brain, id, AGY_TRANSCRIPT);
-      if (fs.existsSync(own)) return own;
+      return fs.existsSync(own) ? own : '';
     }
-    let best = '', bestAt = 0;
+    const candidates = [];
     let dirs = [];
     try { dirs = fs.readdirSync(brain, { withFileTypes: true }); } catch { return ''; }
     for (const d of dirs) {
@@ -2160,30 +2261,33 @@ export const watchAgyTranscript = ({ env = {}, startedAt = Date.now(), conversat
       const f = path.join(brain, d.name, AGY_TRANSCRIPT);
       try {
         const st = fs.statSync(f);
-        if (st.mtimeMs >= since && st.mtimeMs > bestAt) { best = f; bestAt = st.mtimeMs; }
+        if (st.mtimeMs >= since && (!initialOffsets.has(f) || st.size !== initialOffsets.get(f))) candidates.push(f);
       } catch { /* not this one */ }
     }
-    return best;
+    // With simultaneous runs, wait for the CLI's conversation id instead of
+    // showing another conversation's edits and state.
+    return candidates.length === 1 ? candidates[0] : '';
   };
 
-  const step = () => {
-    if (!file) { file = locate(); if (!file) return; }
+  const step = (final = false) => {
+    if (!file) { file = locate(); if (!file) return; offset = initialOffsets.get(file) || 0; }
     let size = 0;
     try { size = fs.statSync(file).size; } catch { return; }
-    if (size < offset) { offset = 0; partial = ''; }       // rewritten
-    if (size === offset) return;
+    if (size < offset) { offset = 0; partial = ''; decoder = new StringDecoder('utf8'); } // rewritten
+    if (size === offset && !(final && partial)) return;
     let chunk = '';
     try {
       const fd = fs.openSync(file, 'r');
       try {
         const buf = Buffer.alloc(size - offset);
-        fs.readSync(fd, buf, 0, buf.length, offset);
-        chunk = buf.toString('utf8');
+        const read = fs.readSync(fd, buf, 0, buf.length, offset);
+        chunk = decoder.write(buf.subarray(0, read));
+        offset += read;
       } finally { fs.closeSync(fd); }
     } catch { return; }
-    offset = size;
     const lines = (partial + chunk).split('\n');
     partial = lines.pop();
+    if (final && partial) { lines.push(partial); partial = ''; }
     let notes = '', cards = '';
     for (const raw of lines) {
       let s;
@@ -2197,17 +2301,20 @@ export const watchAgyTranscript = ({ env = {}, startedAt = Date.now(), conversat
       notes += agyStepNotes(s, { withThinking: !streamedThinking() });
       /* agy's file edits, and any workbench diff a step returns, go into the
          answer as the same file card Claude Code and Codex get. */
-      cards += agyEditCards(s);
-      if (!AGY_QUIET_STEPS.has(s.type) && s.type !== 'ERROR_MESSAGE' && s.status !== 'RUNNING') {
-        cards += changesAsMarkdown(agyStepBody(s.content));
-      }
+      cards += state.accept(s);
     }
     if (notes || cards) { try { emit(notes, cards); } catch { /* shown or not */ } }
   };
 
   const timer = setInterval(step, 600);
   timer.unref?.();
-  return { finish: () => { clearInterval(timer); step(); }, stop: () => clearInterval(timer) };
+  const finish = () => {
+    clearInterval(timer);
+    step(true);
+    const cards = state.finish();
+    if (cards) { try { emit('', cards); } catch { /* closed stream */ } }
+  };
+  return { finish, stop: finish };
 };
 
 /* ------------------------------------------------------------ running one */
@@ -2381,7 +2488,7 @@ export const runCli = async (options) => {
 };
 
 const runCliOnce = ({
-  provider, model, request, think, tools = null, env = {}, signal, onDelta, onStart, resume = '', persist = false,
+  provider, model, request, think, tools = null, env = {}, signal, onDelta, onStart, onActivity, resume = '', persist = false,
   project = null, approve = null,
 }) => new Promise((resolve, reject) => {
   const binary = resolveBinary(provider, env);
@@ -2406,9 +2513,15 @@ const runCliOnce = ({
   try { invocation = buildInvocation(provider, model, request, { think, files, tools, env, resume, persist, project }); } catch (e) { cleanup(); reject(e); return; }
   /* Asked in the browser, said in the thinking so a pause has a reason.
      Nobody to ask means no. */
+  const activity = new CliActivity(provider.id);
+  let approvalIndex = 0;
+  const reportActivity = phase => { if (phase !== undefined) { try { onActivity?.(phase); } catch { /* closed stream */ } } };
   const ask = (question) => {
+    const waitId = `approval:${++approvalIndex}`;
+    reportActivity(activity.set(waitId, 'waiting'));
     try { onDelta?.({ content: '', thinking: `${stampNote()}\n[approval needed: ${question.title.slice(0, 200)}]\n` }); } catch { /* shown or not */ }
-    return approve ? Promise.resolve(approve({ provider: provider.id, ...question })).catch(() => 'decline') : Promise.resolve('decline');
+    return Promise.resolve().then(() => approve ? approve({ provider: provider.id, ...question }) : 'decline')
+      .catch(() => 'decline').finally(() => reportActivity(activity.set(waitId, '')));
   };
   const stopWatching = invocation.approvalDir ? watchApprovalDir(invocation.approvalDir, ask) : () => {};
 
@@ -2425,12 +2538,15 @@ const runCliOnce = ({
   // A conversation (Codex) reads and writes; the others read a stream.
   const reader = invocation.session || new READERS[provider.id]();
   // Where its shell commands start, for the files they change (shellChanges.js).
-  if (reader instanceof ClaudeReader) reader.cwd = invocation.cwd || workDir();
+  if (reader instanceof ClaudeReader || reader instanceof CodexSession) reader.cwd = reader.thread?.cwd || invocation.cwd || workDir();
+  if (reader instanceof CodexSession) { try { reader.shell.watch([reader.cwd]); } catch { /* unavailable git */ } }
   // agy's tool steps, from its transcript (see watchAgyTranscript).
   const transcript = provider.id === 'agy' && !flag(env.CLI_AGY_TRANSCRIPT ?? 'on', true) ? null
     : provider.id === 'agy' ? watchAgyTranscript({
       env, startedAt: Date.now(), conversation: () => reader.sessionId || resume || '',
       streamedThinking: () => !!reader.sawThinking,
+      cwd: invocation.cwd || workDir(), paths: [...pathsIn(request.prompt), ...pathsIn(request.system)],
+      activity, onActivity: reportActivity,
       emit: (thinking, content = '') => { try { onDelta?.({ content, thinking }); } catch { /* closed */ } },
     }) : null;
   const timeoutMs = cliTimeoutMs(env, { tools, project });
@@ -2446,6 +2562,7 @@ const runCliOnce = ({
     try { reader.close?.(); } catch { /* only the live list */ }
     // The last steps agy wrote, before the answer is called whole.
     if (transcript) { if (error) transcript.stop(); else transcript.finish(); }
+    reportActivity(activity.clear());
     signal?.removeEventListener('abort', onAbort);
     killTree(child);
     if (exited) cleanup();
@@ -2481,6 +2598,7 @@ const runCliOnce = ({
     if (!text.startsWith('{')) return;
     let line;
     try { line = JSON.parse(text); } catch { return; }
+    reportActivity(activity.accept(line));
     const out = reader.accept(line);
     if (!out) return;
     for (const message of out.write || []) write(message);
@@ -2977,6 +3095,7 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
     const attempt = (asked, id) => runCli({
       provider, model, request: asked, env, tools, think: body.think, signal: controller.signal,
       resume: id, persist: resumable, onStart, onDelta, project, approve,
+      onActivity: phase => publish(frameOf({}, { done: false, cli_activity: { phase, at: Date.now() } })),
     });
     const before = project ? await snapshotTree(project.dir) : null;
     const scratchBefore = project || generate ? null : scanDir(workDir());
@@ -2985,6 +3104,7 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
     publish(frameOf({ content: '' }, {
       done: false,
       cli_started: { provider: provider.id, model, startedAt: Date.now(), timeoutMs: cliTimeoutMs(env, { tools, project }), continued: !!carry },
+      cli_activity: { phase: 'starting', at: Date.now() },
     }));
     // No folder picked: each file it writes is shown as it appears, with its real path.
     const scratchWatch = scratchBefore
