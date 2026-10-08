@@ -45,8 +45,13 @@ if (process.argv.includes('--check')) {
   await writeFile(checksums, hashes.join('\n') + '\n'); files.push(checksums);
   // The in-app update window shows the "## 이번 버전" section (desktop/updates.mjs releaseNotes).
   const notesFile = (await readFile(path.join(root, 'native/RELEASE_NOTES.md'), 'utf8')).replace(/\r\n/g, '\n').trim();
-  const [heading, ...noteLines] = notesFile.split('\n');
+  const [heading, ...rest] = notesFile.split('\n');
   if (heading.trim() !== '# ' + version) throw new Error('native/RELEASE_NOTES.md 첫 줄이 "# ' + version + '"이 아닙니다.');
+  // This version only. The apps read "## 이번 버전" up to the next "##", and older
+  // versions are headed "#", so the whole history used to end up in the update
+  // window -- long enough to push its buttons off a phone screen.
+  const end = rest.findIndex(line => /^#\s/.test(line));
+  const noteLines = (end < 0 ? rest : rest.slice(0, end)).join('\n').trim().split('\n');
   const body = ['## 이번 버전 (' + version + ')', ...noteLines, '', '웹서버: https://github.com/' + repo + '/releases/tag/v1.0.5', 'Google callback: http://127.0.0.1:47615/api/auth/native/google/callback', '실계정 로그인 및 실기기 설치는 미검증입니다.', '소스 커밋: ' + sha].join('\n');
   const releases = await api('/releases?per_page=100');
   let release = releases.find(r => r.tag_name === tag);
