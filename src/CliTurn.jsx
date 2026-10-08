@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Timer, Undo2, Check, RotateCcw, CornerDownRight, FolderGit2, Gauge, Globe, Plug, PencilRuler } from 'lucide-react';
+import { Timer, Undo2, Check, RotateCcw, CornerDownRight, FolderGit2, Gauge, Globe, Plug, PencilRuler, ShieldCheck, ShieldOff, AlertTriangle } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
-import { cliLabel, cliOf } from './CliLimits.jsx';
+import { cliLabel, cliOf, useCliLimits, pickBadgeWindow, windowLabel, formatDuration, formatWhen } from './CliLimits.jsx';
+import { agyQuotaForModel } from './agyQuota.js';
 import { runIdOf, clockText, clockState, nextEffort, nextOffState } from './cliTurn.js';
 import './cliTurn.css';
 import { confirmDialog } from './ConfirmDialog.jsx';
@@ -155,6 +156,44 @@ export const CliTurnExtras = ({ message, live = false, isLast = false, busy = fa
 
 /** This chat's CLI choices, in reach of the box being typed into. Shown only
  *  for a CLI model. `options` lives on the session as `cliOptions`. */
+/* What is left of the tightest usage window, said in the composer once it
+   passes 75 / 50 / 25 % left, and with the reset time once it is nearly gone. */
+export const limitNotice = (limits, now = Date.now()) => {
+  const windows = (limits?.windows || []).filter(w => Number.isFinite(w.usedPercent) && !w.reset);
+  const blocked = limits?.status === 'rejected';
+  const w = pickBadgeWindow(windows, blocked, now);
+  if (!w) return null;
+  const left = Math.max(0, Math.round(100 - w.usedPercent));
+  const resetsAt = Number.isFinite(w.resetsAt) && w.resetsAt > now ? w.resetsAt : null;
+  if (blocked || left <= 10) return { level: 'near', left, id: w.id, resetsAt };
+  const step = [25, 50, 75].find(s => left <= s);
+  return step ? { level: 'step', step, left, id: w.id, resetsAt } : null;
+};
+
+const LimitNote = ({ cli, model }) => {
+  const { t, lang } = useI18n();
+  const all = useCliLimits(!!cli);
+  const [now, setNow] = useState(Date.now());
+  useEffect(() => {
+    const timer = setInterval(() => { if (!document.hidden) setNow(Date.now()); }, 30_000);
+    return () => clearInterval(timer);
+  }, []);
+  const limits = !all ? null : cli === 'agy' ? agyQuotaForModel(all[cli], model, now) : all[cli];
+  const note = limitNotice(limits, now);
+  if (!note) return null;
+  const name = windowLabel(t, note.id);
+  const text = note.level === 'near'
+    ? (note.resetsAt
+      ? t('cliTurn.limitNearReset', { name, pct: note.left, time: formatDuration(note.resetsAt - now, lang), at: formatWhen(note.resetsAt, lang) })
+      : t('cliTurn.limitNear', { name, pct: note.left }))
+    : t('cliTurn.limitStep', { name, pct: note.step });
+  return (
+    <span className={`cli-limit-note is-${note.level}`} role="status" title={text}>
+      <AlertTriangle size={12} aria-hidden="true" />{text}
+    </span>
+  );
+};
+
 export const CliChips = ({ model, session, onChange }) => {
   const { t } = useI18n();
   const cli = cliOf(model);
@@ -189,6 +228,21 @@ export const CliChips = ({ model, session, onChange }) => {
         <Plug size={12} aria-hidden="true" />
         MCP: {tri(o.mcp)}
       </button>
+      {/* Like --dangerously-skip-permissions / --yolo. On (the default) the CLI
+          acts without asking; off, every tool call waits for approval here. */}
+      <button
+        type="button"
+        role="switch"
+        aria-checked={o.approvals !== 'ask'}
+        className={`cli-chip cli-chip-switch ${o.approvals === 'ask' ? 'is-asking' : 'is-skipping'}`}
+        title={t(o.approvals === 'ask' ? 'cliTurn.approvalsAskHint' : 'cliTurn.approvalsSkipHint')}
+        onClick={() => set({ approvals: o.approvals === 'ask' ? '' : 'ask' })}
+      >
+        {o.approvals === 'ask' ? <ShieldCheck size={12} aria-hidden="true" /> : <ShieldOff size={12} aria-hidden="true" />}
+        {t('cliTurn.skipApprovals')}
+        <span className="cli-chip-toggle" aria-hidden="true"><span /></span>
+      </button>
+      <LimitNote cli={cli} model={model} />
     </div>
   );
 };

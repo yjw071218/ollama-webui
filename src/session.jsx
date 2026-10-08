@@ -156,6 +156,12 @@ export const currentCsrfToken = () => csrfToken;
  * request cannot choose which of the victim's accounts it acts as — it gets
  * whatever the cookie's newest session is, and the CSRF check then refuses it.
  */
+/** The headers `api` sends, for requests whose body is not JSON. */
+export const authHeaders = (method = 'GET') => ({
+  ...(csrfToken && method !== 'GET' && method !== 'HEAD' ? { 'X-CSRF-Token': csrfToken } : {}),
+  'X-Session-Id': tabSessionId || NEW,
+});
+
 export const api = async (path, { method = 'GET', body, signal } = {}) => {
   const headers = {};
   if (body !== undefined) headers['Content-Type'] = 'application/json';

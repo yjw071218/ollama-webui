@@ -14,6 +14,8 @@ export const cliHeadersOf = (options = {}) => {
   // Off only: the server will not let a chat switch on what .env switched off.
   if (o.web === 'off') out['X-Cli-Web'] = 'off';
   if (o.mcp === 'off') out['X-Cli-Mcp'] = 'off';
+  // Approvals: skipped unless this chat asked to be asked (the server only lets it get stricter).
+  if (o.approvals === 'ask') out['X-Cli-Approvals'] = 'ask';
   return out;
 };
 

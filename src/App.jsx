@@ -1365,7 +1365,14 @@ const useRevealClock = (length, live, settled = 0) => {
   const now = performance.now();
   const last = steps.current[steps.current.length - 1];
   if (!last || length > last.len) steps.current.push({ len: length, at: length <= settled ? -Infinity : now });
-  else if (length < last.len) steps.current = [...steps.current.filter(st => st.len < length), { len: length, at: now }];
+  /* Shorter (a half-arrived tag stripped back out): cut the steps, but keep
+     when the surviving characters were *first* shown. Stamping them `now`
+     replayed the fade over text that had been on screen for seconds -- after
+     the oldest steps had been dropped, that was the whole paragraph. */
+  else if (length < last.len) {
+    const cut = steps.current.find(st => st.len >= length);
+    steps.current = [...steps.current.filter(st => st.len < length), { len: length, at: cut ? cut.at : -Infinity }];
+  }
   // A step whose successor has finished fading tells nothing more.
   while (steps.current.length > 1 && now - steps.current[0].at > REVEAL_MS
     && now - steps.current[1].at > REVEAL_MS) steps.current.shift();
@@ -5054,11 +5061,12 @@ ${data.text}` : data.text));
       return;
     }
 
+    /* Ids seen once stay seen for this chat. Emptying the set whenever no
+       closed block was visible (a fence re-parsed mid-stream, a synced copy of
+       the chat briefly replacing it) made every block "new" again, and the
+       panel popped back open each time. */
     const closedIds = codeArtifacts.filter(a => a.closed).map(a => a.id);
-    if (closedIds.length === 0) {
-      openArtifactIdsRef.current = new Set();
-      return;
-    }
+    if (closedIds.length === 0) return;
     const known = openArtifactIdsRef.current;
     const fresh = closedIds.filter(id => !known.has(id));
     if (fresh.length === 0) return;
@@ -5081,10 +5089,18 @@ ${data.text}` : data.text));
   }, [codeArtifacts, currentSessionId]);
 
   // Drop the panel if its artifact disappeared (chat switch, message deleted).
+  /* Not at once: while a reply streams or a sync rewrites the messages, a
+     block can vanish for a render or two and come back under the same id.
+     Closing on that blink is the panel shutting and reopening by itself. */
   useEffect(() => {
-    if (!activeArtifact || activeArtifact.id === '__detached') return;
-    if (!codeArtifacts.some(a => a.id === activeArtifact.id)) setActiveArtifact(null);
-  }, [codeArtifacts, activeArtifact]);
+    if (!activeArtifact || activeArtifact.id === '__detached') return undefined;
+    if (codeArtifacts.some(a => a.id === activeArtifact.id)) return undefined;
+    if (isGenerating) return undefined;
+    const timer = setTimeout(() => {
+      if (!codeArtifactsRef.current.some(a => a.id === activeArtifact.id)) setActiveArtifact(null);
+    }, 1500);
+    return () => clearTimeout(timer);
+  }, [codeArtifacts, activeArtifact, isGenerating]);
 
   const codeArtifactsRef = useRef(codeArtifacts);
   codeArtifactsRef.current = codeArtifacts;
@@ -7131,7 +7147,13 @@ ${data.text}` : data.text));
    */
   const handleSignedIn = async (result, { created } = {}) => {
     const account = result?.user;
-    if (!account) return;
+    /* A sign-in from a new device answers with no user and a pendingDevice:
+       it is waiting for approval. Adopt it so the waiting screen appears
+       instead of the sign-in form sitting there unchanged. */
+    if (!account) {
+      if (result?.pendingDevice) authSession.adopt(result);
+      return;
+    }
 
     setSetting('authIntroSeen', 'true');
 
@@ -8493,6 +8515,17 @@ ${data.text}` : data.text));
    * flick is enough, however fast the model is talking.
    */
   const releaseTail = useCallback(() => { isAutoScrollRef.current = false; }, []);
+  /* A wheel turned *down* is the reader heading for the end, not leaving it.
+     Releasing on every wheel event left a PC reader who scrolled down to the
+     bottom unfollowed: once at the end the browser fires no further `scroll`
+     event, so nothing ever re-attached them. */
+  const wheelTail = useCallback((e) => {
+    if (e.deltaY < 0) { isAutoScrollRef.current = false; return; }
+    const area = scrollAreaRef.current;
+    if (area && e.deltaY > 0 && area.scrollHeight - area.scrollTop - area.clientHeight <= STICK_SLACK + Math.abs(e.deltaY)) {
+      isAutoScrollRef.current = true;
+    }
+  }, []);
 
   /**
    * Focusing the composer means the keyboard is on its way up.
@@ -8741,8 +8774,24 @@ ${data.text}` : data.text));
   const [modelShow, setModelShow] = useState({});
   const capsInFlight = useRef(new Set());
 
-  const loadCapabilities = useCallback(async (name) => {
+  /* Kept on this device per model *version* (its digest), and only the
+     fields used: capabilities and model_info. A full /api/show reply is
+     ~100 KB (licence, template, modelfile), and asking for every installed
+     model at every start was 36 requests and 3 MB before a phone could
+     answer anything. */
+  const loadCapabilities = useCallback(async (name, digest = '') => {
     if (!name || capsInFlight.current.has(name)) return;
+    const cacheKey = `modelShow:v1:${name}:${digest}`;
+    if (digest) {
+      try {
+        const cached = JSON.parse(localStorage.getItem(cacheKey) || 'null');
+        if (cached) {
+          setModelCaps(prev => ({ ...prev, [name]: cached.capabilities || [] }));
+          setModelShow(prev => ({ ...prev, [name]: cached }));
+          return;
+        }
+      } catch (e) { /* unreadable: ask again */ }
+    }
     capsInFlight.current.add(name);
     try {
       const res = await fetch('/api/show', {
@@ -8751,7 +8800,17 @@ ${data.text}` : data.text));
         body: JSON.stringify({ model: name }),
       });
       if (!res.ok) return;
-      const data = await res.json();
+      const full = await res.json();
+      const data = { capabilities: full.capabilities || [], model_info: full.model_info || {}, details: full.details || {} };
+      if (digest) {
+        try {
+          for (let i = localStorage.length - 1; i >= 0; i--) {
+            const k = localStorage.key(i);
+            if (k?.startsWith(`modelShow:v1:${name}:`) && k !== cacheKey) localStorage.removeItem(k);
+          }
+          localStorage.setItem(cacheKey, JSON.stringify(data));
+        } catch (e) { /* quota: fine, asked again next time */ }
+      }
       setModelCaps(prev => ({ ...prev, [name]: data.capabilities || [] }));
       /* The rest of the reply, which was being thrown away. `model_info` holds
          the layer count, the width and -- the one that matters -- the number
@@ -8849,8 +8908,20 @@ ${data.text}` : data.text));
           else setSelectedVisionModel(chatable[0].name);
         }
         addLog(`Found ${data.models.length} models.`, 'success');
-        // Capabilities decide whether images can go straight to the model.
-        data.models.forEach(m => loadCapabilities(m.name));
+        /* Capabilities decide whether images can go straight to the model.
+           The chosen model first; the rest one at a time when the page is
+           idle, so a phone's first seconds are not spent on them. */
+        const list = [...(data.models || [])];
+        const chosen = list.findIndex(m => m.name === selectedModel);
+        if (chosen > 0) list.unshift(...list.splice(chosen, 1));
+        const idle = window.requestIdleCallback || ((fn) => setTimeout(fn, 200));
+        const next = async () => {
+          const m = list.shift();
+          if (!m) return;
+          await loadCapabilities(m.name, m.digest || m.modified_at || '');
+          idle(next, { timeout: 3000 });
+        };
+        next();
       } else {
         addLog('No models found locally.', 'error');
       }
@@ -15566,7 +15637,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           className="messages-scroll-area"
           ref={scrollAreaNodeRef}
           onScroll={handleScroll}
-          onWheel={releaseTail}
+          onWheel={wheelTail}
           onTouchMove={releaseTail}
         >
           {messages.length === 0 ? (

@@ -274,17 +274,38 @@ export const destroyUserSessions = (userId, { keepToken = null } = {}) => {
 export const listUserSessions = (userId, currentToken = null) => {
   sweep();
   const currentKey = currentToken ? hashToken(currentToken) : null;
-  return database().prepare(
+  const rows = database().prepare(
     'SELECT * FROM sessions WHERE user_id = ? ORDER BY last_seen_at DESC'
-  ).all(userId).map(row => ({
-    id: sessionIdOf(row.token_hash),
-    current: row.token_hash === currentKey,
-    createdAt: row.created_at,
-    lastSeenAt: row.last_seen_at,
-    expiresAt: Math.min(row.absolute_expires_at, row.last_seen_at + IDLE_TTL_MS),
-    userAgent: row.user_agent || '',
-    ip: row.ip || '',
-  }));
+  ).all(userId);
+  /* Every tab and every app launch forks its own session, so one phone that
+     was opened ten times on changing networks is ten rows. People mean
+     devices: group by the device id (falling back to the user agent for
+     sessions that predate it), newest first, and leave out sign-ins still
+     waiting for approval -- those are not signed in yet. */
+  const devices = new Map();
+  for (const row of rows) {
+    if (row.pending) continue;
+    const key = row.device_id || `ua:${row.user_agent || ''}`;
+    const entry = devices.get(key);
+    const current = row.token_hash === currentKey;
+    if (!entry) {
+      devices.set(key, {
+        id: sessionIdOf(row.token_hash),
+        current,
+        createdAt: row.created_at,
+        lastSeenAt: row.last_seen_at,
+        expiresAt: Math.min(row.absolute_expires_at, row.last_seen_at + IDLE_TTL_MS),
+        userAgent: row.user_agent || '',
+        ip: row.ip || '',
+        sessions: 1,
+      });
+    } else {
+      entry.sessions++;
+      entry.current = entry.current || current;
+      entry.createdAt = Math.min(entry.createdAt, row.created_at);
+    }
+  }
+  return [...devices.values()];
 };
 
 /* ------------------------------------------------------------------ cookies */

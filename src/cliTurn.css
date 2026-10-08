@@ -175,3 +175,73 @@
   .cli-run-root { display: none; }
   .cli-chip { font-size: 0.7rem; }
 }
+
+/* Skip-approvals switch: a capsule with a small track, like the other chips. */
+.cli-chip-switch { gap: 6px; }
+.cli-chip-toggle { position: relative; width: 22px; height: 12px; border-radius: 999px; background: var(--text-muted); opacity: .55; transition: background 160ms ease, opacity 160ms ease; flex-shrink: 0; }
+.cli-chip-toggle > span { position: absolute; top: 2px; left: 2px; width: 8px; height: 8px; border-radius: 50%; background: var(--surface, #fff); transition: transform 160ms ease; }
+.cli-chip-switch.is-skipping .cli-chip-toggle { background: var(--primary, #c96442); opacity: 1; }
+.cli-chip-switch.is-skipping .cli-chip-toggle > span { transform: translateX(10px); }
+.cli-chip-switch.is-asking { border-color: color-mix(in srgb, var(--success, #3a9d5d) 45%, transparent); }
+
+/* Usage notice next to the chips: yellow text, no box. */
+.cli-limit-note { display: inline-flex; align-items: center; gap: 4px; font-size: 0.72rem; line-height: 1.3; color: #e0b422; font-weight: 500; padding: 0 4px; min-width: 0; }
+[data-theme="light"] .cli-limit-note { color: #a87a00; }
+.cli-limit-note.is-near { font-weight: 600; }
+@media (prefers-reduced-motion: reduce) { .cli-chip-toggle, .cli-chip-toggle > span { transition: none; } }
+.cli-chips { align-items: center; }
+
+/* --- a CLI waiting on the reader: approval or question (src/CliPrompt.jsx) */
+.cli-approvals {
+  position: fixed; right: 16px; bottom: calc(16px + env(safe-area-inset-bottom)); z-index: var(--z-dock);
+  width: min(440px, calc(100vw - 32px)); max-height: calc(100dvh - 96px); overflow-y: auto;
+  display: grid; gap: 10px;
+}
+.cli-prompt {
+  background: var(--surface-raised, var(--bg-main)); color: var(--text-primary);
+  border: 1px solid var(--hairline); border-radius: 16px; padding: 14px;
+  box-shadow: 0 12px 36px rgba(0, 0, 0, .28);
+  display: grid; gap: 10px; animation: cli-prompt-in 200ms ease-out both;
+}
+.cli-prompt.is-approval { border-color: color-mix(in srgb, #d97706 55%, var(--hairline)); }
+.cli-prompt.is-question { border-color: color-mix(in srgb, var(--primary, #c96442) 55%, var(--hairline)); }
+.cli-prompt.is-compact { box-shadow: none; animation: none; padding: 12px; }
+.cli-prompt-head { display: flex; align-items: center; gap: 6px; font-weight: 600; font-size: .85rem; }
+.cli-prompt.is-approval .cli-prompt-head svg { color: #d97706; }
+.cli-prompt.is-question .cli-prompt-head svg { color: var(--primary, #c96442); }
+.cli-prompt-title { font-family: var(--font-mono, monospace); font-size: .8rem; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--text-primary) 5%, transparent); white-space: pre-wrap; overflow-wrap: anywhere; }
+.cli-prompt-cwd { font-size: .72rem; color: var(--text-muted); margin-bottom: 4px; overflow-wrap: anywhere; }
+.cli-prompt-disclosure { display: inline-flex; align-items: center; gap: 4px; background: none; border: 0; padding: 0; color: var(--text-muted); font-size: .75rem; cursor: pointer; }
+.cli-prompt-disclosure svg { transition: transform 150ms ease; transform: rotate(-90deg); }
+.cli-prompt-disclosure svg.is-open { transform: none; }
+.cli-prompt-detail pre { margin: 6px 0 0; max-height: 240px; overflow: auto; font-family: var(--font-mono, monospace); font-size: .72rem; white-space: pre-wrap; overflow-wrap: anywhere; padding: 8px 10px; border-radius: 8px; background: color-mix(in srgb, var(--text-primary) 4%, transparent); }
+.cli-prompt-detail .diff-add { color: var(--success, #3a9d5d); }
+.cli-prompt-detail .diff-del { color: var(--danger, #d33); }
+.cli-prompt-actions { display: flex; flex-wrap: wrap; gap: 6px; }
+.cli-prompt-actions .is-danger { color: var(--danger); }
+.cli-prompt-foot { font-size: .7rem; color: var(--text-muted); }
+.cli-question { border: 0; margin: 0; padding: 0; display: grid; gap: 8px; min-width: 0; }
+.cli-question-header { padding: 2px 8px; border-radius: 999px; font-size: .68rem; font-weight: 600; letter-spacing: .03em; color: var(--primary, #c96442); background: rgba(var(--primary-rgb, 201, 100, 66), .12); margin-bottom: 2px; }
+.cli-question-text { font-size: .9rem; line-height: 1.5; white-space: pre-wrap; overflow-wrap: anywhere; }
+.cli-question-hint { font-size: .72rem; color: var(--text-muted); }
+.cli-question-options { display: grid; gap: 6px; }
+.cli-option { display: flex; align-items: flex-start; gap: 10px; text-align: start; width: 100%; padding: 9px 11px; border-radius: 10px; border: 1px solid var(--hairline); background: none; color: inherit; cursor: pointer; transition: border-color 140ms ease, background 140ms ease; }
+.cli-option:hover { background: var(--hover-bg); }
+.cli-option.is-on { border-color: var(--primary, #c96442); background: rgba(var(--primary-rgb, 201, 100, 66), .1); }
+.cli-option-mark { flex: 0 0 16px; height: 16px; margin-top: 1px; border-radius: 50%; border: 1.5px solid var(--text-muted); display: grid; place-items: center; color: #fff; }
+.cli-option-mark.is-box { border-radius: 4px; }
+.cli-option.is-on .cli-option-mark { background: var(--primary, #c96442); border-color: var(--primary, #c96442); }
+.cli-option-text { display: grid; gap: 2px; min-width: 0; }
+.cli-option-label { font-size: .85rem; font-weight: 500; overflow-wrap: anywhere; }
+.cli-option-desc { font-size: .75rem; color: var(--text-muted); line-height: 1.45; overflow-wrap: anywhere; white-space: pre-wrap; }
+.cli-question-other { width: 100%; box-sizing: border-box; padding: 8px 10px; border-radius: 10px; border: 1px solid var(--hairline); background: transparent; color: inherit; font-size: .85rem; }
+.cli-question-other:focus { outline: none; border-color: var(--primary, #c96442); }
+@keyframes cli-prompt-in { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
+@media (max-width: 600px) { .cli-approvals { right: 8px; left: 8px; width: auto; bottom: calc(84px + env(safe-area-inset-bottom)); } }
+@media (prefers-reduced-motion: reduce) { .cli-prompt, .cli-option, .cli-prompt-disclosure svg { animation: none; transition: none; } }
+.cli-prompt-actions > button { display: inline-flex; align-items: center; gap: 5px; padding: 7px 12px; border-radius: 9px; font-size: .8rem; font-weight: 500; cursor: pointer; border: 1px solid var(--hairline); background: transparent; color: var(--text-primary); transition: filter 140ms ease, background 140ms ease; }
+.cli-prompt-actions > button.btn-primary { background: var(--accent, var(--primary, #d97757)); border-color: transparent; color: #fff; }
+.cli-prompt-actions > button:hover:not(:disabled) { filter: brightness(1.08); background-color: var(--hover-bg); }
+.cli-prompt-actions > button.btn-primary:hover:not(:disabled) { background: var(--accent, var(--primary, #d97757)); }
+.cli-prompt-actions > button:disabled { opacity: .45; cursor: default; }
+.cli-prompt-actions > button.is-danger { color: var(--danger, #e5534b); }

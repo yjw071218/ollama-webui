@@ -28,6 +28,7 @@ import { api, ApiError, currentTabSession } from './session.jsx';
 import { ownerOfScope } from './profileScope.js';
 import { mergeJobs, trimJobs } from './studioTools.js';
 import { waitFor, isOverdue } from './coalesce.js';
+import { slimPayload, restorePayload, SLIM_ABOVE } from './syncBlobs.js';
 import {
   readScopeSettings, writeScopeSettings, removeScopedKey,
   settingStamps, stampSetting, forgetSettingStamp,
@@ -114,7 +115,7 @@ export const uploadBatch = records => {
   for (const record of [...records].sort((a, b) => b.updatedAt - a.updatedAt)) {
     const size = encoder.encode(JSON.stringify(record)).byteLength;
     if (!record.deleted && encoder.encode(JSON.stringify(record.payload)).byteLength > 8 * 1024 * 1024) {
-      refused.push({ kind: record.kind, id: record.id, reason: '대화에 포함된 첨부파일 등의 크기가 동기화 한도 8MB를 초과했습니다.' });
+      refused.push({ kind: record.kind, id: record.id, reason: '대화의 텍스트 자체가 동기화 한도 8MB를 초과했습니다. 대화를 나누어 주세요.' });
       continue;
     }
     if (batch.length >= 100 || (batch.length > 0 && bytes + size > 8 * 1024 * 1024)) { remaining++; continue; }
@@ -544,7 +545,21 @@ export const syncOnce = async (scope, { full = false, limit = 500, onPhase } = {
   const since = readRev(scope);
   onPhase?.({ phase: 'preparing' });
   const { changed: pendingChanges, local } = full ? { changed: [], local: [] } : await localChanges(scope);
-  const { batch: changed, refused: oversized, remaining } = uploadBatch(pendingChanges);
+  /* Records over the limit lose their large strings to the blob store
+     (src/syncBlobs.js) instead of being refused. Only the uploaded copy. */
+  const encoder = new TextEncoder();
+  const slimmed = [];
+  for (const record of pendingChanges) {
+    if (record.deleted || record.payload == null) { slimmed.push(record); continue; }
+    if (encoder.encode(JSON.stringify(record.payload)).byteLength <= SLIM_ABOVE) { slimmed.push(record); continue; }
+    try {
+      slimmed.push({ kind: record.kind, id: record.id, updatedAt: record.updatedAt,
+        ...(record.base != null ? { base: record.base } : {}), payload: await slimPayload(record.payload) });
+    } catch (e) {
+      slimmed.push(record); // uploadBatch reports it as too large, with the reason
+    }
+  }
+  const { batch: changed, refused: oversized, remaining } = uploadBatch(slimmed);
 
   let result;
   onPhase?.({ phase: changed.length ? 'uploading' : 'downloading', sending: changed.length });
@@ -568,7 +583,10 @@ export const syncOnce = async (scope, { full = false, limit = 500, onPhase } = {
   }
 
   onPhase?.({ phase: 'applying', received: (result.records || []).length, remaining: result.remaining });
-  const applied = await applyLocal(scope, result.records || []);
+  const cache = new Map();
+  const incoming = await Promise.all((result.records || []).map(async r => (
+    r.deleted || r.payload == null ? r : { ...r, payload: await restorePayload(r.payload, cache) })));
+  const applied = await applyLocal(scope, incoming);
 
   // Record where we got to only after the writes landed. Doing it first means a
   // failure loses those records for good — they are below the revision this

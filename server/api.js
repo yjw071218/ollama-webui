@@ -70,6 +70,7 @@ import { createMusicRoutes } from './music.js';
 import { createMcpRoutes } from './mcp.js';
 import { createCliRoutes } from './cliModels.js';
 import { readRequestBody } from './requestBody.js';
+import { MAX_BLOB_BYTES, hasBlob, putBlob, readBlob } from './syncBlobs.js';
 import { createRisuRoutes } from './risuai.js';
 import { createRisuSyncHandler } from './risuSync.js';
 import { scanFolder, readFileBytes } from './folderWatch.js';
@@ -1409,6 +1410,37 @@ export const createApiRoutes = (env = {}, options = {}) => {
        One record at a time rather than one blob per account. See
        server/records.js for why: a blob cannot express a deletion, and two
        devices pushing one loses data three different ways. */
+
+    /* Large strings cut out of synced records (server/syncBlobs.js).
+         HEAD ?hash=  -> 200 if this account already has it
+         GET  ?hash=  -> the bytes
+         PUT  ?hash=  -> store the body under its SHA-256 */
+    route('/api/auth/sync/blob', async (req, res) => {
+      const auth = req.method === 'PUT'
+        ? guard(req, res, { methods: ['PUT'] })
+        : (() => {
+          const a = authenticate(req);
+          if (!a.user) { sendJson(res, { success: false, error: 'Not signed in.', code: 'unauthenticated' }, 401); return null; }
+          return a;
+        })();
+      if (!auth) return;
+      try {
+        const hash = String(new URL(req.url, 'http://x').searchParams.get('hash') || '');
+        if (req.method === 'HEAD') { res.statusCode = hasBlob(auth.user.id, hash) ? 200 : 404; return res.end(); }
+        if (req.method === 'GET') {
+          const bytes = readBlob(auth.user.id, hash);
+          if (!bytes) return sendJson(res, { success: false, error: 'Not found.' }, 404);
+          res.setHeader('Content-Type', 'text/plain; charset=utf-8');
+          res.setHeader('Cache-Control', 'private, max-age=31536000, immutable');
+          return res.end(bytes);
+        }
+        if (req.method !== 'PUT') return sendJson(res, { success: false, error: 'Method not allowed.' }, 405);
+        putBlob(auth.user.id, hash, await readRequestBody(req, MAX_BLOB_BYTES, 120000));
+        sendJson(res, { success: true });
+      } catch (e) {
+        sendJson(res, { success: false, error: e.message }, e.statusCode || 500);
+      }
+    });
 
     route('/api/auth/sync', async (req, res) => {
       const auth = req.method === 'GET'

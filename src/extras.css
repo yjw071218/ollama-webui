@@ -10630,3 +10630,9 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
   box-shadow: none;
   color: var(--text-muted, var(--text-secondary));
 }
+
+/* New-device confirmation: a solid card over a dimmed, blurred page. */
+.server-offline.device-ask-overlay { background: rgba(0,0,0,.62); backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); z-index: 10002; }
+.device-ask-card { background: var(--surface, var(--bg-main, #1f1e1d)); border: 1px solid var(--hairline, #ffffff1a); border-radius: 20px; padding: 28px 24px 22px; box-shadow: 0 24px 64px #0007; }
+.device-ask-card .server-offline-actions { display: flex; gap: 10px; width: 100%; margin-top: 8px; }
+.device-ask-card .server-offline-actions > button { flex: 1; }

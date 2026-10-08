@@ -91,9 +91,8 @@ export const DeviceApprovals = ({ api }) => {
   }
   const first = pending[0];
   return (
-    <div className="server-offline" role="alertdialog" aria-modal="true"
-      style={{ position: 'fixed', inset: 0, zIndex: 10000, background: 'rgba(0,0,0,0.55)' }}>
-      <div className="server-offline-card">
+    <div className="server-offline device-ask-overlay" role="alertdialog" aria-modal="true">
+      <div className="server-offline-card device-ask-card">
         <ShieldAlert size={40} />
         <h1>{say('device.askTitle')}</h1>
         <p>{say('device.askBody')}</p>

@@ -60,7 +60,7 @@ export const formatDuration = (ms, lang = 'en') => {
   return unit(mins, 'minute');
 };
 
-const formatWhen = (ms, lang) => {
+export const formatWhen = (ms, lang) => {
   try {
     const sameDay = new Date(ms).toDateString() === new Date().toDateString();
     return new Intl.DateTimeFormat(lang, sameDay

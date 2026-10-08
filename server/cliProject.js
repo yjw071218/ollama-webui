@@ -271,15 +271,31 @@ const approvalTexts = (title, detail) => {
   return texts;
 };
 
-export const requestApproval = ({ owner = '', chat = '', provider, kind, title, detail = '', timeoutMs = APPROVAL_TIMEOUT_MS }) => new Promise((resolve) => {
-  // Allowed ahead of time in the MCP settings: nobody is asked.
-  if (approvalTexts(title, detail).some(text => autoApproved(text))) { resolve('accept'); return; }
+/* A CLI's multiple-choice question, kept as the CLI sent it: header, the
+   question, each option's label and description, and whether several may be
+   picked. Only shape is enforced so nothing it said is lost. */
+export const normalizeQuestions = (list) => (Array.isArray(list) ? list : []).slice(0, 8).map((q, i) => ({
+  id: String(q?.id ?? q?.question ?? i).slice(0, 300),
+  header: String(q?.header ?? '').slice(0, 200),
+  question: String(q?.question ?? q?.prompt ?? '').slice(0, 4000),
+  multiSelect: !!(q?.multiSelect ?? q?.multi_select),
+  allowOther: q?.isOther !== false && q?.allowOther !== false,
+  secret: !!q?.isSecret,
+  options: (Array.isArray(q?.options) ? q.options : []).slice(0, 20).map(o => (typeof o === 'string'
+    ? { label: o.slice(0, 500), description: '' }
+    : { label: String(o?.label ?? '').slice(0, 500), description: String(o?.description ?? '').slice(0, 2000) })),
+})).filter(q => q.question || q.options.length);
+
+export const requestApproval = ({ owner = '', chat = '', provider, kind, title, detail = '', questions = null, timeoutMs = APPROVAL_TIMEOUT_MS }) => new Promise((resolve) => {
+  // Allowed ahead of time in the MCP settings: nobody is asked. Never a question.
+  if (!questions && approvalTexts(title, detail).some(text => autoApproved(text))) { resolve('accept'); return; }
   const key = `ap-${id()}`;
   const timer = setTimeout(() => { pending.delete(key); resolve('decline'); }, timeoutMs);
   timer.unref?.();
   pending.set(key, {
     id: key, owner: String(owner || ''), chat, provider, kind, title: String(title || kind).slice(0, 300),
     detail: String(detail || '').slice(0, 20000), at: Date.now(),
+    ...(questions ? { questions: normalizeQuestions(questions) } : {}),
     resolve: (decision) => { clearTimeout(timer); pending.delete(key); resolve(decision); },
   });
 });
@@ -288,12 +304,29 @@ export const listApprovals = (owner = '') => [...pending.values()]
   .filter(p => p.owner === String(owner || ''))
   .map(({ resolve, ...rest }) => rest);
 
-export const decideApproval = (owner, key, decision) => {
+/* `answers` (question id -> list of chosen labels or typed text) answers a
+   question; without it, the decision is an approval's. */
+export const decideApproval = (owner, key, decision, answers = null) => {
   const entry = pending.get(key);
   if (!entry || entry.owner !== String(owner || '')) return false;
+  if (entry.questions && answers && typeof answers === 'object' && decision !== 'decline') {
+    const clean = {};
+    for (const q of entry.questions) {
+      const given = answers[q.id];
+      const list = (Array.isArray(given) ? given : given == null ? [] : [given]).map(v => String(v).slice(0, 4000)).filter(Boolean);
+      if (list.length) clean[q.id] = list;
+    }
+    entry.resolve({ decision: 'answer', answers: clean });
+    return true;
+  }
   entry.resolve(DECISIONS.includes(decision) ? decision : 'decline');
   return true;
 };
+
+/** Claude Code's AskUserQuestion takes answers keyed by question text, joined. */
+export const claudeAnswers = (questions, answers) => Object.fromEntries((questions || [])
+  .map(q => [q.question, (answers?.[q.question] || answers?.[q.id] || []).join(', ')])
+  .filter(([, v]) => v));
 
 /* Claude Code's side: server/mcpApproval.mjs writes `<n>.req.json` into the
    run's folder and waits for `<n>.res.json`. Tools allowed "for this session"
@@ -317,6 +350,22 @@ export const watchApprovalDir = (dir, approve) => {
           : { behavior: 'deny', message: 'The user declined this in the web UI.' };
         try { fs.writeFileSync(path.join(dir, name.replace('.req.json', '.res.json')), JSON.stringify(res)); } catch { /* the run is gone */ }
       };
+      /* A question, not a permission: shown with its options, and the
+         choices go back as the tool's answers. */
+      if (req.tool_name === 'AskUserQuestion' && Array.isArray(req.input?.questions)) {
+        const questions = req.input.questions.map(q => ({ ...q, id: q.question }));
+        const reply = (decision) => {
+          const res = decision && typeof decision === 'object' && decision.decision === 'answer'
+            ? { behavior: 'allow', updatedInput: { ...req.input, answers: claudeAnswers(questions, decision.answers) } }
+            : { behavior: 'deny', message: 'The user dismissed the question in the web UI without answering.' };
+          try { fs.writeFileSync(path.join(dir, name.replace('.req.json', '.res.json')), JSON.stringify(res)); } catch { /* the run is gone */ }
+        };
+        Promise.resolve(approve({
+          kind: 'question', title: String(req.input.questions[0]?.question || 'Question'),
+          detail: JSON.stringify(req.input, null, 2), questions,
+        })).then(reply, () => reply('decline'));
+        continue;
+      }
       if (always.has(req.tool_name)) { answer('accept'); continue; }
       Promise.resolve(approve({
         kind: 'tool', title: String(req.tool_name || 'tool'),
@@ -339,6 +388,16 @@ export const codexApprovalOf = (m) => {
     return { kind: 'files', title: 'file changes', detail: [p.reason || '', p.grantRoot ? `write access to ${p.grantRoot}` : '', p.fileChanges ? JSON.stringify(p.fileChanges, null, 2) : ''].filter(Boolean).join('\n') };
   }
   return null;
+};
+/* Codex asking the user something (`item/tool/requestUserInput`). */
+export const codexQuestionOf = (m) => {
+  if (!/requestUserInput|request_user_input/i.test(m.method || '')) return null;
+  const questions = m.params?.questions || [];
+  return { kind: 'question', title: String(questions[0]?.question || 'Question'), detail: JSON.stringify(m.params || {}, null, 2), questions };
+};
+export const codexQuestionReply = (m, decision) => {
+  const answers = decision && typeof decision === 'object' ? decision.answers || {} : {};
+  return { id: m.id, result: { answers: Object.fromEntries(Object.entries(answers).map(([k, v]) => [k, { answers: v }])) } };
 };
 export const codexApprovalReply = (m, decision) => {
   // The older `execCommandApproval` / `applyPatchApproval` speak "approved"/"denied".

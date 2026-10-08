@@ -26,6 +26,7 @@ import https from 'node:https';
 import fs from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import zlib from 'node:zlib';
 import { fileURLToPath } from 'node:url';
 import { createApiRoutes } from './api.js';
 import { backendOf } from './llamacpp.js';
@@ -296,6 +297,23 @@ const cancelChat = (req, res) => {
   });
 };
 
+/* Text assets compressed once and kept: the main bundle is 1.6 MB as sent
+   before, about 400 KB as brotli -- the difference a phone on mobile data
+   feels at every cold start. Keyed by path and mtime, so a rebuild is seen. */
+const COMPRESSIBLE = new Set(['.js', '.mjs', '.css', '.html', '.json', '.svg', '.txt', '.map', '.webmanifest', '.wasm']);
+const compressed = new Map();
+const compressedOf = (file, stat, encoding) => {
+  const key = encoding + "|" + file;
+  const hit = compressed.get(key);
+  if (hit && hit.mtime === stat.mtimeMs && hit.size === stat.size) return hit.body;
+  const raw = fs.readFileSync(file);
+  const body = encoding === 'br'
+    ? zlib.brotliCompressSync(raw, { params: { [zlib.constants.BROTLI_PARAM_QUALITY]: 9, [zlib.constants.BROTLI_PARAM_SIZE_HINT]: raw.length } })
+    : zlib.gzipSync(raw, { level: 9 });
+  compressed.set(key, { mtime: stat.mtimeMs, size: stat.size, body });
+  return body;
+};
+
 const serveStatic = (req, res, url) => {
   // Resolve, then check containment: '..' in a URL must not escape dist/.
   const requested = path.normalize(path.join(DIST, decodeURIComponent(url.pathname)));
@@ -323,6 +341,20 @@ const serveStatic = (req, res, url) => {
   res.setHeader('Cache-Control', NEVER_CACHE.has(served)
     ? 'no-cache'
     : 'public, max-age=31536000, immutable');
+  const stat = fs.statSync(file);
+  const accepts = String(req.headers['accept-encoding'] || '');
+  const encoding = !COMPRESSIBLE.has(ext) || stat.size < 1024 ? ''
+    : /\bbr\b/.test(accepts) ? 'br' : /\bgzip\b/.test(accepts) ? 'gzip' : '';
+  if (COMPRESSIBLE.has(ext)) res.setHeader('Vary', 'Accept-Encoding');
+  if (encoding) {
+    try {
+      const body = compressedOf(file, stat, encoding);
+      res.setHeader('Content-Encoding', encoding);
+      res.setHeader('Content-Length', body.length);
+      res.end(req.method === 'HEAD' ? undefined : body);
+      return;
+    } catch (e) { /* fall through to the plain file */ }
+  }
   fs.createReadStream(file).pipe(res);
 };
 

@@ -6,6 +6,7 @@ import {
   Check, X, Loader2, Clock, ChevronDown, Square, Activity, Download, ExternalLink, Radio, Braces,
 } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
+import { CliPromptCard } from './CliPrompt.jsx';
 import { activityOf, activitySummary } from './agentActivity.js';
 import { ansiSpans, outputLines, errorCount } from './terminalText.js';
 
@@ -148,33 +149,9 @@ const InlineApproval = ({ target }) => {
     return () => { stopped = true; clearTimeout(timer); };
   }, [target]);
 
-  if (done) return <div className="agent-approval is-done">{t(`agent.decided.${done}`)}</div>;
+  if (done) return <div className="agent-approval is-done">{t(done === 'answer' ? 'cliPrompt.answered' : `agent.decided.${done}`)}</div>;
   if (!question) return null;
-  const decide = async (decision) => {
-    setDone(decision);
-    await post('/cli/approvals', { id: question.id, decision }).catch(() => null);
-  };
-  let detail = question.detail || '';
-  let cwd = '';
-  try { const input = JSON.parse(detail); cwd = input.cwd || ''; detail = JSON.stringify(input, null, 2); } catch { /* plain text */ }
-  const isDiff = /^(---|\+\+\+|@@|[-+] )/m.test(detail);
-  return (
-    <div className="agent-approval">
-      {cwd && <div className="agent-approval-cwd">{t('agent.inFolder')} <code>{cwd}</code></div>}
-      {detail && (
-        <pre className={`agent-approval-detail ${isDiff ? 'is-diff' : ''}`}>
-          {detail.split('\n').slice(0, 60).map((line, i) => (
-            <span key={i} className={isDiff ? (line.startsWith('+') ? 'diff-line diff-add' : line.startsWith('-') ? 'diff-line diff-del' : '') : ''}>{line}{'\n'}</span>
-          ))}
-        </pre>
-      )}
-      <div className="agent-approval-actions">
-        <button type="button" className="btn-primary" onClick={() => decide('accept')}><Check size={12} /> {t('cliAgent.allowOnce')}</button>
-        <button type="button" className="btn-ghost" onClick={() => decide('acceptForSession')}>{t('cliAgent.allowSession')}</button>
-        <button type="button" className="btn-ghost is-danger" onClick={() => decide('decline')}><X size={12} /> {t('cliAgent.decline')}</button>
-      </div>
-    </div>
-  );
+  return <div className="agent-approval"><CliPromptCard item={question} compact onDone={setDone} /></div>;
 };
 
 /* ------------------------------------------------------------- steps */

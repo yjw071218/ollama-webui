@@ -1,9 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { ShieldQuestion, Undo2, Flag, Puzzle, History, Check, X, GitMerge, Trash2 } from 'lucide-react';
+import { Undo2, Flag, Puzzle, History, GitMerge, Trash2 } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
 import { cliLabel } from './CliLimits.jsx';
 import { groupSessions } from './cliTurn.js';
 import { confirmDialog } from './ConfirmDialog.jsx';
+import { CliPromptCard } from './CliPrompt.jsx';
 
 /**
  * The CLIs as coding agents (server/cliProject.js), in the browser:
@@ -46,36 +47,14 @@ export const CliApprovals = () => {
     return () => { stopped = true; clearTimeout(timer); };
   }, [list.length]);
 
-  const decide = async (id, decision) => {
-    busy.current = true;
-    setList(l => l.filter(a => a.id !== id));
-    try { await post('/cli/approvals', { id, decision }); } finally { busy.current = false; }
-  };
+  // The card has already sent the answer; only take it off the list.
+  const decide = (id) => setList(l => l.filter(a => a.id !== id));
 
   if (!list.length) return null;
   return (
-    <div className="cli-approvals" role="alertdialog" aria-label={t('cliAgent.approvalTitle')}
-      style={{ position: 'fixed', right: 16, bottom: 16, zIndex: 'var(--z-dock)', width: 'min(440px, calc(100vw - 32px))', display: 'grid', gap: 8 }}>
+    <div className="cli-approvals" role="alertdialog" aria-label={t('cliAgent.approvalTitle')}>
       {list.map(a => (
-        <div key={a.id} style={{ /* --bg-secondary is not a token here: it fell back to near-black on the light theme */ background: 'var(--surface-raised, var(--bg-main))', color: 'var(--text-primary)', border: '1px solid var(--warning, #d97706)', borderRadius: 10, padding: 12, boxShadow: '0 6px 24px rgba(0,0,0,.35)' }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 6, fontWeight: 600, fontSize: '0.85rem' }}>
-            <ShieldQuestion size={15} style={{ color: 'var(--warning, #d97706)' }} />
-            {t('cliAgent.approvalAsks', { cli: cliLabel(a.provider) })}
-          </div>
-          <div style={{ ...mono, fontSize: '0.8rem', marginTop: 6, wordBreak: 'break-all' }}>{a.title}</div>
-          {a.detail && (
-            <details style={{ marginTop: 4 }}>
-              <summary style={{ ...muted, cursor: 'pointer' }}>{t('cliAgent.details')}</summary>
-              <pre style={{ ...mono, fontSize: '0.72rem', maxHeight: 200, overflow: 'auto', whiteSpace: 'pre-wrap' }}>{a.detail}</pre>
-            </details>
-          )}
-          <div style={{ display: 'flex', gap: 6, marginTop: 8, flexWrap: 'wrap' }}>
-            <button className="btn-primary" onClick={() => decide(a.id, 'accept')}><Check size={13} /> {t('cliAgent.allowOnce')}</button>
-            <button className="btn-ghost" onClick={() => decide(a.id, 'acceptForSession')}>{t('cliAgent.allowSession')}</button>
-            <button className="btn-ghost" style={{ color: 'var(--danger)' }} onClick={() => decide(a.id, 'decline')}><X size={13} /> {t('cliAgent.decline')}</button>
-          </div>
-          <div style={{ ...muted, marginTop: 4 }}>{t('cliAgent.approvalTimeout')}</div>
-        </div>
+        <CliPromptCard key={a.id} item={a} onDone={() => decide(a.id)} />
       ))}
     </div>
   );

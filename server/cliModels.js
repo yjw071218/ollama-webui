@@ -27,7 +27,7 @@ import {
 import { noteFinished, sendPush } from './push.js';
 import {
   projectFromHeaders, snapshotTree, diffTrees, noteRun, changesMarkdown, requestApproval,
-  watchApprovalDir, codexApprovalOf, codexApprovalReply, budgetState, noteLimitHistory, withForecasts,
+  watchApprovalDir, codexApprovalOf, codexApprovalReply, codexQuestionOf, codexQuestionReply, budgetState, noteLimitHistory, withForecasts,
   agyEstimate, learnAgyCapacity, maxTurnsOf, listApprovals, decideApproval, projectSettings, listRuns,
   revertRun, getRun, resolveProject, startRace, getRace, listRaces, finishRace, listExtensions, setExtensionEnabled,
   listTerminalSessions, readTerminalSession,
@@ -388,6 +388,12 @@ const flag = (value, fallback) => {
    about in the browser). It applies to everyone who can use the CLIs on this
    server, which is the thing to weigh before leaving it on. */
 export const fullAccessOf = (env = {}) => flag(env.CLI_FULL_ACCESS, true);
+
+/* The composer's "skip approvals" switch turned off for this chat (header
+   X-Cli-Approvals: ask): full access stays, but each tool call that is not
+   pre-allowed is asked about in the browser first. */
+export const askOf = (env = {}) => flag(env.CLI_ASK, false);
+const ASK_NOTE = "\n\nYou can read and write files on the user's PC and run commands, but each tool call is first shown to the user for approval in the web UI. Use your tools directly when needed; if a call is declined, say so and continue without it. When you need the user to choose between options, use your question tool (AskUserQuestion) rather than guessing.";
 
 /* Every drive on this machine, for Claude Code's --add-dir: its file tools
    stay inside the folders they are given even when nothing is asked. */
@@ -821,7 +827,7 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
       // is a remote shell with extra steps -- unless full access was chosen
       // (see fullAccessOf), when it has every tool, every drive and no prompts.
       ...(fullAccessOf(env)
-        ? ['--permission-mode', 'bypassPermissions', ...allRoots().flatMap(root => ['--add-dir', root])]
+        ? ['--permission-mode', askOf(env) ? 'default' : 'bypassPermissions', ...allRoots().flatMap(root => ['--add-dir', root])]
         : ['--tools', tools?.web ? 'WebSearch,WebFetch' : '']),
       '--strict-mcp-config',
       '--disable-slash-commands',
@@ -832,8 +838,17 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
       '--model', model,
     ];
     const allowed = tools?.web ? ['WebSearch', 'WebFetch'] : [];
-    if (hasServers) {
-      const mcp = claudeMcpConfig(servers);
+    /* With its own tools (full access), questions (AskUserQuestion) and, when
+       asking is on, approvals reach the browser through the approval server. */
+    let approvalDir = '';
+    if (hasServers || fullAccessOf(env)) {
+      const mcp = claudeMcpConfig(hasServers ? servers : {});
+      if (fullAccessOf(env)) {
+        approvalDir = path.join(files, 'approvals');
+        fs.mkdirSync(approvalDir, { recursive: true });
+        mcp.config.mcpServers.webui_approval = { type: 'stdio', command: process.execPath, args: [APPROVAL_SERVER, '--dir', approvalDir], env: {} };
+        args.push('--permission-prompt-tool', 'mcp__webui_approval__ask');
+      }
       const configFile = path.join(files, 'mcp.json');
       fs.writeFileSync(configFile, JSON.stringify(mcp.config), 'utf8');
       args.push('--mcp-config', configFile);
@@ -845,7 +860,7 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
     // agent in a repository. A file rather than an argument, because a
     // character card is longer than Windows allows a command line to be.
     const systemFile = path.join(files, 'system.txt');
-    fs.writeFileSync(systemFile, (system || 'You are a helpful assistant.') + (fullAccessOf(env) ? FULL_ACCESS_NOTE : ''), 'utf8');
+    fs.writeFileSync(systemFile, (system || 'You are a helpful assistant.') + (fullAccessOf(env) ? (askOf(env) ? ASK_NOTE : FULL_ACCESS_NOTE) : ''), 'utf8');
     args.push('--system-prompt-file', systemFile);
     if (effort) args.push('--effort', effort);
     const display = thinkingDisplayOf(env);
@@ -856,7 +871,7 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
       content.push({ type: 'image', source: { type: 'base64', media_type: imageMime(data), data } });
     }
     const stdin = `${JSON.stringify({ type: 'user', message: { role: 'user', content } })}\n`;
-    return { args, stdin };
+    return { args, stdin, ...(approvalDir ? { approvalDir } : {}) };
   }
 
   if (provider.id === 'codex') {
@@ -886,13 +901,14 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
           // Codex has no "no tools" switch. Read-only is the nearest thing:
           // it can look, it cannot change anything, and it is never asked.
           // Full access (see fullAccessOf) lifts the sandbox altogether.
-          sandbox: fullAccessOf(env) ? 'danger-full-access' : 'read-only',
-          approvalPolicy: 'never',
+          // Asking on: read-only until the browser approves each escalation.
+          sandbox: fullAccessOf(env) && !askOf(env) ? 'danger-full-access' : 'read-only',
+          approvalPolicy: fullAccessOf(env) && askOf(env) ? 'on-request' : 'never',
           ephemeral: !(persist || resume),
           // Full-access chat is also a coding agent. Keep its native tool-use
           // and persistence instructions; null clears an old chat override on resume.
           ...(fullAccessOf(env) ? { baseInstructions: null } : {}),
-          [fullAccessOf(env) ? 'developerInstructions' : 'baseInstructions']: fullAccessOf(env) ? (system || 'You are a helpful assistant.') + FULL_ACCESS_NOTE : [
+          [fullAccessOf(env) ? 'developerInstructions' : 'baseInstructions']: fullAccessOf(env) ? (system || 'You are a helpful assistant.') + (askOf(env) ? ASK_NOTE : FULL_ACCESS_NOTE) : [
             system || 'You are a helpful assistant.',
             /* The read-only sandbox is only Codex's own shell. Told nothing,
                Codex read "sandbox: read-only" in its context and refused to
@@ -912,7 +928,9 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
     /* Pictures as files, in the directory this run starts in -- its
        workspace, where reading needs no permission -- named by absolute
        path, with leave to open those and nothing else. */
-    const full = fullAccessOf(env);
+    /* agy cannot pause to ask, so with asking on it runs without its own
+       file and command tools rather than acting unasked. */
+    const full = fullAccessOf(env) && !askOf(env);
     const agent = ensureAgyAgent(env, { vision: images.length > 0, servers: hasServers ? servers : null, full });
     const args = [
       '--input-format', 'stream-json',
@@ -933,7 +951,7 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
     /* With the tools toggle on, the app's tool tags are in the instructions
        and are the way to use them; agy's own tools stay off either way. */
     const appTools = !!tools;
-    const ownTools = fullAccessOf(env)
+    const ownTools = full
       ? `You have full read and write access to the user's PC. When asked to create, edit or continue work on files, use your file and command tools directly with absolute paths (by default a new folder on their Desktop, ${path.join(HOME, 'Desktop')}, for new work). Do not run destructive commands unless explicitly asked.`
       : hasServers
       /* This agy build ignores the agent's `tools: []` and `mcpServers` (it
@@ -1861,6 +1879,9 @@ export class CodexSession {
     // answer comes back through `reply`; anything else, and any approval in
     // chat mode, is declined rather than left waiting forever.
     if (m.id !== undefined && m.method) {
+      // A question for the user is always passed on, whatever the approval policy.
+      const question = codexQuestionOf(m);
+      if (question) return { ask: question, reply: (decision) => codexQuestionReply(m, decision) };
       const ask = this.thread.approvalPolicy === 'on-request' ? codexApprovalOf(m) : null;
       if (ask) return { ask, reply: (decision) => codexApprovalReply(m, decision) };
       return { write: [{ id: m.id, error: { code: -32601, message: 'Not supported by this client' } }] };
@@ -2904,6 +2925,8 @@ export const envForRequest = (env = {}, headers = {}) => {
   for (const [header, key] of [['x-cli-web', 'CLI_WEB'], ['x-cli-mcp', 'CLI_MCP']]) {
     if (String(headers[header] || '').trim().toLowerCase() === 'off') out[key] = 'off';
   }
+  // Only ever stricter: a browser may ask to be asked, never to skip asking.
+  if (String(headers['x-cli-approvals'] || '').trim().toLowerCase() === 'ask') out.CLI_ASK = '1';
   return out;
 };
 
@@ -3756,8 +3779,8 @@ export const createCliRoutes = (env = {}) => [
     handler: guarded(async (req, res) => {
       const owner = ownerOfRequest(req);
       if (req.method === 'POST') {
-        const { id, decision } = await jsonBody(req);
-        return sendJson(res, { success: decideApproval(owner, String(id || ''), String(decision || 'decline')) });
+        const { id, decision, answers } = await jsonBody(req);
+        return sendJson(res, { success: decideApproval(owner, String(id || ''), String(decision || 'decline'), answers && typeof answers === 'object' ? answers : null) });
       }
       return sendJson(res, { success: true, approvals: listApprovals(owner) });
     }),
