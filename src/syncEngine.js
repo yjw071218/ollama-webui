@@ -635,7 +635,14 @@ export const syncOnce = async (scope, { full = false, limit = 500, onPhase } = {
  * enough to be in step. The page cap is what keeps a slow connection from
  * having to hold one enormous request open.
  */
-export const syncFully = async (scope, { full = false, maxRounds = 20, limit = 500, onProgress } = {}) => {
+export const syncFully = async (scope, { full = false, maxRounds = 100, limit = 500, onProgress } = {}) => {
+  // Seen by the connection banner: a ping slowed by this is not an outage.
+  globalThis.__webuiSyncBusy = (globalThis.__webuiSyncBusy || 0) + 1;
+  try { return await syncRounds(scope, { full, maxRounds, limit, onProgress }); }
+  finally { globalThis.__webuiSyncBusy = Math.max(0, (globalThis.__webuiSyncBusy || 1) - 1); }
+};
+
+const syncRounds = async (scope, { full, maxRounds, limit, onProgress }) => {
   let total = null;
   let receivedSoFar = 0;
   for (let round = 0; round < maxRounds; round++) {
@@ -793,6 +800,11 @@ export const subscribeToAccount = ({ onRev, onOpen, onClose } = {}) => {
       // it, and fetching it back would be a round trip to learn nothing.
       if (data.origin && data.origin === currentTabSession()) return;
       onRev?.(rev);
+    });
+
+    // A sign-in from a new device is waiting for "was this you?".
+    source.addEventListener('device', () => {
+      if (!stopped) window.dispatchEvent(new Event('webui:device-pending'));
     });
 
     // EventSource reconnects on its own, but not after the server ends the

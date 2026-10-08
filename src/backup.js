@@ -261,12 +261,49 @@ export const restoreBackup = async (backup, {
  * so the stored values are read directly instead — it is a few dozen
  * localStorage reads and costs nothing at the interval this runs on.
  */
+/* The sync's own bookkeeping, and other things that are written by the app
+   rather than changed by a person. Counting them as "settings changed" meant
+   every sync wrote its position, which looked like a change, which scheduled
+   another sync -- a loop that kept a phone busy every few seconds. */
+const NOT_SETTINGS = /^(syncRev@|syncSent@|syncSentAckVersion@|initialSyncPending@|webui-device-id$|perfRuns|unloadJournal:)/;
+
+/* Whether localStorage has been written since the last fingerprint. Reading
+   and joining every value is the expensive part, so it is skipped when
+   nothing has been written at all. */
+let writes = 0;
+try {
+  const proto = Storage.prototype;
+  if (!proto.__webuiCounted) {
+    for (const name of ['setItem', 'removeItem', 'clear']) {
+      const original = proto[name];
+      proto[name] = function counted(...args) { if (this === globalThis.localStorage) writes++; return original.apply(this, args); };
+    }
+    proto.__webuiCounted = true;
+  }
+} catch (e) { /* no Storage */ }
+let lastWrites = -1;
+let lastPrint = '';
+
+const hash = (text) => {
+  let h1 = 0x811c9dc5, h2 = 0;
+  for (let i = 0; i < text.length; i++) {
+    const c = text.charCodeAt(i);
+    h1 = Math.imul(h1 ^ c, 16777619);
+    h2 = (h2 * 31 + c) | 0;
+  }
+  return `${(h1 >>> 0).toString(36)}${(h2 >>> 0).toString(36)}${text.length}`;
+};
+
 export const settingsFingerprint = () => {
+  const counted = typeof Storage !== 'undefined' && localStorage instanceof Storage && Storage.prototype.__webuiCounted;
+  if (counted && writes === lastWrites && lastPrint) return lastPrint;
+  lastWrites = writes;
   const parts = [];
   for (let i = 0; i < localStorage.length; i++) {
     const key = localStorage.key(i);
-    if (!key || MACHINE_LOCAL.has(key)) continue;
-    parts.push(`${key}=${localStorage.getItem(key)}`);
+    if (!key || MACHINE_LOCAL.has(key) || NOT_SETTINGS.test(key)) continue;
+    parts.push(`${key}=${hash(localStorage.getItem(key) || '')}`);
   }
-  return parts.sort().join(' ');
+  lastPrint = parts.sort().join(' ');
+  return lastPrint;
 };

@@ -42,7 +42,9 @@ import { listRevisions, readRevision, recordsWithHistory } from './recordHistory
 import {
   createShare, readShare, listShares, revokeShare, revokeAllShares, MAX_SHARE_BYTES,
 } from './shares.js';
-import { addListener, publishRev, dropListeners } from './liveSync.js';
+import { addListener, publishRev, publishEvent, dropListeners } from './liveSync.js';
+import { deviceIdOf, rememberDevice, needsApproval, listPending, decidePending } from './devices.js';
+import { database } from './db.js';
 import { normaliseOrigin } from './origin.js';
 import {
   fetchWithTimeout, fetchPageResponse, blockReason,
@@ -854,8 +856,23 @@ export const createApiRoutes = (env = {}, options = {}) => {
       const user = findUser(session.userId);
       // A session whose account was deleted is not a session.
       if (!user) { destroySession(token); return { tokens, token: '', session: null, user: null }; }
+      /* A sign-in from a new device that nobody has confirmed yet: it holds a
+         session (so it can be approved, and can sign out) but is nobody. */
+      if (session.pending) return { tokens, token, session, user: null, pendingUser: user };
+      // Devices already signed in before confirmation existed are learnt here.
+      const device = deviceIdOf(req);
+      if (device) {
+        if (!session.deviceId) {
+          try { database().prepare('UPDATE sessions SET device_id = ? WHERE token_hash = ?').run(device, session.key); } catch (e) { /* older db */ }
+        }
+        rememberDevice(user.id, device);
+      }
       return { tokens, token, session, user };
     };
+
+    const pendingInfo = (user, sessionId) => ({
+      name: user.name || '', email: user.email || '', sessionId: sessionId || null,
+    });
 
     /** Everything a protected route needs, or a reply already sent. */
     const guard = (req, res, { methods = null } = {}) => {
@@ -887,7 +904,7 @@ export const createApiRoutes = (env = {}, options = {}) => {
        outside that old sessions are being retired. */
     const accountsOf = (tokens) => liveTokens(tokens).map((token) => {
       const session = readSession(token);
-      const user = session && findUser(session.userId);
+      const user = session && !session.pending && findUser(session.userId);
       return user ? { user, sessionId: sessionIdOf(session.key) } : null;
     }).filter(Boolean);
 
@@ -907,7 +924,9 @@ export const createApiRoutes = (env = {}, options = {}) => {
       const current = sessionRequest(req).fork ? '' : auth.token;
       const set = liveTokens(tokens);
 
-      const meta = { userAgent: req.headers['user-agent'] || '', ip: clientIp(req) };
+      const deviceId = deviceIdOf(req);
+      const pending = needsApproval(user.id, deviceId);
+      const meta = { userAgent: req.headers['user-agent'] || '', ip: clientIp(req), deviceId, pending };
       let token;
       if (current) {
         token = rotateSession(current, { userId: user.id, ...meta });
@@ -924,7 +943,10 @@ export const createApiRoutes = (env = {}, options = {}) => {
 
       const session = readSession(token);
       if (attach) attachSessions(req, res, set, session?.csrf || '');
+      // Every signed-in device of this account is asked "was this you?".
+      if (pending) publishEvent(user.id, 'device', { pending: true });
       return {
+        pending,
         tokens: set,
         token,
         sessionId: session ? sessionIdOf(session.key) : null,
@@ -971,13 +993,14 @@ export const createApiRoutes = (env = {}, options = {}) => {
       const who = session ? findUser(session.userId) : null;
       sendJson(res, {
         success: true,
-        user: who || null,
+        user: who && !session.pending ? who : null,
         // Which of the browser's sessions answered. A tab pins itself to this
         // and sends it back, so it keeps its own identity no matter what the
         // other tabs do.
         sessionId: session ? sessionIdOf(session.key) : null,
         csrfToken: session?.csrf || null,
-        state: who ? accountStats(who.id) : null,
+        state: who && !session.pending ? accountStats(who.id) : null,
+        pendingDevice: who && session.pending ? pendingInfo(who, sessionIdOf(session.key)) : null,
         anyAccounts: who ? true : countUsers() > 0,
         accounts: accountsOf(set),
         session: session ? {
@@ -994,9 +1017,10 @@ export const createApiRoutes = (env = {}, options = {}) => {
         const user = await registerUser({ name, email, password });
         const started = startSession(req, res, user);
         sendJson(res, {
-          success: true, user, csrfToken: started.csrfToken,
+          success: true, user: started.pending ? null : user, csrfToken: started.csrfToken,
+          pendingDevice: started.pending ? pendingInfo(user, started.sessionId) : null,
           sessionId: started.sessionId, accounts: accountsOf(started.tokens),
-          state: accountStats(user.id),
+          state: started.pending ? null : accountStats(user.id),
         });
       } catch (e) {
         sendError(res, e);
@@ -1036,9 +1060,10 @@ export const createApiRoutes = (env = {}, options = {}) => {
         clearFailedLogins(ip, email);
         const started = startSession(req, res, user);
         sendJson(res, {
-          success: true, user, csrfToken: started.csrfToken,
+          success: true, user: started.pending ? null : user, csrfToken: started.csrfToken,
+          pendingDevice: started.pending ? pendingInfo(user, started.sessionId) : null,
           sessionId: started.sessionId, accounts: accountsOf(started.tokens),
-          state: accountStats(user.id),
+          state: started.pending ? null : accountStats(user.id),
         });
       } catch (e) {
         sendError(res, e);
@@ -1074,6 +1099,23 @@ export const createApiRoutes = (env = {}, options = {}) => {
       sendJson(res, {
         success: true, ended, endedSessions: ended, accounts: accountsOf(set),
       });
+    });
+
+    /* New-device confirmation (server/devices.js).
+         GET                          sign-ins waiting for this account's answer
+         POST { sessionId, approve }  "yes, that was me" / "no, sign it out" */
+    route('/api/auth/devices/pending', async (req, res) => {
+      const auth = guard(req, res, { methods: ['GET', 'POST'] });
+      if (!auth) return;
+      if (req.method === 'GET') return sendJson(res, { success: true, pending: listPending(auth.user.id) });
+      try {
+        const { sessionId, approve } = await jsonBody(req);
+        const done = decidePending(auth.user.id, sessionId, !!approve);
+        if (done) publishEvent(auth.user.id, 'device', { decided: true });
+        sendJson(res, { success: done, pending: listPending(auth.user.id) }, done ? 200 : 404);
+      } catch (e) {
+        sendError(res, e);
+      }
     });
 
     route('/api/auth/sessions', (req, res) => {
@@ -1187,9 +1229,10 @@ export const createApiRoutes = (env = {}, options = {}) => {
         const user = findOrCreateSocialUser(identity);
         const started = startSession(req, res, user);
         sendJson(res, {
-          success: true, user, csrfToken: started.csrfToken,
+          success: true, user: started.pending ? null : user, csrfToken: started.csrfToken,
+          pendingDevice: started.pending ? pendingInfo(user, started.sessionId) : null,
           sessionId: started.sessionId, accounts: accountsOf(started.tokens),
-          state: accountStats(user.id),
+          state: started.pending ? null : accountStats(user.id),
         });
       } catch (e) {
         sendError(res, e, 401);
@@ -1329,9 +1372,10 @@ export const createApiRoutes = (env = {}, options = {}) => {
         const user = held.user;
         const started = startSession(req, res, user);
         sendJson(res, {
-          success: true, user, csrfToken: started.csrfToken,
+          success: true, user: started.pending ? null : user, csrfToken: started.csrfToken,
+          pendingDevice: started.pending ? pendingInfo(user, started.sessionId) : null,
           sessionId: started.sessionId, accounts: accountsOf(started.tokens),
-          state: accountStats(user.id),
+          state: started.pending ? null : accountStats(user.id),
         });
       } catch (e) {
         refuse();

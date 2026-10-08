@@ -35,6 +35,15 @@ export const cliOf = (model) => {
 
 /* "2 hr 13 min", in the reader's language, without a translation per unit. */
 export const formatDuration = (ms, lang = 'en') => {
+  // Under a minute it is counted in seconds: "1 min" for 5 s left is a lie.
+  if (ms < 60000) {
+    const seconds = Math.max(0, Math.ceil(ms / 1000));
+    try {
+      return new Intl.NumberFormat(lang, { style: 'unit', unit: 'second', unitDisplay: 'short' }).format(seconds);
+    } catch {
+      return `${seconds}s`;
+    }
+  }
   const minutes = Math.max(0, Math.round(ms / 60000));
   const days = Math.floor(minutes / 1440);
   const hours = Math.floor((minutes % 1440) / 60);
@@ -82,8 +91,18 @@ export const windowLabel = (t, id) => {
 };
 
 /** The windows of one CLI, as bars with what is left and when it resets. */
-export const LimitBars = ({ limits, cli = '', now = Date.now() }) => {
+export const LimitBars = ({ limits, cli = '', now: given }) => {
   const { t, lang } = useI18n();
+  // Without a clock from the caller, keep one here: a reset under 90 s away
+  // counts down in seconds.
+  const [own, setOwn] = useState(Date.now());
+  const now = given ?? own;
+  const near = given == null && (limits?.windows || []).some(w => Number.isFinite(w?.resetsAt) && w.resetsAt - own < 90_000 && w.resetsAt > own - 5000);
+  useEffect(() => {
+    if (given != null) return undefined;
+    const timer = setInterval(() => { if (!document.hidden) setOwn(Date.now()); }, near ? 1000 : 30_000);
+    return () => clearInterval(timer);
+  }, [given, near]);
   const muted = { fontSize: '0.75rem', color: 'var(--text-muted)' };
   if (!limits || (!(limits.windows || []).length && limits.status !== 'rejected')) return <div style={muted}>{t(cli === 'agy' ? 'cli.limit.noneAgy' : 'cli.limit.none')}</div>;
 
@@ -298,11 +317,19 @@ export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
       document.removeEventListener('pointerdown', away);
     };
   }, [open]);
+  /* Every 30 s normally; every second while a reset is under ~90 s away,
+     so the seconds count down instead of jumping. */
+  const soonest = (() => {
+    const list = cli && all?.[cli]?.windows ? all[cli].windows : [];
+    const at = [all?.[cli]?.resetsAt, ...list.map(w => w?.resetsAt)].filter(v => Number.isFinite(v) && v > now);
+    return at.length ? Math.min(...at) : Infinity;
+  })();
+  const fast = soonest - now < 90_000;
   useEffect(() => {
     if (!cli) return undefined;
-    const timer = setInterval(() => { if (!hidden()) setNow(Date.now()); }, 30_000);
+    const timer = setInterval(() => { if (!hidden()) setNow(Date.now()); }, fast ? 1000 : 30_000);
     return () => clearInterval(timer);
-  }, [cli]);
+  }, [cli, fast]);
   if (!cli || !all) return null;
 
   const limits = cli === 'agy' ? agyQuotaForModel(all[cli], model, now) : all[cli];

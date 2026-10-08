@@ -10225,3 +10225,13 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 .live-work-phase.is-running { animation-duration: 1.2s; }
 @keyframes cli-phase-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
 @media (prefers-reduced-motion: reduce) { .live-work-phase { animation: none; } }
+
+/* The catch-up cover can always be dismissed. Shown after a moment, so a quick
+   sync never flashes a button. */
+.boot-sync-skip {
+  margin-top: 14px; padding: 6px 14px; border-radius: 8px; font-size: 0.82rem;
+  border: 1px solid var(--border, rgba(127,127,127,.35)); background: transparent;
+  color: var(--text-muted, inherit); cursor: pointer;
+  opacity: 0; animation: boot-sync-skip-in 0.3s ease 3s forwards;
+}
+@keyframes boot-sync-skip-in { to { opacity: 1; } }

@@ -93,7 +93,7 @@ export const ServerOffline = ({ onRetry, onContinue }) => {
    and has no side effects -- unlike the session check, which can create one. */
 const ping = async () => {
   try {
-    const res = await fetch('/api/config', { cache: 'no-store', signal: AbortSignal.timeout(6000) });
+    const res = await fetch('/api/config', { cache: 'no-store', signal: AbortSignal.timeout(12000) });
     // Any answer from the server counts. A gateway error is the app's own
     // proxy (desktop/Android) saying the server behind it is not there.
     return ![502, 504].includes(res.status);
@@ -134,6 +134,9 @@ export const ConnectionBanner = ({ onBack }) => {
       return;
     }
     // Two misses in a row: one can be a request dropped by a sleeping radio.
+    // While a sync is moving data, a slow ping is the sync's traffic, not an
+    // outage -- unless the browser itself says it is offline.
+    if (navigator.onLine !== false && (globalThis.__webuiSyncBusy || 0) > 0) return;
     misses.current += 1;
     if (misses.current >= 2) setDown(true);
   }, []);

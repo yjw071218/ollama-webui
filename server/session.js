@@ -110,7 +110,7 @@ const sweep = () => {
  * The raw token is returned once and never stored, which is why there is no
  * "look up my session id" anywhere: the only copy lives in the cookie.
  */
-export const createSession = (userId, { userAgent = '', ip = '' } = {}) => {
+export const createSession = (userId, { userAgent = '', ip = '', pending = false, deviceId = '' } = {}) => {
   if (!userId) throw new Error('A session must belong to an account.');
   sweep();
 
@@ -118,8 +118,8 @@ export const createSession = (userId, { userAgent = '', ip = '' } = {}) => {
   const now = Date.now();
   database().prepare(`
     INSERT INTO sessions
-      (token_hash, user_id, created_at, last_seen_at, absolute_expires_at, csrf, user_agent, ip)
-    VALUES (?,?,?,?,?,?,?,?)
+      (token_hash, user_id, created_at, last_seen_at, absolute_expires_at, csrf, user_agent, ip, pending, device_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
   `).run(
     hashToken(token), userId, now, now, now + ABSOLUTE_TTL_MS,
     crypto.randomBytes(32).toString('base64url'),
@@ -127,6 +127,7 @@ export const createSession = (userId, { userAgent = '', ip = '' } = {}) => {
     // user agent is truncated because the full string is long and useless.
     String(userAgent).slice(0, 180),
     String(ip).slice(0, 64),
+    pending ? 1 : 0, String(deviceId || ''),
   );
   return token;
 };
@@ -138,7 +139,7 @@ export const createSession = (userId, { userAgent = '', ip = '' } = {}) => {
  * arrived with is not the cookie it leaves with, so a value planted before
  * sign-in is worthless afterwards.
  */
-export const rotateSession = (oldToken, { userId, userAgent = '', ip = '' } = {}) => {
+export const rotateSession = (oldToken, { userId, userAgent = '', ip = '', pending = false, deviceId = '' } = {}) => {
   const db = database();
   const previous = oldToken
     ? db.prepare('SELECT * FROM sessions WHERE token_hash = ?').get(hashToken(oldToken))
@@ -158,8 +159,8 @@ export const rotateSession = (oldToken, { userId, userAgent = '', ip = '' } = {}
   const now = Date.now();
   db.prepare(`
     INSERT INTO sessions
-      (token_hash, user_id, created_at, last_seen_at, absolute_expires_at, csrf, user_agent, ip)
-    VALUES (?,?,?,?,?,?,?,?)
+      (token_hash, user_id, created_at, last_seen_at, absolute_expires_at, csrf, user_agent, ip, pending, device_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
   `).run(
     hashToken(token), owner,
     // A rotation does not restart the absolute clock; that is the point of it
@@ -170,6 +171,7 @@ export const rotateSession = (oldToken, { userId, userAgent = '', ip = '' } = {}
     crypto.randomBytes(32).toString('base64url'),
     String(userAgent).slice(0, 180) || carried?.user_agent || '',
     String(ip).slice(0, 64) || carried?.ip || '',
+    pending ? 1 : 0, String(deviceId || carried?.device_id || ''),
   );
   return token;
 };
@@ -196,14 +198,15 @@ export const forkSession = (sourceToken, { userAgent = '', ip = '' } = {}) => {
   const token = crypto.randomBytes(32).toString('base64url');
   db.prepare(`
     INSERT INTO sessions
-      (token_hash, user_id, created_at, last_seen_at, absolute_expires_at, csrf, user_agent, ip)
-    VALUES (?,?,?,?,?,?,?,?)
+      (token_hash, user_id, created_at, last_seen_at, absolute_expires_at, csrf, user_agent, ip, pending, device_id)
+    VALUES (?,?,?,?,?,?,?,?,?,?)
   `).run(
     hashToken(token), source.user_id,
     source.created_at, Date.now(), source.absolute_expires_at,
     crypto.randomBytes(32).toString('base64url'),
     String(userAgent).slice(0, 180) || source.user_agent || '',
     String(ip).slice(0, 64) || source.ip || '',
+    source.pending ? 1 : 0, source.device_id || '',
   );
   return token;
 };
@@ -240,6 +243,8 @@ export const readSession = (token) => {
     csrf: row.csrf,
     userAgent: row.user_agent || '',
     ip: row.ip || '',
+    pending: !!row.pending,
+    deviceId: row.device_id || '',
   };
 };
 

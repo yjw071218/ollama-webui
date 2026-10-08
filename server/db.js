@@ -110,6 +110,15 @@ CREATE TABLE IF NOT EXISTS sessions (
 );
 CREATE INDEX IF NOT EXISTS sessions_user ON sessions (user_id);
 
+-- Devices an account has been confirmed on. A sign-in from a device not in
+-- here waits until a device that is says it was really the owner.
+CREATE TABLE IF NOT EXISTS known_devices (
+  user_id    TEXT NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  device_id  TEXT NOT NULL,
+  created_at INTEGER NOT NULL,
+  PRIMARY KEY (user_id, device_id)
+);
+
 -- One row per thing, not one blob per account.
 --
 -- "rev" is the account revision at which this row last changed, and is what a
@@ -398,6 +407,9 @@ export const database = () => {
   // A folder a scheduled CLI turn works in; see server/cliProject.js.
   addColumn('server_schedules', 'project', "TEXT NOT NULL DEFAULT ''");
   addColumn('server_schedules', 'project_mode', "TEXT NOT NULL DEFAULT 'plan'");
+  // New-device confirmation; see server/devices.js.
+  addColumn('sessions', 'pending', 'INTEGER NOT NULL DEFAULT 0');
+  addColumn('sessions', 'device_id', "TEXT NOT NULL DEFAULT ''");
   migrateRecordIntegrity();
   runMigrations();
   importLegacyJson();

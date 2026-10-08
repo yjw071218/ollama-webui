@@ -30,6 +30,8 @@
 
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { ServerOffline, ConnectionBanner } from './ServerOffline.jsx';
+import { DeviceWait, DeviceApprovals } from './DeviceGate.jsx';
+import './deviceId.js';
 
 const SessionContext = createContext(null);
 
@@ -189,7 +191,7 @@ export const api = async (path, { method = 'GET', body, signal } = {}) => {
 
 /* ------------------------------------------------------------------ provider */
 
-const EMPTY = { user: null, csrfToken: null, state: null, anyAccounts: false, accounts: [] };
+const EMPTY = { user: null, csrfToken: null, state: null, anyAccounts: false, accounts: [], pendingDevice: null };
 
 export const SessionProvider = ({ children, fallback = null }) => {
   // 'loading' is a real state, not an absence. Treating it as "signed out" is
@@ -212,6 +214,8 @@ export const SessionProvider = ({ children, fallback = null }) => {
       anyAccounts: !!data?.anyAccounts,
       // Everyone signed in on this browser, this tab's own account included.
       accounts: Array.isArray(data?.accounts) ? data.accounts : [],
+      // Signed in on a new device, waiting for another device to confirm it.
+      pendingDevice: data?.pendingDevice || null,
     };
     csrfToken = next.csrfToken;
 
@@ -255,6 +259,17 @@ export const SessionProvider = ({ children, fallback = null }) => {
       return apply(EMPTY);
     }
   }, [apply]);
+
+  /* The waiting screen's re-check: adopts the answer only once it changes
+     (approved -> signed in, refused -> signed out), so polling does not churn. */
+  const refreshQuietly = useCallback(async () => {
+    try {
+      const data = await api('/api/auth/session');
+      if (data?.pendingDevice && !data?.user) return;
+      apply(data);
+      try { channel?.postMessage({ type: 'identity-changed', at: Date.now() }); } catch (e) { /* closed */ }
+    } catch (e) { /* the next tick tries again */ }
+  }, [apply, channel]);
 
   const continueOffline = useCallback(() => {
     setOfflineChosen(true);
@@ -366,12 +381,16 @@ export const SessionProvider = ({ children, fallback = null }) => {
 
   if (status === 'loading') return fallback;
   if (status === 'offline') return <ServerOffline onRetry={refresh} onContinue={continueOffline} />;
+  if (session.pendingDevice && !session.user) {
+    return <DeviceWait info={session.pendingDevice} onCheck={refreshQuietly} onCancel={signOut} />;
+  }
 
   return (
     <SessionContext.Provider value={value}>
       {/* Carried on offline: the session is read again once the server is
           back, and the app is remounted for whoever is signed in. */}
       <ConnectionBanner onBack={offlineChosen ? refresh : undefined} />
+      {session.user && <DeviceApprovals api={api} />}
       {children}
     </SessionContext.Provider>
   );

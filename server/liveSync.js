@@ -116,6 +116,19 @@ export const publishRev = (userId, rev, origin = '') => {
   return delivered;
 };
 
+/** A named event to every stream on an account (e.g. a device waiting for approval). */
+export const publishEvent = (userId, name, data = {}) => {
+  const set = listeners.get(userId);
+  if (!set || set.size === 0) return 0;
+  const frame = `event: ${name}
+data: ${JSON.stringify(data)}
+
+`;
+  let delivered = 0;
+  for (const res of [...set]) if (write(res, frame)) delivered++;
+  return delivered;
+};
+
 /** How many streams an account has open. Exposed for tests and diagnostics. */
 export const listenerCount = (userId) => listeners.get(userId)?.size || 0;
 

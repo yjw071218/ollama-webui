@@ -241,7 +241,7 @@ import { holdScreenAwake } from './wakeLock.js';
 import { notify, notifyState, askToNotify, unattended, subscribeToPush, unsubscribeFromPush } from './notify.js';
 import { recordRun, loadRuns, clearRuns, summarise, promptCostTrend } from './perf.js';
 import {
-  syncFully, createSyncScheduler, accountStamp, resetSyncPosition, OwnerMismatch, withoutPictureBytes,
+  syncFully, createSyncScheduler, accountStamp, readRev, resetSyncPosition, OwnerMismatch, withoutPictureBytes,
   subscribeToAccount, needsInitialSync, markInitialSync, syncPercent, syncStage,
 } from './syncEngine.js';
 import {
@@ -1034,7 +1034,11 @@ const highlightPlain = (text, query) => {
 /* How long a launch waits to catch up with the account before showing the app
    anyway: long enough for a slow phone network, short enough that offline
    does not feel like a hang. */
-const BOOT_SYNC_MAX_MS = 8000;
+const BOOT_SYNC_MAX_MS = 20000;
+/* Back from the background after this long, the app checks the account before
+   it is used again, so a phone never shows what it saw an hour ago. */
+const RESUME_SYNC_AFTER_MS = 5000;
+const RESUME_SYNC_MAX_MS = 12000;
 
 const DEFAULT_PROMPT_LIBRARY = [
   { id: 'p-commit', name: 'Commit message', body: 'Write a concise conventional-commit message for the following diff:\n\n' },
@@ -8045,11 +8049,71 @@ ${data.text}` : data.text));
     /* The app is shown when this first check has brought it up to date and
        the chats that arrived are on screen -- or after BOOT_SYNC_MAX_MS, so a
        phone offline or a server down never keeps it shut. */
-    let bootTimer = null;
-    Promise.race([
-      check({ boot: true }).then(() => (chatsStaleRef.current ? showSyncedChats() : null)),
-      new Promise(resolve => { bootTimer = setTimeout(resolve, BOOT_SYNC_MAX_MS); }),
-    ]).catch(() => {}).finally(() => { clearTimeout(bootTimer); if (!stopped) setBootSync(false); });
+    /* Caught up, properly: keep asking until the account has nothing newer
+       than this device, rather than one look that gave up when the phone's
+       network was not ready yet, an upload was queued, or the server was
+       still waking -- each of which used to show the app on what the device
+       last saw. Ends at `deadline` whatever happens, so offline never hangs.
+       `onBehind` is told once there is something to fetch (the resume path
+       only covers the screen then). */
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const catchUp = async (deadline, onBehind) => {
+      let flushed = false;
+      while (!stopped && Date.now() < deadline) {
+        if (isGeneratingRef.current) return;
+        if (syncRef.current?.pending()) {
+          // This device's own edits go up first, so what comes back is whole.
+          if (!flushed) { flushed = true; try { syncRef.current?.flush?.(); } catch (e) { /* later */ } }
+          await sleep(300);
+          continue;
+        }
+        const stamp = await accountStamp();
+        if (stopped) return;
+        if (!stamp) { await sleep(800); continue; }
+        if (stamp.ownerId !== accountId) { stopped = true; authSession.refresh(); return; }
+        if (Math.max(syncStampRef.current, readRev(profileScope)) >= stamp.rev) { syncStampRef.current = Math.max(syncStampRef.current, stamp.rev); break; }
+        onBehind?.();
+        try {
+          await pullRemoteChanges({ announce: false });
+        } catch (e) {
+          if (e instanceof OwnerMismatch) { stopped = true; authSession.refresh(); return; }
+          addLog(`[sync] catch-up failed, retrying: ${e.message}`, 'info');
+          await sleep(1000);
+        }
+      }
+      // What arrived is on screen before the screen is shown.
+      if (!stopped && chatsStaleRef.current) {
+        await Promise.race([showSyncedChats(), sleep(Math.max(0, deadline - Date.now()))]);
+      }
+    };
+
+    catchUp(Date.now() + BOOT_SYNC_MAX_MS)
+      .catch(() => {})
+      .finally(() => { if (!stopped) setBootSync(false); });
+
+    /* Resuming. An Android app that was in the background is not relaunched:
+       its page is the same page, frozen, with hours-old chats in it. */
+    let hiddenAt = document.hidden ? Date.now() : 0;
+    let resuming = false;
+    const onVisibility = async () => {
+      if (document.hidden) { hiddenAt = Date.now(); return; }
+      const away = hiddenAt ? Date.now() - hiddenAt : 0;
+      hiddenAt = 0;
+      if (away < RESUME_SYNC_AFTER_MS || resuming || stopped) return;
+      resuming = true;
+      let covered = false;
+      try {
+        await catchUp(Date.now() + RESUME_SYNC_MAX_MS, () => {
+          if (!covered && !stopped) { covered = true; setBootSync(true); }
+        });
+      } catch (e) { /* the ordinary checks carry on */ }
+      finally {
+        resuming = false;
+        if (covered && !stopped) setBootSync(false);
+      }
+    };
+    document.addEventListener('visibilitychange', onVisibility);
+    window.addEventListener('pageshow', onVisibility);
 
     return () => {
       stopped = true;
@@ -8061,6 +8125,8 @@ ${data.text}` : data.text));
       window.removeEventListener('focus', check);
       document.removeEventListener('visibilitychange', check);
       window.removeEventListener('webui:generation-ended', check);
+      document.removeEventListener('visibilitychange', onVisibility);
+      window.removeEventListener('pageshow', onVisibility);
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [accountId, storageKey]);
@@ -8106,15 +8172,14 @@ ${data.text}` : data.text));
       // copy is wrong: the account is authoritative, and starting again from it
       // is more honest than trying to reconcile a mess.
       if (mode === 'replace') resetSyncPosition(profileScope);
-      const result = await syncFully(profileScope, { full: mode === 'replace' });
+      const result = await syncFully(profileScope, { full: mode === 'replace', maxRounds: 200 });
       syncStampRef.current = result.rev;
+      settingsPrintRef.current = settingsFingerprint();
       setSyncInfo(await accountStamp());
 
       if (!result.changedLocally) { toast(t('sync.upToDate'), 'info'); return; }
-      toast(t('sync.pulled', { chats: result.applied.chats }), 'success', 8000, {
-        label: t('backup.reload'),
-        onClick: () => window.location.reload(),
-      });
+      showRemoteChanges(result);
+      toast(t('sync.pulled', { chats: result.applied.chats }), 'success', 5000);
     } catch (e) {
       if (e instanceof OwnerMismatch) {
         // Refusing is the feature. The alternative — merging it in anyway — is
@@ -14379,7 +14444,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         <div className="initial-sync boot-sync" role="status" aria-live="polite">
           <div className="initial-sync-card">
             <Logo size={48} spinning />
-            <div className="initial-sync-stage">{t('sync.stage.connecting')}</div>
+            <div className="initial-sync-stage">{t('sync.stage.syncingLatest')}</div>
+            <button type="button" className="boot-sync-skip" onClick={() => setBootSync(false)}>
+              {t('sync.skipWait')}
+            </button>
           </div>
         </div>
       )}
