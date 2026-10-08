@@ -13,6 +13,7 @@ import {
 } from './chatJobs.js';
 import { readConfig as readMcpConfig } from './mcp.js';
 import { fileChangesIn, commandIn } from './workbench.js';
+import { ShellChanges, pathsIn } from './shellChanges.js';
 import { listCommands, stopCommand, noteCommand, readLog } from './liveCommands.js';
 import { readPolicy, writePolicy, effectiveAccess, hasBackup, restoreBackup, sweepBackups, listBackups } from './workbenchState.js';
 import { resumeEnabled, historyKey, splitForResume, tailRequest, sessions } from './cliSessions.js';
@@ -1678,6 +1679,15 @@ export class ClaudeReader {
         if (id && CLAUDE_SHELL_TOOLS.has(name) && typeof input.command === 'string') {
           noteCommand({ id, command: input.command, status: 'running', source: 'claude' });
           (this.commands ||= new Set()).add(id);
+          /* What the work trees it may touch look like now, so the files it
+             rewrites (sed, a Python one-off) get cards like an Edit's. */
+          try {
+            (this.shell ||= new ShellChanges()).watch([...pathsIn(input.command), ...(this.cwd ? [this.cwd] : [])]);
+            (this.shellRuns ||= new Set()).add(id);
+          } catch { /* no git, or a tree it cannot read: no cards, as before */ }
+        } else if (typeof input.file_path === 'string') {
+          // A file it reads or edits names a tree worth watching before any shell touches it.
+          try { (this.shell ||= new ShellChanges()).watch([input.file_path]); } catch { /* */ }
         }
         const what = toolTarget(input);
         return { thinking: toolNote('tool', `${claudeToolLabel(name)}${what ? ` · ${what}` : ''}`) + inputNote(input) };
@@ -1725,6 +1735,15 @@ export class ClaudeReader {
          `[file-change]`; the patch comes beside the result instead. */
       const native = nativeChangeText(line.tool_use_result);
       if (native) outs.push({ content: changesAsMarkdown(native) });
+      // Its own card is shown above; the shell check must not show it again.
+      if (typeof line.tool_use_result?.filePath === 'string') this.shell?.seen(line.tool_use_result.filePath);
+      const shellDone = parts.some(part => part?.type === 'tool_result' && this.shellRuns?.delete(part.tool_use_id));
+      if (shellDone && this.shell) {
+        try {
+          const reports = this.shell.collect();
+          if (reports.length) outs.push({ content: changesAsMarkdown(reports.join('\n\n')) });
+        } catch { /* */ }
+      }
       if (!outs.length) return null;
       const content = outs.map(o => o.content || '').join('');
       const thinking = outs.map(o => o.thinking || '').join('');
@@ -2405,6 +2424,8 @@ const runCliOnce = ({
 
   // A conversation (Codex) reads and writes; the others read a stream.
   const reader = invocation.session || new READERS[provider.id]();
+  // Where its shell commands start, for the files they change (shellChanges.js).
+  if (reader instanceof ClaudeReader) reader.cwd = invocation.cwd || workDir();
   // agy's tool steps, from its transcript (see watchAgyTranscript).
   const transcript = provider.id === 'agy' && !flag(env.CLI_AGY_TRANSCRIPT ?? 'on', true) ? null
     : provider.id === 'agy' ? watchAgyTranscript({

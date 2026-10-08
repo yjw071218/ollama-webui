@@ -221,5 +221,15 @@ check('the studio shows the model notes in the reader’s language', /\{noteFor\
     && /const scrollAreaNodeRef = useCallback\(\(area\) => \{[\s\S]{0,700}keepViewAnchor\(\)/.test(app));
 }
 
+// Layer order: the command pill sat above the image viewer, and the reply
+// bubbles over the opened in-chat search.
+{
+  const z = (n) => Number((read('src/index.css').match(new RegExp(`--z-${n}:\\s*(\\d+)`)) || [])[1]);
+  check('the command pill is under dialogs and the image viewer', z('dock') < z('modal') && z('dock') > z('panel'));
+  const extras = read('src/extras.css');
+  check('the header stacks above the conversation', /\.main-header \{ position: relative; z-index: var\(--z-sticky\); \}/.test(extras));
+  check('... and the opened search floats above it', /\.header-search\.is-open \{\s*position: absolute;[\s\S]{0,200}z-index: var\(--z-dropdown\)/.test(extras));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

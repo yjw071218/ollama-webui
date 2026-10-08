@@ -1027,6 +1027,11 @@ const highlightPlain = (text, query) => {
   ));
 };
 
+/* How long a launch waits to catch up with the account before showing the app
+   anyway: long enough for a slow phone network, short enough that offline
+   does not feel like a hang. */
+const BOOT_SYNC_MAX_MS = 8000;
+
 const DEFAULT_PROMPT_LIBRARY = [
   { id: 'p-commit', name: 'Commit message', body: 'Write a concise conventional-commit message for the following diff:\n\n' },
   { id: 'p-regex', name: 'Regex builder', body: 'Write a regular expression that matches the following, and explain each part:\n\n' },
@@ -1687,6 +1692,11 @@ function App() {
      out underneath whoever is already using them. */
   const [initialSync, setInitialSync] = useState(() =>
     (needsInitialSync(profileScope) ? { percent: 0, error: '' } : null));
+  /* Every launch, not only the first: the app is shown once it has caught up
+     with the account, so it never opens on what this device last saw and
+     then changes underneath the reader. Cleared by the remote-changes check
+     below, or after BOOT_SYNC_MAX_MS whatever happened (offline, server down). */
+  const [bootSync, setBootSync] = useState(() => !!ownerOfScope(profileScope) && !needsInitialSync(profileScope));
 
   // Every setting read goes through the store, so it has to be told before the
   // render that reads them. The provider already did this; repeating it is a
@@ -7056,11 +7066,10 @@ ${data.text}` : data.text));
         setInitialSync({ percent: 100, error: '', stage: syncStage({ phase: 'done' }) });
         // Apply supported preferences in place before revealing the app.
         // Lists and unsupported settings still use the guarded reload path.
-        if (!applySyncedSettings(result.applied) || result.applied.lists > 0) {
-          window.location.reload();
-          return;
-        }
-        await refreshChatsFromStorage();
+        // Applied in place, as every later sync is: no reload before the app shows.
+        applySyncedSettings(result.applied);
+        await rereadSyncedLists(result.applied);
+        await showSyncedChats();
         setInitialSync(null);
         return;
       }
@@ -7071,16 +7080,8 @@ ${data.text}` : data.text));
         // the ordinary way to check whether another device's chat had come
         // through — showed nothing, and the answer was to refresh a second
         // time. The chats were already here; only the screen had not been told.
-        const shown = await refreshChatsFromStorage();
-        // Settings that came down are read into state at mount and cannot be
-        // swapped in underneath the app, so those still want a reload. Chats no
-        // longer do, and chats are what somebody refreshing is looking for.
-        if (!shown || result.applied.settings > 0) {
-          toast(t('sync.pulled', { chats: result.applied.chats }), 'success', 8000, {
-            label: t('backup.reload'),
-            onClick: () => window.location.reload(),
-          });
-        }
+        // Everything is applied in place now; nothing here asks for a reload.
+        showRemoteChanges(result);
       }
     } catch (e) {
       if (e instanceof OwnerMismatch) {
@@ -7628,112 +7629,137 @@ ${data.text}` : data.text));
    * applied in place, and only the rest is worth a reload.
    */
   const applySyncedSettings = (applied) => {
-    if (!applied.settings) return true;
-    if (!applied.settingKeys?.length) return false;
-    return applyLiveSettings(applied.settingKeys, getSetting, {
-      temperature: [setTemperature, 'number'],
-      topP: [setTopP, 'number'],
-      topK: [setTopK, 'number'],
-      repeatPenalty: [setRepeatPenalty, 'number'],
-      numCtx: [setNumCtx, 'number'],
-      maxTokens: [setMaxTokens, 'number'],
-      minP: [setMinP, 'number'],
-      presencePenalty: [setPresencePenalty, 'number'],
-      frequencyPenalty: [setFrequencyPenalty, 'number'],
-      ragTopK: [setRagTopK, 'number'],
-      toolBudget2: [setToolBudget, 'number'],
-      voiceSensitivity: [setVoiceSensitivity, 'number'],
-      ttsSpeed: [setTtsSpeed, 'number'],
-      ttsMaxChars: [setTtsMaxChars, 'number'],
-      autoContinue: [setAutoContinue, 'boolean'],
-      memoryEnabled: [setMemoryEnabled, 'boolean'],
-      autoRemember: [setAutoRemember, 'boolean'],
-      autoCompact: [setAutoCompact, 'boolean'],
-      ragEnabled: [setRagEnabled, 'boolean'],
-      ragHybrid: [setRagHybrid, 'boolean'],
-      ragRerank: [setRagRerank, 'boolean'],
-      autoGround: [setAutoGround, 'boolean'],
-      routingEnabled: [setRoutingEnabled, 'boolean'],
-      convMemory: [setConvMemory, 'boolean'],
-      autoTitle: [setAutoTitle, 'boolean'],
-      showTimestamps: [setShowTimestamps, 'boolean'],
-      showSystemStrip: [setShowSystemStrip, 'boolean'],
-      voiceBargeIn: [setVoiceBargeIn, 'boolean'],
-      ttsAutoPlay: [setTtsAutoPlay, 'boolean'],
-      notifyWhenDone: [setNotifyWhenDone, 'boolean'],
-      mcpEnabled: [setMcpEnabled, 'boolean'],
-      systemPrompt: [setSystemPrompt, 'string'],
-      codeTheme: [setCodeTheme, 'string'],
-      theme: [setTheme, 'string'],
-      chatFontSize: [setChatFontSize, 'string'],
-      chatDensity: [setChatDensity, 'string'],
-      contentWidth: [setContentWidth, 'string'],
-      motionMode: [setMotionMode, 'string'],
-      userLocation: [setUserLocation, 'string'],
-      outputFormat: [setOutputFormat, 'string'],
-      outputSchema: [setOutputSchema, 'string'],
-      embedModel: [setEmbedModel, 'string'],
-      seed: [setSeed, 'string'],
-      stopSequences: [setStopSequences, 'string'],
-      thinkMode: [setThinkMode, 'string'],
-      keepAlive: [setKeepAlive, 'string'],
-      researchDepth: [setResearchDepth, 'string'],
-      defaultModel: [setDefaultModel, 'string'],
-      sendKey: [setSendKey, 'string'],
-      sttModel: [setSttModel, 'string'],
-      ttsEngine: [setTtsEngine, 'string'],
-      ttsPromptText: [setTtsPromptText, 'string'],
-      ttsTextLang: [setTtsTextLang, 'string'],
-      ttsPromptLang: [setTtsPromptLang, 'string'],
-      viewportPreset: [setViewportPreset, 'string'],
+    if (!applied.settings || !applied.settingKeys?.length) return true;
+    /* Every setting read into state, with the value it starts at when absent
+       (the `useState` beside it), so a reset on another device resets here. */
+    const unbound = applyLiveSettings(applied.settingKeys, getSetting, {
+      temperature: [setTemperature, 'number', 0.7],
+      topP: [setTopP, 'number', 0.9],
+      topK: [setTopK, 'number', 40],
+      repeatPenalty: [setRepeatPenalty, 'number', 1.1],
+      numCtx: [setNumCtx, 'number', DEFAULT_NUM_CTX],
+      maxTokens: [setMaxTokens, 'number', DEFAULT_MAX_TOKENS],
+      minP: [setMinP, 'number', 0],
+      presencePenalty: [setPresencePenalty, 'number', 0],
+      frequencyPenalty: [setFrequencyPenalty, 'number', 0],
+      ragTopK: [setRagTopK, 'number', 5],
+      toolBudget2: [setToolBudget, 'number', 50],
+      voiceSensitivity: [setVoiceSensitivity, 'number', 0.5],
+      ttsSpeed: [setTtsSpeed, 'number', 1],
+      ttsMaxChars: [setTtsMaxChars, 'number', 600],
+      autoContinue: [setAutoContinue, 'boolean', false],
+      memoryEnabled: [setMemoryEnabled, 'boolean', true],
+      autoRemember: [setAutoRemember, 'boolean', false],
+      autoCompact: [setAutoCompact, 'boolean', true],
+      ragEnabled: [setRagEnabled, 'boolean', true],
+      ragHybrid: [setRagHybrid, 'boolean', true],
+      ragRerank: [setRagRerank, 'boolean', false],
+      autoGround: [setAutoGround, 'boolean', true],
+      routingEnabled: [setRoutingEnabled, 'boolean', false],
+      convMemory: [setConvMemory, 'boolean', true],
+      autoTitle: [setAutoTitle, 'boolean', true],
+      showTimestamps: [setShowTimestamps, 'boolean', false],
+      showSystemStrip: [setShowSystemStrip, 'boolean', true],
+      voiceBargeIn: [setVoiceBargeIn, 'boolean', true],
+      ttsAutoPlay: [setTtsAutoPlay, 'boolean', false],
+      notifyWhenDone: [setNotifyWhenDone, 'boolean', false],
+      mcpEnabled: [setMcpEnabled, 'boolean', true],
+      haptics: [setHapticsOn, 'boolean', true],
+      systemPrompt: [setSystemPrompt, 'string', 'You are Claude, a helpful, honest, and harmless AI assistant.'],
+      codeTheme: [setCodeTheme, 'string', 'atom-one-dark'],
+      theme: [setTheme, 'string', 'system'],
+      chatFontSize: [setChatFontSize, 'string', 'medium'],
+      chatDensity: [setChatDensity, 'string', 'comfortable'],
+      contentWidth: [setContentWidth, 'string', 'medium'],
+      motionMode: [setMotionMode, 'string', 'system'],
+      userLocation: [setUserLocation, 'string', ''],
+      outputFormat: [setOutputFormat, 'string', 'text'],
+      outputSchema: [setOutputSchema, 'string', ''],
+      embedModel: [setEmbedModel, 'string', DEFAULT_EMBED_MODEL,
+        (raw) => (!raw || /^nomic-embed-text(:latest)?$/.test(raw) ? DEFAULT_EMBED_MODEL : raw)],
+      seed: [setSeed, 'string', ''],
+      stopSequences: [setStopSequences, 'string', ''],
+      thinkMode: [setThinkMode, 'string', readThinkMode(null), readThinkMode],
+      keepAlive: [setKeepAlive, 'string', '5m'],
+      researchDepth: [setResearchDepth, 'string', 'normal'],
+      defaultModel: [setDefaultModel, 'string', ''],
+      sendKey: [setSendKey, 'string', 'enter'],
+      sttModel: [setSttModel, 'string', 'Systran/faster-whisper-small'],
+      ttsEngine: [setTtsEngine, 'string', 'gpt-sovits'],
+      ttsPromptText: [setTtsPromptText, 'string', ''],
+      ttsTextLang: [setTtsTextLang, 'string', 'ko'],
+      ttsPromptLang: [setTtsPromptLang, 'string', 'ko'],
+      viewportPreset: [setViewportPreset, 'string', 'fit'],
+      googleClientId: [setGoogleClientId, 'string', ''],
+      wildcards: [setWildcardLists, 'string', ''],
+      promptLibrary: [setPromptLibrary, 'json', DEFAULT_PROMPT_LIBRARY,
+        (raw) => { const v = JSON.parse(raw); return Array.isArray(v) ? v : DEFAULT_PROMPT_LIBRARY; }],
     });
-  };
-  const showRemoteChanges = (result) => {
-    const applied = result.applied || {};
-    const settingsApplied = applySyncedSettings(applied);
-    const beyondChats = (settingsApplied ? 0 : (applied.settings || 0)) + (applied.lists || 0)
-      + (applied.documents || 0) + (applied.memories || 0);
-
-    /* The Studio re-reads its own records in place, so a change to them is
-       never a reason to rebuild the page. It used to be one: every job the
-       Studio ran was a write, every write came back from the account, and each
-       return reloaded the page out from under whatever was being typed. */
-    if (applied.studio > 0) window.dispatchEvent(new Event('webui:studio-synced'));
-    // A settings change may require a deferred reload, but must not hold back
-    // incoming chats while the reader has an unsent draft in the composer.
-    if (applied.chats > 0) refreshChatsFromStorage();
-    if (!beyondChats && !(applied.chats > 0)) return true;
-
-    if (!beyondChats && applied.chats > 0) {
-      // Deliberately not gated on whether the user is busy. That guard exists
-      // because a reload throws away a half-written message and a half-streamed
-      // reply; re-reading the chat list throws away neither. The composer is
-      // untouched, and `refreshChatsFromStorage` already declines outright
-      // while this device is generating, because the reply being streamed here
-      // is in state and not yet in storage.
-      return true;
-    }
-
-    // Anything else means settings, folders, presets, documents or memories,
-    // every one of which was read into state at mount. Only a reload shows
-    // them -- so here the guard does apply, and a busy device is asked rather
-    // than interrupted.
-    if (isGeneratingRef.current || inputRef.current.trim().length > 0) return false;
-    return reloadForRev(result.rev);
-  };
-
-  const reloadedRevKey = `syncReloadedRev@${accountId || 'guest'}`;
-  const reloadForRev = (rev) => {
-    try {
-      const seen = Number(sessionStorage.getItem(reloadedRevKey)) || 0;
-      if (rev && rev <= seen) return false;
-      sessionStorage.setItem(reloadedRevKey, String(rev || 0));
-    } catch (e) {
-      return false;
-    }
-    window.location.reload();
+    // Read on demand (safeguard level, retouch mode, inpaint tuning, share
+    // links...): told, for any that keep a copy, rather than reloaded for.
+    setRetouchModeState(getRetouchMode());
+    window.dispatchEvent(new CustomEvent('webui:settings-synced', { detail: { keys: applied.settingKeys, unbound } }));
     return true;
   };
+  /* Re-read every list that sync writes into storage, in place. These used to
+     be read only at mount, so a change from another device reloaded the whole
+     page -- out from under whatever the reader was doing. */
+  const rereadSyncedLists = async (applied) => {
+    if (applied.lists > 0) {
+      setFolders(loadFolders(profileScope));
+      setPresets(loadPresets(profileScope));
+      setPersonas(loadPersonas(profileScope));
+      setUserProfile(loadProfile(profileScope));
+    }
+    try {
+      if (applied.documents > 0) setKnowledge(await loadLibrary(profileScope));
+      if (applied.memories > 0) setMemories(await loadMemories(profileScope));
+    } catch (e) { addLog(`[sync] could not re-read documents or memories: ${e.message}`, 'warning'); }
+  };
+
+  /* Chats that arrived are put on screen, and kept trying until they are.
+     `refreshChatsFromStorage` stands down while a reply streams or while the
+     list is changing under it (the app still starting); that used to be the
+     end of it, with the sync stamp already moved on, so the device stayed
+     behind until it was restarted. */
+  const chatsStaleRef = useRef(false);
+  const showSyncedChats = async () => {
+    chatsStaleRef.current = true;
+    for (let attempt = 0; attempt < 8 && chatsStaleRef.current; attempt++) {
+      if (await refreshChatsFromStorage()) { chatsStaleRef.current = false; return true; }
+      // Streaming: the end of the reply ('webui:generation-ended') retries.
+      if (isGeneratingRef.current) return false;
+      await new Promise(r => setTimeout(r, 300 * (attempt + 1)));
+    }
+    return !chatsStaleRef.current;
+  };
+  useEffect(() => {
+    const retry = () => { if (chatsStaleRef.current) showSyncedChats(); };
+    window.addEventListener('webui:generation-ended', retry);
+    return () => window.removeEventListener('webui:generation-ended', retry);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const showRemoteChanges = (result) => {
+    const applied = result.applied || {};
+    applySyncedSettings(applied);
+
+    /* The Studio re-reads its own records in place, so a change to them is
+       never a reason to rebuild the page. */
+    if (applied.studio > 0) window.dispatchEvent(new Event('webui:studio-synced'));
+    if (applied.chats > 0) showSyncedChats();
+    void rereadSyncedLists(applied);
+    // Never a reload: every setting and list is put into the running app.
+    return true;
+  };
+
+  /* The chats are read from storage as the app starts, and a sync can land
+     while that read is in flight; the read then put the older list on screen
+     over what had arrived. One more read once loading is done settles it. */
+  useEffect(() => {
+    if (isStorageLoaded && accountId) showSyncedChats();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isStorageLoaded, accountId]);
 
   // Changes go up on their own, coalesced: settings change on every keystroke
   // and the payload is the whole history, so one upload per character would be
@@ -7890,7 +7916,7 @@ ${data.text}` : data.text));
   // Remote changes: ask only for the timestamp, and download the state itself
   // only when it is newer than what this device already has.
   useEffect(() => {
-    if (!accountId) return undefined;
+    if (!accountId) { setBootSync(false); return undefined; }
 
     let stopped = false;
     /* A check that had to stand down -- busy, offline for a moment, the server
@@ -7914,8 +7940,9 @@ ${data.text}` : data.text));
      * account other than the one on screen, which is the same check one step
      * later and against the same answer.
      */
-    const check = async ({ known = 0 } = {}) => {
-      if (stopped || document.hidden) return;
+    const check = async ({ known = 0, boot = false } = {}) => {
+      // The launch check runs even before the window is shown: the app waits on it.
+      if (stopped || (document.hidden && !boot)) return;
 
       // Nothing at all while a reply is streaming. Restoring the account's
       // chats writes the session store underneath the message being appended
@@ -8002,7 +8029,14 @@ ${data.text}` : data.text));
     window.addEventListener('webui:generation-ended', check);
     window.addEventListener('online', check);
     window.addEventListener('pageshow', check);
-    check();
+    /* The app is shown when this first check has brought it up to date and
+       the chats that arrived are on screen -- or after BOOT_SYNC_MAX_MS, so a
+       phone offline or a server down never keeps it shut. */
+    let bootTimer = null;
+    Promise.race([
+      check({ boot: true }).then(() => (chatsStaleRef.current ? showSyncedChats() : null)),
+      new Promise(resolve => { bootTimer = setTimeout(resolve, BOOT_SYNC_MAX_MS); }),
+    ]).catch(() => {}).finally(() => { clearTimeout(bootTimer); if (!stopped) setBootSync(false); });
 
     return () => {
       stopped = true;
@@ -14325,6 +14359,14 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       className={`claude-app ${activeArtifact && sidebarPlace === 'home' ? 'has-artifact' : ''} ${artifactMaximized && activeArtifact && sidebarPlace === 'home' ? 'artifact-maximized' : ''}`}
       style={{ '--artifact-width': `${shownArtifactWidth}px`, '--sidebar-width': `${shownSidebarWidth}px` }}
     >
+      {bootSync && !initialSync && (
+        <div className="initial-sync boot-sync" role="status" aria-live="polite">
+          <div className="initial-sync-card">
+            <Logo size={48} spinning />
+            <div className="initial-sync-stage">{t('sync.stage.connecting')}</div>
+          </div>
+        </div>
+      )}
       {initialSync && (
         <div className="initial-sync" role="dialog" aria-modal="true" aria-labelledby="initial-sync-title">
           <div className="initial-sync-card">
@@ -17865,12 +17907,17 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       onChange={e => setSystemPrompt(e.target.value)}
                       placeholder={t('settings.systemPrompt')}
                     />
-                    <div className="preset-buttons" style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem', flexWrap: 'wrap' }}>
-                      <button className="btn" style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }} onClick={() => setSystemPrompt("You are Claude, a helpful, honest, and harmless AI assistant.")}>{t('preset.default')}</button>
-                      <button className="btn" style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }} onClick={() => setSystemPrompt("You are an expert software engineer. Provide clean, efficient, and well-documented code.")}>{t('preset.coder')}</button>
-                      <button className="btn" style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }} onClick={() => setSystemPrompt("You are a creative writer. Help me brainstorm ideas and write engaging stories.")}>{t('preset.writer')}</button>
-                      <button className="btn" style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }} onClick={() => setSystemPrompt("You are a language tutor. Correct my grammar and explain natural phrasing.")}>{t('preset.tutor')}</button>
-                      <button className="btn" style={{ fontSize: '0.75rem', padding: '0.2rem 0.5rem' }} onClick={() => setSystemPrompt("답변은 항상 한글로 작성해 줘. 친절하고 존댓말로 대답해 줘.")}>{t('preset.korean')}</button>
+                    <div className="prompt-chips">
+                      {[
+                        ['preset.default', 'You are Claude, a helpful, honest, and harmless AI assistant.'],
+                        ['preset.coder', 'You are an expert software engineer. Provide clean, efficient, and well-documented code.'],
+                        ['preset.writer', 'You are a creative writer. Help me brainstorm ideas and write engaging stories.'],
+                        ['preset.tutor', 'You are a language tutor. Correct my grammar and explain natural phrasing.'],
+                        ['preset.korean', '답변은 항상 한글로 작성해 줘. 친절하고 존댓말로 대답해 줘.'],
+                      ].map(([key, text]) => (
+                        <button key={key} type="button" className={`prompt-chip${systemPrompt === text ? ' active' : ''}`}
+                          aria-pressed={systemPrompt === text} onClick={() => setSystemPrompt(text)}>{t(key)}</button>
+                      ))}
                     </div>
                   </div>
 
@@ -17883,7 +17930,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     <label>{t('persona.saved')} ({personas.length})</label>
                     <div className="setting-desc">{t('persona.help')}</div>
 
-                    <div style={{ display: 'flex', gap: '0.5rem', marginTop: '0.5rem' }}>
+                    <div className="persona-form">
                       {/* One or two characters. An uploaded picture would be
                           the largest thing in the record by two orders of
                           magnitude, for a mark drawn at 28 pixels. */}
@@ -17897,25 +17944,23 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       />
                       <input
                         type="text"
-                        className="settings-input"
+                        className="settings-input persona-name-input"
                         placeholder={t('persona.namePlaceholder')}
                         value={newPersonaName}
                         onChange={e => setNewPersonaName(e.target.value)}
                         onKeyDown={e => { if (e.key === 'Enter') savePersonaFromCurrent(); }}
                       />
-                      <button className="btn pull-btn" disabled={!newPersonaName.trim()} onClick={savePersonaFromCurrent}>
+                      <input
+                        type="text"
+                        className="settings-input persona-greeting-input"
+                        placeholder={t('persona.greetingPlaceholder')}
+                        value={newPersonaGreeting}
+                        onChange={e => setNewPersonaGreeting(e.target.value)}
+                      />
+                      <button className="pull-btn persona-save" disabled={!newPersonaName.trim()} onClick={savePersonaFromCurrent}>
                         <Save size={14} /> {editingPersonaId ? t('persona.update') : t('persona.save')}
                       </button>
                     </div>
-
-                    <input
-                      type="text"
-                      className="settings-input"
-                      style={{ marginTop: '0.5rem' }}
-                      placeholder={t('persona.greetingPlaceholder')}
-                      value={newPersonaGreeting}
-                      onChange={e => setNewPersonaGreeting(e.target.value)}
-                    />
 
                     <div className="setting-toggle-row" style={{ marginTop: '0.6rem' }}>
                       <div>
@@ -17932,35 +17977,37 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     {personas.length === 0 ? (
                       <div className="setting-desc" style={{ marginTop: '0.5rem' }}>{t('persona.none')}</div>
                     ) : (
-                      <div className="share-list" style={{ marginTop: '0.5rem' }}>
+                      <div className="persona-list">
                         {personas.map(p => {
                           const inUse = activePersona?.id === p.id;
                           return (
-                            <div key={p.id} className={`share-row${inUse ? ' active' : ''}`}>
+                            <div key={p.id} className={`persona-row${inUse ? ' active' : ''}`}>
                               <span className="persona-row-avatar">{p.avatar || p.name.slice(0, 1)}</span>
-                              <div className="share-row-main">
-                                <div className="share-row-title">
-                                  {p.name}
-                                  {inUse && <span className="attachment-tag ok" style={{ marginLeft: '0.4rem' }}>{t('persona.inUse')}</span>}
+                              <div className="persona-row-main">
+                                <div className="persona-row-title">
+                                  <span className="persona-row-name">{p.name}</span>
+                                  {inUse && <span className="persona-badge">{t('persona.inUse')}</span>}
                                 </div>
-                                <div className="share-row-meta">{p.body.slice(0, 90)}{p.body.length > 90 ? '…' : ''}</div>
+                                <div className="persona-row-meta">{p.body}</div>
                               </div>
-                              <button className="icon-btn" title={t('persona.startChat')}
-                                onClick={() => startChatAsPersona(p)}>
-                                <MessageSquare size={14} />
-                              </button>
-                              <button className="icon-btn" title={t('persona.apply')}
-                                onClick={() => applyPersona(p)} disabled={inUse}>
-                                <Play size={14} />
-                              </button>
-                              <button className="icon-btn" title={t('persona.edit')}
-                                onClick={() => editPersona(p)}>
-                                <Edit size={14} />
-                              </button>
-                              <button className="icon-btn" title={t('persona.delete')}
-                                onClick={() => deletePersona(p.id)} style={{ color: 'var(--danger, #EF4444)' }}>
-                                <Trash2 size={14} />
-                              </button>
+                              <div className="persona-row-actions">
+                                <button className="icon-btn" title={t('persona.startChat')} aria-label={t('persona.startChat')}
+                                  onClick={() => startChatAsPersona(p)}>
+                                  <MessageSquare size={15} />
+                                </button>
+                                <button className="icon-btn" title={t('persona.apply')} aria-label={t('persona.apply')}
+                                  onClick={() => applyPersona(p)} disabled={inUse}>
+                                  <Play size={15} />
+                                </button>
+                                <button className="icon-btn" title={t('persona.edit')} aria-label={t('persona.edit')}
+                                  onClick={() => editPersona(p)}>
+                                  <Edit size={15} />
+                                </button>
+                                <button className="icon-btn danger" title={t('persona.delete')} aria-label={t('persona.delete')}
+                                  onClick={() => deletePersona(p.id)}>
+                                  <Trash2 size={15} />
+                                </button>
+                              </div>
                             </div>
                           );
                         })}
@@ -19628,12 +19675,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         {persona.greeting || persona.body.slice(0, 110)}
                       </span>
                       <span className="persona-card-meta">
-                        {persona.model || t('persona.anyModel')}
-                        {Object.keys(persona.sampling || {}).length > 0
-                          ? ` · ${t('persona.pinnedSampling', { count: Object.keys(persona.sampling).length })}`
-                          : ''}
+                        <span className="persona-card-model">{persona.model || t('persona.anyModel')}</span>
+                        {Object.keys(persona.sampling || {}).length > 0 && (
+                          <span className="persona-card-model">{t('persona.pinnedSampling', { count: Object.keys(persona.sampling).length })}</span>
+                        )}
                       </span>
                     </span>
+                    <ChevronRight size={16} className="persona-card-go" aria-hidden="true" />
                   </button>
                 ))}
               </div>

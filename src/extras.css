@@ -4939,6 +4939,165 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
 
 .persona-open { flex: 0 0 auto; }
 
+/* ------------------------------------------------ personas, redesigned
+
+   The saved list was a share row with four bare icons crowding the name off
+   a phone, the form three controls squeezed onto one line, and the presets
+   tiny default buttons. Below: chips, a form that stacks, rows whose actions
+   sit in their own group (and drop under the text on a phone), and picker
+   cards with a tinted avatar and an arrow that says "start here". */
+.prompt-chips { display: flex; flex-wrap: wrap; gap: 0.4rem; margin-top: 0.6rem; }
+.prompt-chip {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-pill);
+  background: var(--bg-main);
+  color: var(--text-secondary);
+  font: inherit;
+  font-size: 0.78rem;
+  cursor: pointer;
+  transition: background 0.15s, color 0.15s, border-color 0.15s;
+}
+.prompt-chip:hover { background: var(--hover-bg); color: var(--text-primary); }
+.prompt-chip.active {
+  border-color: var(--btn-active);
+  color: var(--btn-active);
+  background: color-mix(in srgb, var(--btn-active) 10%, var(--bg-main));
+}
+
+.persona-form {
+  display: grid;
+  grid-template-columns: 4.5rem 1fr auto;
+  grid-template-areas: "avatar name save" "greet greet greet";
+  gap: 0.5rem;
+  margin-top: 0.6rem;
+}
+.persona-form .persona-avatar-input { grid-area: avatar; font-size: 1.1rem; }
+.persona-form .persona-name-input { grid-area: name; min-width: 0; }
+.persona-form .persona-greeting-input { grid-area: greet; }
+.persona-form .persona-save {
+  grid-area: save;
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
+  white-space: nowrap;
+  border-radius: var(--radius-md);
+}
+
+.persona-list { display: flex; flex-direction: column; gap: 0.5rem; margin-top: 0.75rem; }
+.persona-row {
+  display: grid;
+  grid-template-columns: auto 1fr auto;
+  align-items: center;
+  gap: 0.75rem;
+  padding: 0.7rem 0.8rem;
+  border: 1px solid var(--border-color);
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  transition: border-color 0.15s, box-shadow 0.15s;
+}
+.persona-row:hover { border-color: color-mix(in srgb, var(--btn-active) 35%, var(--border-color)); }
+.persona-row.active {
+  border-color: var(--btn-active);
+  box-shadow: 0 0 0 1px color-mix(in srgb, var(--btn-active) 30%, transparent);
+}
+.persona-list .persona-row-avatar,
+.persona-card-avatar {
+  width: 38px; height: 38px;
+  border-radius: 11px;
+  border: none;
+  background: color-mix(in srgb, var(--btn-active) 14%, var(--bg-primary));
+  color: var(--btn-active);
+  font-size: 1.15rem;
+  font-weight: 600;
+}
+.persona-row-main { min-width: 0; }
+.persona-row-title { display: flex; align-items: center; gap: 0.4rem; min-width: 0; }
+.persona-row-name {
+  font-size: 0.9rem; font-weight: 600; color: var(--text-primary);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.persona-badge {
+  flex: 0 0 auto;
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--radius-pill);
+  background: var(--btn-active);
+  color: var(--btn-active-text);
+  font-size: 0.65rem;
+  font-weight: 600;
+}
+.persona-row-meta {
+  margin-top: 0.15rem;
+  font-size: 0.75rem;
+  color: var(--text-secondary);
+  display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical;
+  overflow: hidden;
+  overflow-wrap: anywhere;
+}
+.persona-row-actions { display: flex; gap: 0.15rem; }
+.persona-row-actions .icon-btn { width: 32px; height: 32px; border-radius: var(--radius-sm); }
+.persona-row-actions .icon-btn.danger { color: #E5484D; }
+.persona-row-actions .icon-btn.danger:hover { background: color-mix(in srgb, #E5484D 12%, transparent); }
+
+.persona-grid { gap: 0.6rem; }
+.persona-card {
+  position: relative;
+  align-items: center;
+  gap: 0.8rem;
+  padding: 0.85rem 2.4rem 0.85rem 0.9rem;
+  border-radius: var(--radius-md);
+  background: var(--bg-main);
+  transition: border-color 0.15s, box-shadow 0.15s, transform 0.15s;
+}
+.persona-card:hover {
+  background: var(--bg-main);
+  border-color: color-mix(in srgb, var(--btn-active) 45%, var(--border-color));
+  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.08);
+}
+.persona-card:active { transform: scale(0.985); }
+.persona-card:focus-visible { outline: 2px solid var(--btn-active); outline-offset: 2px; }
+.persona-card-avatar { width: 42px; height: 42px; font-size: 1.25rem; }
+.persona-card-name { font-weight: 600; }
+.persona-card-meta { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-top: 0.25rem; }
+.persona-card-model {
+  padding: 0.05rem 0.45rem;
+  border-radius: var(--radius-pill);
+  background: var(--bg-primary);
+  color: var(--text-secondary);
+  font-size: 0.68rem;
+  max-width: 100%;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.persona-card-go {
+  position: absolute; right: 0.8rem; top: 50%;
+  transform: translateY(-50%);
+  color: var(--text-secondary);
+  transition: transform 0.15s, color 0.15s;
+}
+.persona-card:hover .persona-card-go { color: var(--btn-active); transform: translate(2px, -50%); }
+
+@media (max-width: 640px) {
+  .persona-form {
+    grid-template-columns: 4rem 1fr;
+    grid-template-areas: "avatar name" "greet greet" "save save";
+  }
+  .persona-form .persona-save { padding: 0.7rem; }
+  /* The actions go under the text, so the name and prompt get the width. */
+  .persona-row {
+    grid-template-columns: auto 1fr;
+    grid-template-areas: "avatar main" "actions actions";
+  }
+  .persona-row > .persona-row-avatar { grid-area: avatar; align-self: start; }
+  .persona-row-main { grid-area: main; }
+  .persona-row-actions {
+    grid-area: actions;
+    justify-content: flex-end;
+    padding-top: 0.45rem;
+    border-top: 1px solid var(--border-color);
+  }
+  .persona-row-actions .icon-btn { width: 40px; height: 36px; }
+  .persona-grid { grid-template-columns: 1fr; }
+  .persona-card { padding: 0.8rem 2.2rem 0.8rem 0.8rem; }
+}
+
 /* ==== Deep research ====
 
    Two surfaces. The strip under the composer says what sending is about to
@@ -10021,3 +10180,21 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 }
 .history-earlier button:hover { color: var(--text-primary); background: var(--hover-bg); }
 @media print { .history-earlier { display: none; } }
+
+/* The in-chat search on a narrow window opens as a second row of the header.
+   The conversation below was painted after the header and over that row
+   (the reply bubbles covered the field), so the header now stacks above the
+   content, and the opened field floats under the bar instead of pushing it. */
+.main-header { position: relative; z-index: var(--z-sticky); }
+@media (max-width: 860px) {
+  .main-header .header-search.is-open {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0.6rem; right: 0.6rem;
+    width: auto;
+    height: 40px;
+    z-index: var(--z-dropdown);
+    background: var(--surface-overlay, var(--bg-main));
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  }
+}

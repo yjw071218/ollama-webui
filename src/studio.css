@@ -2182,7 +2182,7 @@
  .studio-table, .studio-form, .studio-gallery, .studio-tools { min-width: 0; max-width: 100%; box-sizing: border-box; }
  .studio-gallery.is-density-s { grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr)); }
  .studio-gallery.is-density-l { grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); }
- .studio-job-menu { position: fixed; left: 12px; right: 12px; top: auto; bottom: max(12px, env(safe-area-inset-bottom)); min-width: 0; max-height: 60dvh; overflow-y: auto; z-index: 1000; }
+ .studio-job-menu { position: fixed; left: 12px; right: 12px; top: auto; bottom: max(12px, env(safe-area-inset-bottom)); min-width: 0; max-height: 60dvh; overflow-y: auto; z-index: var(--z-popover); }
  .studio-tools { flex-wrap: wrap; gap: 8px; position: static; }
  .studio-tools > * { min-width: 0; max-width: 100%; }
  .studio-tools input, .studio-tools select { max-width: 100%; box-sizing: border-box; }

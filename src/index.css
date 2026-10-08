@@ -38,10 +38,13 @@
   --z-sticky: 20;     /* sticky headers, the desktop sidebar */
   --z-dropdown: 50;   /* menus that open inside their own panel */
   --z-panel: 100;     /* full-screen panels on mobile: drawer, artifact, canvas */
+  /* The command pill floats over the chat and mobile panels, but anything that
+     covers the page -- a dialog, the image viewer -- covers it too. It was 500,
+     above every dialog, so it sat on top of an enlarged picture. */
+  --z-dock: 150;      /* the always-on command dock and agent window */
   --z-modal: 200;     /* dialogs, settings, viewers, lightbox */
   --z-toast: 300;     /* notices stay readable over a dialog */
   --z-popover: 400;   /* portalled menus and popovers, above dialogs that open them */
-  --z-dock: 500;      /* the always-on command dock and agent window */
   --z-drag: 600;      /* the invisible sheet that catches a panel resize drag */
 }
 

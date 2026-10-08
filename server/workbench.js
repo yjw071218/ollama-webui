@@ -239,8 +239,9 @@ export const findFiles = (root, glob, { maxResults = LIMITS.findResults } = {}) 
  * added whole, which is honest if coarse.
  */
 export const unifiedDiff = (before, after, { context = 3, name = 'file' } = {}) => {
-  const a = String(before ?? '').split(/\r?\n/);
-  const b = String(after ?? '').split(/\r?\n/);
+  // An empty text has no lines, not one empty line: a new file was counted "-1".
+  const a = String(before ?? '') === '' ? [] : String(before).split(/\r?\n/);
+  const b = String(after ?? '') === '' ? [] : String(after).split(/\r?\n/);
   // A final newline is the end of the last line, not an empty line after it.
   if (a.length > 1 && a[a.length - 1] === '') a.pop();
   if (b.length > 1 && b[b.length - 1] === '') b.pop();

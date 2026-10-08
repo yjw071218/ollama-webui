@@ -59,23 +59,27 @@
 
 /* ==== Buttons ====
    `btn-ghost` / `btn-primary` were used across the panels but never defined,
-   so they drew as the browser's grey system buttons. */
-.btn-ghost, .btn-primary {
+   so they drew as the browser's grey system buttons. So was plain `btn`
+   ("페르소나 관리", the system prompt presets, ...): it is the ghost button. */
+.btn, .btn-ghost, .btn-primary {
   display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem;
   padding: 0.45rem 0.85rem; border-radius: 8px; cursor: pointer;
   font-family: var(--font-sans); font-size: 0.82rem; font-weight: 500; line-height: 1.2;
   text-decoration: none; white-space: nowrap;
   transition: background 120ms, border-color 120ms, color 120ms, opacity 120ms;
 }
-.btn-ghost {
+.btn, .btn-ghost {
   background: transparent; color: var(--text-secondary, var(--text-primary));
   border: 1px solid var(--border-color);
 }
-.btn-ghost:hover:not(:disabled) { background: var(--surface-sunken); color: var(--text-primary); }
+.btn:hover:not(:disabled), .btn-ghost:hover:not(:disabled) { background: var(--hover-bg, var(--surface-sunken)); color: var(--text-primary); }
 .btn-primary { background: var(--accent, #D97757); color: #fff; border: 1px solid transparent; }
 .btn-primary:hover:not(:disabled) { filter: brightness(1.08); }
-.btn-ghost:disabled, .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
-.btn-ghost:focus-visible, .btn-primary:focus-visible { outline: 2px solid var(--accent, #D97757); outline-offset: 2px; }
+/* `btn pull-btn` is the accent action (save, pull): its own colours win. */
+.btn.pull-btn { background: var(--btn-active); color: #fff; border-color: transparent; }
+.btn.pull-btn:hover:not(:disabled) { background: var(--btn-active); filter: brightness(1.08); }
+.btn:disabled, .btn-ghost:disabled, .btn-primary:disabled { opacity: 0.45; cursor: not-allowed; }
+.btn:focus-visible, .btn-ghost:focus-visible, .btn-primary:focus-visible { outline: 2px solid var(--accent, #D97757); outline-offset: 2px; }
 
 /* ==== Form controls in settings with no class of their own ====
    :where() keeps these at zero specificity, so any styled control wins. */
@@ -101,13 +105,17 @@
 :where(.settings-modal) :where(input[type='checkbox'], input[type='radio']) {
   accent-color: var(--accent, #D97757); width: 1.05rem; height: 1.05rem; flex-shrink: 0; margin: 0;
 }
-/* A bare button (no class) in a panel: drawn like a ghost button. */
-:where(.settings-modal) :where(button:not([class])) {
-  display: inline-flex; align-items: center; gap: 0.35rem; padding: 0.45rem 0.85rem;
+/* A bare button (no class), anywhere in the app: drawn like a ghost button
+   rather than the browser's grey one. Zero specificity, so every styled
+   button keeps its own look. */
+:where(button:not([class])) {
+  display: inline-flex; align-items: center; justify-content: center; gap: 0.35rem; padding: 0.45rem 0.85rem;
   border-radius: 8px; border: 1px solid var(--border-color); background: transparent;
   color: var(--text-primary); font-family: var(--font-sans); font-size: 0.82rem; cursor: pointer;
+  transition: background 120ms, border-color 120ms;
 }
-:where(.settings-modal) :where(button:not([class]):disabled) { opacity: 0.45; cursor: not-allowed; }
+:where(button:not([class]):hover:not(:disabled)) { background: var(--hover-bg, var(--surface-sunken)); }
+:where(button:not([class]):disabled) { opacity: 0.45; cursor: not-allowed; }
 /* Buttons right under a field get a little air. */
 :where(.settings-modal) :where(textarea) + :where(button, div) { margin-top: 0.45rem; }
 

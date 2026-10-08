@@ -27,9 +27,12 @@ export const useSafeguardLevel = () => {
     window.addEventListener(SAFEGUARD_EVENT, update);
     // Another tab, or a sync that wrote the setting.
     window.addEventListener('storage', update);
+    // A sync in this tab fires no 'storage' event: App.jsx says so itself.
+    window.addEventListener('webui:settings-synced', update);
     return () => {
       window.removeEventListener(SAFEGUARD_EVENT, update);
       window.removeEventListener('storage', update);
+      window.removeEventListener('webui:settings-synced', update);
     };
   }, []);
   return level;
