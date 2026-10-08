@@ -20,6 +20,10 @@ import {
   EXTENSION_FOR,
   PreviewStage,
 } from './artifacts.jsx';
+import { panelKey, legacyWidth } from './clientKind.js';
+import { listenNative, tellNativeBusy } from './nativeEvents.js';
+import { noteAnchor, restoreAnchor } from './viewAnchor.js';
+import { fitTextarea } from './fitTextarea.js';
 import { usePersistedNumber, ResizeHandle, Popover, AnchoredMenu, Collapsible, Transition, SettingToggle, Switch, clamp, useDialog } from './ui.jsx';
 import { I18nProvider, useI18n, LANGUAGES, promptLanguageName } from './i18n.jsx';
 import { registerServiceWorker, watchInstallPrompt, isStandalone, supportsServiceWorker } from './pwa.js';
@@ -76,6 +80,10 @@ import { cliHeadersOf } from './cliTurn.js';
 // 113312 -> "113K", 1220 -> "1.2K", 1927279 -> "1.9M"; under 1000 as is.
 const compactFormat = new Intl.NumberFormat('en', { notation: 'compact', maximumFractionDigits: 1 });
 const compactCount = n => (Number.isFinite(n) ? compactFormat.format(n) : String(n ?? ''));
+
+/* Questions in a conversation: what the reader wrote, not a tool's result. */
+const askedCount = (messages) => messages.filter(m => m.role === 'user'
+  && !(typeof m.content === 'string' && m.content.trim().startsWith('<TOOL_RESULT>'))).length;
 
 /* The part of a reply that is drawn open: its content without the <think>
    sections, which sit in the folded steps. */
@@ -2892,7 +2900,19 @@ function App() {
     const stored = currentSession?.messages || [];
     if (!followed?.content || followed.chat !== String(currentSessionId)) return stored;
     const index = stored.findLastIndex(m => m.role === 'assistant');
-    if (index < 0) return stored;
+    /* The answer to the question just asked, not the one before it: the
+       writing device's empty reply may not have synced yet, and the words were
+       then laid over the previous answer. Until it arrives they are shown as a
+       reply of their own. */
+    const asked = stored.findLastIndex(m => m.role === 'user'
+      && !(typeof m.content === 'string' && m.content.trim().startsWith('<TOOL_RESULT>')));
+    if (index < 0 || index < asked) {
+      /* Only for the question it was the answer to. A finished answer is
+         kept on screen until its stored copy lands; a question asked since
+         is a new turn, and the old words are not its answer. */
+      if (!followed.live && askedCount(stored) > (followed.asked ?? Infinity)) return stored;
+      return [...stored, { role: 'assistant', content: followed.content, followedOnly: true }];
+    }
     if ((stored[index].content || '').length >= followed.content.length) return stored;
     const shown = [...stored];
     shown[index] = { ...shown[index], content: followed.content };
@@ -3436,8 +3456,15 @@ function App() {
     let stopped = false;
     let reading = false;
 
-    const follow = async (id) => {
+    /* When the turn began, in this device's clock. A turn that calls a tool is
+       several streams one after another; the clock runs from the first, as it
+       does on the device that asked, and is let go once nothing has been
+       running for two looks in a row. */
+    let turnStart = null, idleLooks = 0;
+    const follow = async (id, startedAt) => {
       reading = true;
+      idleLooks = 0;
+      if (!turnStart) turnStart = startedAt;
       const reader = resumableChatReader(null, id, controller.signal);
       const decoder = new TextDecoder();
       let buffer = '', thinking = '', content = '', terminal = false;
@@ -3467,7 +3494,11 @@ function App() {
           /* `live` is what the composer's stop button reads: the words stay
              on screen after the stream ends, but there is nothing left to
              stop by then. */
-          setFollowed({ chat, id, content: compose(), live: !(done || terminal) });
+          setFollowed({
+            chat, id, content: compose(), live: !(done || terminal), startedAt: turnStart,
+            // How many questions the chat had here as these words came in (see `messages`).
+            asked: askedCount(sessionsRef.current.find(s => String(s.id) === chat)?.messages || []),
+          });
           if (done) break;
         }
       } catch (e) {
@@ -3476,6 +3507,10 @@ function App() {
       } finally {
         reading = false;
         if (!stopped) setFollowed(previous => (previous && previous.id === id ? { ...previous, live: false } : previous));
+        /* A turn that called a tool goes on in a new stream: asked for at once
+           rather than at the next tick, so the live line does not drop out
+           for four seconds between the two. */
+        if (!stopped) setTimeout(() => { look(); }, 250);
         /* What was heard is kept rather than cleared. The stored copy is
            usually a moment behind at this point, and blanking the text back to
            it would be a visible step backwards; `messages` hands over by
@@ -3486,8 +3521,15 @@ function App() {
     const look = async () => {
       if (stopped || reading) return;
       const answer = await fetchJsonQuietly(`/api/chat/live?chat=${encodeURIComponent(chat)}`).catch(() => null);
-      if (stopped || reading || !answer?.job?.id) return;
-      follow(answer.job.id);
+      if (stopped || reading) return;
+      if (!answer?.job?.id) {
+        if (answer?.success && ++idleLooks >= 2) turnStart = null;
+        return;
+      }
+      const began = Number(answer.job.startedAt), serverNow = Number(answer.now);
+      follow(answer.job.id, Number.isFinite(began) && Number.isFinite(serverNow)
+        ? Date.now() - Math.max(0, serverNow - began)
+        : Date.now());
     };
     look();
     const timer = setInterval(look, 4000);
@@ -4081,6 +4123,11 @@ function App() {
     ? drawing : null;
   const remoteAnswer = followed?.live && followed.chat === String(currentSessionId) ? followed : null;
   const remoteTurnHere = !isGenerating && !!(remotePicture || remoteAnswer);
+  /* An answer arriving in this chat, wherever it was asked: what the
+     answering row looks like -- the typing dots, the caret, the open
+     thinking, the clock and token count -- is the same on every device. Only
+     the controls that belong to the device that asked stay with it. */
+  const answerLiveHere = isThisChatGenerating || (!isGenerating && !!remoteAnswer);
 
   /**
    * Stop a turn that is running somewhere else.
@@ -4809,8 +4856,16 @@ ${data.text}` : data.text));
   const DEFAULT_ARTIFACT_WIDTH = 620;
   const DEFAULT_SIDEBAR_WIDTH = 340;
   const DEFAULT_CONSOLE_HEIGHT = 200;
-  const [artifactWidth, setArtifactWidth] = usePersistedNumber('artifactWidth', DEFAULT_ARTIFACT_WIDTH);
-  const [sidebarWidth, setSidebarWidth] = usePersistedNumber('sidebarWidth', DEFAULT_SIDEBAR_WIDTH);
+  /* The widths the reader last dragged to, kept per client: the browser, the
+     Windows app and the Android app each remember their own (panelKey). The
+     window may be narrower than that for a while -- the Windows app paints
+     before it is maximised, a phone is always narrow -- so what is shown is
+     clamped at render and the saved width is never overwritten by it. It used
+     to be: the clamp on first paint was saved, and every launch of the app
+     came back with the panel at its narrowest. */
+  const [artifactWidth, setArtifactWidth] = usePersistedNumber(panelKey('artifactWidth'), legacyWidth('artifactWidth', DEFAULT_ARTIFACT_WIDTH));
+  const [sidebarWidth, setSidebarWidth] = usePersistedNumber(panelKey('sidebarWidth'), legacyWidth('sidebarWidth', DEFAULT_SIDEBAR_WIDTH));
+  const [viewportWidth, setViewportWidth] = useState(() => (typeof window === 'undefined' ? 1440 : window.innerWidth));
   const [consoleDockHeight, setConsoleDockHeight] = usePersistedNumber('consoleDockHeight', DEFAULT_CONSOLE_HEIGHT);
   const [artifactMaximized, setArtifactMaximized] = useState(false);
   const [consoleDocked, setConsoleDocked] = useState(false);
@@ -4825,22 +4880,22 @@ ${data.text}` : data.text));
      and the panel takes at most half the remaining width (720px): dragged wider, the
      conversation was squeezed into a column its toolbar and composer broke in. */
   const MIN_CHAT_WIDTH = 480;
+  const shownSidebarWidth = clamp(sidebarWidth, 200, Math.max(200, Math.min(560, viewportWidth - 320)));
   const artifactMaxWidth = useCallback(() => {
     const vw = window.innerWidth;
-    const sidebar = isSidebarOpen && vw > 1024 ? sidebarWidth : 0;
+    const sidebar = isSidebarOpen && vw > 1024 ? shownSidebarWidth : 0;
     return Math.max(320, Math.min(720, Math.floor((vw - sidebar) * 0.5), vw - sidebar - MIN_CHAT_WIDTH));
-  }, [isSidebarOpen, sidebarWidth]);
+  }, [isSidebarOpen, shownSidebarWidth]);
+  // eslint-disable-next-line react-hooks/exhaustive-deps -- viewportWidth re-reads the window
+  const shownArtifactWidth = useMemo(() => clamp(artifactWidth, 320, artifactMaxWidth()), [artifactWidth, artifactMaxWidth, viewportWidth]);
 
-  // Keep the panels usable when the window shrinks or the sidebar opens.
+  // Keep the panels usable when the window shrinks or the sidebar opens --
+  // in what is shown, not in what is saved.
   useEffect(() => {
-    const onResize = () => {
-      setArtifactWidth(w => clamp(w, 320, artifactMaxWidth()));
-      setSidebarWidth(w => clamp(w, 200, Math.max(200, Math.min(480, window.innerWidth - 360))));
-    };
-    onResize();
+    const onResize = () => setViewportWidth(window.innerWidth);
     window.addEventListener('resize', onResize);
     return () => window.removeEventListener('resize', onResize);
-  }, [setArtifactWidth, setSidebarWidth, artifactMaxWidth]);
+  }, []);
 
   const [artifactEdits, setArtifactEdits] = useState({});
   const [consoleEntries, setConsoleEntries] = useState([]);
@@ -8139,6 +8194,56 @@ ${data.text}` : data.text));
     followTail(true);
   };
 
+  /* What the reader is looking at stays where it is when the conversation
+   * changes width.
+   *
+   * Opening the code panel narrows the conversation; every paragraph re-wraps
+   * taller, and the same scrollTop then points at something further up --
+   * reported as the panel "moving me somewhere else". So the scroll is kept by
+   * content, not by number: the block at the top of the view and how far it
+   * sits from the top, noted as the reader scrolls, and put back at that
+   * distance whenever the width changes (the panel opening, closing or being
+   * dragged, the window resizing). A reader at the end stays at the end.
+   * Not every browser anchors the scroll itself (iOS Safari does not), and
+   * those that do pick their own anchor. */
+  const viewAnchorRef = useRef(null);
+  const anchorFrameRef = useRef(0);
+  const noteViewAnchor = useCallback(() => {
+    const anchor = noteAnchor(scrollAreaRef.current);
+    if (anchor) viewAnchorRef.current = anchor;
+  }, []);
+  const queueViewAnchor = useCallback(() => {
+    if (anchorFrameRef.current) return;
+    anchorFrameRef.current = requestAnimationFrame(() => { anchorFrameRef.current = 0; noteViewAnchor(); });
+  }, [noteViewAnchor]);
+  const keepViewAnchor = useCallback(() => {
+    const area = scrollAreaRef.current;
+    if (!area) return;
+    if (isAutoScrollRef.current) { followTail(); return; }
+    // Said first, as `followTail` does: this scroll is not the reader's.
+    selfScrollRef.current = true;
+    restoreAnchor(area, viewAnchorRef.current);
+    requestAnimationFrame(() => { selfScrollRef.current = false; });
+  }, [followTail]);
+  const scrollAreaObserverRef = useRef(null);
+  const scrollAreaNodeRef = useCallback((area) => {
+    scrollAreaRef.current = area;
+    scrollAreaObserverRef.current?.disconnect();
+    scrollAreaObserverRef.current = null;
+    viewAnchorRef.current = null;
+    if (!area || typeof ResizeObserver === 'undefined') return;
+    // Its width only. A height change is the keyboard or the composer, which
+    // the code that follows the end already answers for.
+    let width = area.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (area.clientWidth === width) return;
+      width = area.clientWidth;
+      keepViewAnchor();
+    });
+    observer.observe(area);
+    scrollAreaObserverRef.current = observer;
+  }, [keepViewAnchor]);
+
   /**
    * The reader has taken the scroll for themselves.
    *
@@ -8549,6 +8654,8 @@ ${data.text}` : data.text));
     if (!selfScrollRef.current) {
       isAutoScrollRef.current = distanceFromBottom <= STICK_SLACK;
     }
+    // What is at the top of the view now (see `keepViewAnchor`).
+    queueViewAnchor();
     /* Only on a change: a setter given the value it already has still runs
        the whole of App to find that out when an update is pending -- which,
        while a reply streams, is every scroll event. */
@@ -8584,13 +8691,44 @@ ${data.text}` : data.text));
       top: scrollTop,
       atBottom: distanceFromBottom <= STICK_SLACK,
     });
-  }, [setScrollProgress]);
+  }, [setScrollProgress, queueViewAnchor]);
 
   const scrollToTop = () => {
     isAutoScrollRef.current = false;
     scrollAreaRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
     haptic('light');
   };
+
+  /* The message box is as tall as its text, up to 200px -- whatever put the
+     text there and whatever changed its width.
+   *
+   * It was resized only by the handlers that fired on typing, so two things
+   * left it the wrong height until the next keystroke: text put in without
+   * typing (a starter on the new-chat screen, a template, a shared file's
+   * text) stayed one line high over several lines, and a width change -- the
+   * code panel opening and closing beside it -- kept the height the narrow box
+   * had needed, two or three lines too tall. */
+  const fitComposer = useCallback(() => fitTextarea(textareaRef.current, 200), []);
+  useLayoutEffect(() => { fitComposer(); }, [input, fitComposer]);
+  /* Attached to the box itself, as it mounts, so a box rendered again (the
+     composer comes and goes with the views around it) is watched too. */
+  const composerObserverRef = useRef(null);
+  const composerRef = useCallback((box) => {
+    textareaRef.current = box;
+    composerObserverRef.current?.disconnect();
+    composerObserverRef.current = null;
+    if (!box || typeof ResizeObserver === 'undefined') return;
+    // The width only: the height is what this sets, and watching it would loop.
+    let width = box.clientWidth;
+    const observer = new ResizeObserver(() => {
+      if (box.clientWidth === width) return;
+      width = box.clientWidth;
+      fitComposer();
+    });
+    observer.observe(box);
+    composerObserverRef.current = observer;
+    fitComposer();
+  }, [fitComposer]);
 
   const handleInputResize = (e) => {
     setInput(e.target.value);
@@ -9145,6 +9283,27 @@ ${data.text}` : data.text));
     try { entry.createReader().readEntries(list => resolve(list.slice(0, 5).map(x => x.name)), () => resolve([])); }
     catch { resolve([]); }
   });
+
+  /* What the Windows and Android apps ask of the page (src/nativeEvents.js):
+     a new chat (tray, jump list, launcher shortcut, global key), and what
+     another app shared into this one, attached to the composer. Said before
+     the page was listening, it was kept on window and is taken here. */
+  const nativeActions = useRef({});
+  nativeActions.current = {
+    newChat: () => { createNewSession(); setTimeout(() => textareaRef.current?.focus(), 60); },
+    share: ({ files = [], text = '' }) => {
+      if (files.length) { addFiles(files); addLog(`Attached ${files.length} shared file(s).`, 'success'); }
+      if (text) setInput(prev => (prev ? `${prev}\n${text}` : text));
+      setTimeout(() => textareaRef.current?.focus(), 60);
+    },
+  };
+  useEffect(() => listenNative({
+    newChat: () => nativeActions.current.newChat(),
+    share: (payload) => nativeActions.current.share(payload),
+  }), []);
+  // The apps keep the screen on (Android) or show progress on the taskbar
+  // (Windows) while an answer is being written.
+  useEffect(() => { tellNativeBusy(isGenerating); }, [isGenerating]);
 
   const handleDrop = async (e) => {
     e.preventDefault();
@@ -14164,7 +14323,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
   return (
     <div
       className={`claude-app ${activeArtifact && sidebarPlace === 'home' ? 'has-artifact' : ''} ${artifactMaximized && activeArtifact && sidebarPlace === 'home' ? 'artifact-maximized' : ''}`}
-      style={{ '--artifact-width': `${artifactWidth}px`, '--sidebar-width': `${sidebarWidth}px` }}
+      style={{ '--artifact-width': `${shownArtifactWidth}px`, '--sidebar-width': `${shownSidebarWidth}px` }}
     >
       {initialSync && (
         <div className="initial-sync" role="dialog" aria-modal="true" aria-labelledby="initial-sync-title">
@@ -14550,7 +14709,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           <ResizeHandle
             label={t('sidebar.resize')}
             direction={1}
-            getSize={() => sidebarWidth}
+            getSize={() => shownSidebarWidth}
             setSize={setSidebarWidth}
             cssVar="--sidebar-width"
             min={240}
@@ -15097,7 +15256,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
         <div
           className="messages-scroll-area"
-          ref={scrollAreaRef}
+          ref={scrollAreaNodeRef}
           onScroll={handleScroll}
           onWheel={releaseTail}
           onTouchMove={releaseTail}
@@ -15168,7 +15327,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                  * back into the gap its call was written in. A picture from
                  * before this existed has no number and falls to the bottom,
                  * which is where it has always been. */
-                const streamingNow = isThisChatGenerating && i + group.length - 1 >= messages.length - 1;
+                const streamingNow = answerLiveHere && i + group.length - 1 >= messages.length - 1;
                 const allBlocks = [];
                 /* How many drawing calls the answer had written before each of its
                    messages began. A turn that draws and carries on is several
@@ -15998,7 +16157,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           return (
                             <CliTurnExtras
                               message={group[group.length - 1]}
-                              live={lastGroup && isThisChatGenerating}
+                              live={lastGroup && answerLiveHere}
                               isLast={lastGroup}
                               busy={isGenerating || !!remoteTurnHere}
                               onContinue={continueCli}
@@ -16317,12 +16476,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     {/* Inside the content column, after everything else: the
                         row itself lays avatar and content side by side, so as
                         a child of the row this line sat to the right. */}
-                    {msg.role === 'assistant' && isThisChatGenerating && i + group.length - 1 >= messages.length - 1 && (
+                    {msg.role === 'assistant' && answerLiveHere && i + group.length - 1 >= messages.length - 1 && (
                       <LiveWorkStatus
                         key={`live-${currentSessionId}-${messages.length}`}
                         startedAt={(() => {
                           try {
                             const saved = JSON.parse(localStorage.getItem(generationStorageKey) || 'null');
+                            if (!isThisChatGenerating) return remoteAnswer?.startedAt;
                             return saved?.sessionId === currentSessionId ? saved.startedAt : undefined;
                           } catch (e) { return undefined; }
                         })()}
@@ -16335,7 +16495,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   {/* An answer's time is when it finished (see markAnswered), so
                       there is none to show while it is still arriving. */}
                   {showTimestamps && group[group.length - 1].at
-                    && !(msg.role === 'assistant' && isThisChatGenerating && i + group.length - 1 >= messages.length - 1) && (
+                    && !(msg.role === 'assistant' && answerLiveHere && i + group.length - 1 >= messages.length - 1) && (
                     <div className="message-time">
                       {new Date(group[group.length - 1].at).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
                     </div>
@@ -16634,7 +16794,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 where they can be changed without leaving the box. */}
             <CliChips model={selectedModel} session={currentSession} onChange={updateCurrentSession} />
             <textarea
-              ref={textareaRef}
+              ref={composerRef}
               className="chat-input"
               /* The model picker sits right under this box and already names
                  the model; a raw tag such as "gemma4:26b-a4b-it-q8_0" in the
@@ -19233,7 +19393,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               <ResizeHandle
                 label={t('artifact.resize')}
                 direction={-1}
-                getSize={() => artifactWidth}
+                getSize={() => shownArtifactWidth}
                 setSize={setArtifactWidth}
                 cssVar="--artifact-width"
                 min={320}

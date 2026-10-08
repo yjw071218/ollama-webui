@@ -184,5 +184,42 @@ check('on a phone, an open dialog or drawer sends them to the bottom',
 
 check('the studio shows the model notes in the reader’s language', /\{noteFor\(model\)\}/.test(read('src/StudioPanel.jsx')));
 
+// The "running" pill listed every command of the last three minutes, finished
+// and failed ones included, under a heading that says "running".
+{
+  const dock = read('src/AgentActivity.jsx').split('export const CommandsDock')[1] || '';
+  check('the running pill lists only running commands', /\{running\.map\(c => <LiveCommand/.test(dock) && !/\{commands\.filter\([^)]*\)\.map\(c => <LiveCommand/.test(dock));
+  check('... and closes when the last one ends', /else if \(open && hadRunning\.current\)[^\n]*setOpen\(false\)/.test(dock));
+}
+
+// An answer being written on another device looked finished on this one: no
+// typing dots, no caret, no clock or token count. The answering row now asks
+// whether an answer is arriving in this chat from anywhere.
+{
+  const app = read('src/App.jsx');
+  check('one flag for "an answer is arriving here", local or followed',
+    /const answerLiveHere = isThisChatGenerating \|\| \(!isGenerating && !!remoteAnswer\);/.test(app));
+  check('... the streaming row, the clock and the CLI clock use it',
+    /const streamingNow = answerLiveHere && /.test(app)
+    && /msg\.role === 'assistant' && answerLiveHere && i \+ group\.length - 1 >= messages\.length - 1 && \(\s*<LiveWorkStatus/.test(app)
+    && /live=\{lastGroup && answerLiveHere\}/.test(app));
+  check('... a followed answer is timed from when the server started it',
+    /if \(!isThisChatGenerating\) return remoteAnswer\?\.startedAt;/.test(app)
+    && /Date\.now\(\) - Math\.max\(0, serverNow - began\)/.test(app)
+    && /now: Date\.now\(\)/.test(read('server/api.js')));
+  check('... and is never laid over the previous answer',
+    /index < asked\)[\s\S]{0,500}askedCount\(stored\) > \(followed\.asked \?\? Infinity\)\) return stored;[\s\S]{0,120}followedOnly: true/.test(app));
+  check('the next stream of a turn is looked for at once', /if \(!stopped\) setTimeout\(\(\) => \{ look\(\); \}, 250\);/.test(app));
+
+  // The message box: its height follows its text and its width, not only typing.
+  check('the box is refitted whenever its text changes', /useLayoutEffect\(\(\) => \{ fitComposer\(\); \}, \[input, fitComposer\]\);/.test(app));
+  check('... and whenever its width does', /ref=\{composerRef\}/.test(app) && /const composerRef = useCallback\(\(box\) => \{[\s\S]{0,600}new ResizeObserver/.test(app));
+
+  // Opening the code panel kept the scroll offset and lost the place.
+  check('the place in the conversation is noted as the reader scrolls', /queueViewAnchor\(\);/.test(app));
+  check('... and put back when the width changes', /ref=\{scrollAreaNodeRef\}/.test(app)
+    && /const scrollAreaNodeRef = useCallback\(\(area\) => \{[\s\S]{0,700}keepViewAnchor\(\)/.test(app));
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

@@ -538,7 +538,9 @@ export const createApiRoutes = (env = {}, options = {}) => {
       return res.end(JSON.stringify({ success: false, error: 'A chat is required' }));
     }
     const [job = null] = liveChatJobs(authenticate(req).user?.id || '', chat);
-    res.end(JSON.stringify({ success: true, job }));
+    /* `now` is this server's clock: the follower times the answer from
+       `job.startedAt` against it, not against its own, which may be off. */
+    res.end(JSON.stringify({ success: true, job, now: Date.now() }));
   });
 
   route('/api/chat/cancel', (req, res) => {

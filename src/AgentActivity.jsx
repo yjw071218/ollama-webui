@@ -439,6 +439,15 @@ export const CommandsDock = () => {
     return () => { clearInterval(timer); window.removeEventListener('resize', measure); };
   }, [shown]);
 
+  /* The panel is what is running now and nothing else. It used to list every
+     command of the last three minutes -- finished, failed, from other chats --
+     under a heading that says "running". When the last one ends, it closes. */
+  const hadRunning = useRef(false);
+  useEffect(() => {
+    if (running.length) hadRunning.current = true;
+    else if (open && hadRunning.current) { hadRunning.current = false; setOpen(false); }
+  }, [running.length, open]);
+
   // Escape (and the Android back button, which sends one) closes the panel.
   useEffect(() => {
     if (!open) return undefined;
@@ -458,8 +467,8 @@ export const CommandsDock = () => {
             <button type="button" className="btn-ghost" onClick={() => setOpen(false)} aria-label={t('common.close')}><X size={13} /></button>
           </div>
           <div className="commands-dock-list">
-            {!commands.length && <div className="term-empty">{t('agent.dockNone')}</div>}
-            {commands.filter(c => c.status !== 'lost').map(c => <LiveCommand key={c.id} command={c} defaultOpen={c.status === 'running' && commands.length <= 2} />)}
+            {!running.length && <div className="term-empty">{t('agent.dockNone')}</div>}
+            {running.map(c => <LiveCommand key={c.id} command={c} defaultOpen={running.length <= 2} />)}
           </div>
         </div>
       )}

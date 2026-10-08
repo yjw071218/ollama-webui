@@ -495,6 +495,19 @@ eq('but not over "off"', C.effortOf(false, C.PROVIDERS.codex, { CLI_EFFORT: 'hig
   check('and a web search, with its query',
     /\[web search: weather\]/.test(r.accept({ method: 'item/started', params: { item: { type: 'webSearch', query: 'weather' } } })?.thinking || ''));
 }
+{
+  // A Codex turn stopped mid-command: the command does not stay "running".
+  const { listCommands } = await import(pathToFileURL(path.join(ROOT, 'server/liveCommands.js')).href);
+  const r = new C.CodexSession({ thread: {}, turn: {} });
+  const start = (id) => r.accept({ method: 'item/started', params: { item: { type: 'commandExecution', id, command: 'npm run dev', cwd: '' } } });
+  start('stuck-1'); start('ended-1');
+  r.accept({ method: 'item/completed', params: { item: { type: 'commandExecution', id: 'ended-1', command: 'npm test', exitCode: 0, status: 'completed' } } });
+  const state = (id) => listCommands().find(c => c.id === `codex:${id}`)?.status;
+  check('a Codex command is running while it runs', state('stuck-1') === 'running');
+  r.close();
+  check('... and not after the turn is over', state('stuck-1') === 'failed', state('stuck-1'));
+  check('... a finished one keeps its result', state('ended-1') === 'done', state('ended-1'));
+}
 
 /* ------------------------------------------------------------- thinking */
 

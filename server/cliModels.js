@@ -1783,6 +1783,15 @@ export class CodexSession {
     this.messages = 0;
     this.usage = {};
     this.lastError = '';
+    this.commands = new Set();   // commands started and not yet completed
+  }
+
+  /* The run is over (finished, stopped or timed out). A command Codex never
+     reported the end of -- the turn was stopped mid-command -- stayed
+     "running" in the corner pill for six hours. As ClaudeReader.close. */
+  close() {
+    for (const id of this.commands) noteCommand({ id, status: 'failed' });
+    this.commands.clear();
   }
 
   open() {
@@ -1852,6 +1861,7 @@ export class CodexSession {
           const command = Array.isArray(item.command) ? item.command.join(' ') : String(item.command || '');
           // Watched live like the workbench's (server/liveCommands.js).
           noteCommand({ id: item.id, command, cwd: item.cwd || '', status: 'running' });
+          if (item.id) this.commands.add(item.id);
           return { thinking: toolNote('running', command) };
         }
         if (item.type === 'fileChange') return { thinking: toolNote('edit', (item.changes || []).map(c => c.path).join(', ')) };
@@ -1877,6 +1887,7 @@ export class CodexSession {
           const failed = item.status === 'failed' || item.status === 'declined' || (code !== null && code !== 0);
           const output = typeof item.aggregatedOutput === 'string' ? item.aggregatedOutput : undefined;
           noteCommand({ id: item.id, command, output, code, status: failed ? 'failed' : 'done' });
+          this.commands.delete(item.id);
           const end = String(output || '').trim().split('\n').slice(-15).join('\n');
           return { thinking: commandNoteOf(command, item.status === 'declined' ? 'declined' : `exit ${code ?? '?'}`, end) };
         }

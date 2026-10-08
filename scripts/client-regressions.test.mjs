@@ -14,9 +14,9 @@ test('catalogue refresh does not undo manual model selection; changing chat rest
  c.currentSessionId=2;vm.runInNewContext('(function(){'+body+'})()',c);assert.equal(selected,'other');
 });
 test('panel leaves room for chat and is capped at 720px',()=>{
- const body=app.match(/const artifactMaxWidth = useCallback\(\(\) => \{([\s\S]*?)\}, \[isSidebarOpen, sidebarWidth\]\)/)[1];
+ const body=app.match(/const artifactMaxWidth = useCallback\(\(\) => \{([\s\S]*?)\}, \[isSidebarOpen, shownSidebarWidth\]\)/)[1];
  for(const width of [1281,1366,1440,1920,2560])for(const sidebar of [200,340,480]){
- const max=vm.runInNewContext('(function(){'+body+'})()',{window:{innerWidth:width},isSidebarOpen:true,sidebarWidth:sidebar,MIN_CHAT_WIDTH:480});
+ const max=vm.runInNewContext('(function(){'+body+'})()',{window:{innerWidth:width},isSidebarOpen:true,shownSidebarWidth:sidebar,MIN_CHAT_WIDTH:480});
  assert.ok(max<=720);assert.ok(width-sidebar-max>=480);assert.ok(max<=(width-sidebar)/2);
  }
 });

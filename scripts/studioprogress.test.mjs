@@ -260,7 +260,8 @@ check('every turn marks its answer finished on the way out',
 check('but not an older answer left last by a queued question',
   /if \(last\.at && last\.at < since\) return s;/.test(app));
 check('and no time is shown while it is still arriving',
-  /!\(msg\.role === 'assistant' && isThisChatGenerating/.test(app));
+  // `answerLiveHere`: the same on a device following the answer (App.jsx).
+  /!\(msg\.role === 'assistant' && answerLiveHere && i \+ group\.length - 1 >= messages\.length - 1\)/.test(app));
 
 const V = await import(pathToFileURL(path.join(ROOT, 'src/variants.js')).href);
 let answered = { content: 'one', at: 100 };
