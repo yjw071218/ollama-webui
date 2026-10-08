@@ -10186,15 +10186,36 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
    (the reply bubbles covered the field), so the header now stacks above the
    content, and the opened field floats under the bar instead of pushing it. */
 .main-header { position: relative; z-index: var(--z-sticky); }
+/* Solid in every state. The field shares `sidebar-search-inner` with the
+   sidebar's search, whose focus colour is 8% white -- see-through, so over
+   the conversation the replies showed through while typing. */
+.main-header .header-search,
+.main-header .header-search:focus-within { background: var(--surface-overlay, var(--bg-main)); }
+/* The narrow layout comes from two places: a narrow window (@media), and a
+   wide one whose conversation is narrow because the sidebar is open
+   (@container mainpane). The fix was in the first only, so on a PC with the
+   sidebar open the field still wrapped onto a second row over the replies. */
 @media (max-width: 860px) {
   .main-header .header-search.is-open {
     position: absolute;
     top: calc(100% + 6px);
     left: 0.6rem; right: 0.6rem;
-    width: auto;
+    /* `.sidebar-search-inner { width: 100% !important }` made it as wide as
+       the header plus the left inset, running off the right edge. */
+    width: auto !important;
     height: 40px;
     z-index: var(--z-dropdown);
-    background: var(--surface-overlay, var(--bg-main));
+    box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
+  }
+}
+@container mainpane (max-width: 860px) {
+  .main-header .header-search.is-open {
+    position: absolute;
+    top: calc(100% + 6px);
+    left: 0.6rem; right: 0.6rem;
+    width: auto !important;
+    height: 40px;
+    z-index: var(--z-dropdown);
     box-shadow: 0 8px 24px rgba(0, 0, 0, 0.28);
   }
 }

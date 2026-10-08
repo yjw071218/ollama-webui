@@ -228,7 +228,10 @@ check('the studio shows the model notes in the reader’s language', /\{noteFor\
   check('the command pill is under dialogs and the image viewer', z('dock') < z('modal') && z('dock') > z('panel'));
   const extras = read('src/extras.css');
   check('the header stacks above the conversation', /\.main-header \{ position: relative; z-index: var\(--z-sticky\); \}/.test(extras));
-  check('... and the opened search floats above it', /\.header-search\.is-open \{\s*position: absolute;[\s\S]{0,200}z-index: var\(--z-dropdown\)/.test(extras));
+  check('... and the opened search floats above it', /@media \(max-width: 860px\) \{\s*\.main-header \.header-search\.is-open \{\s*position: absolute;[\s\S]{0,400}z-index: var\(--z-dropdown\)/.test(extras));
+  // A PC with the sidebar open: the conversation is narrow, the window is not.
+  check('... also when only the conversation is narrow (sidebar open)', /@container mainpane \(max-width: 860px\) \{\s*\.main-header \.header-search\.is-open \{\s*position: absolute;[\s\S]{0,300}z-index: var\(--z-dropdown\)/.test(extras));
+  check('... and it is solid while typing, not the sidebar search\'s 8% white', /\.main-header \.header-search,\s*\.main-header \.header-search:focus-within \{ background: var\(--surface-overlay, var\(--bg-main\)\); \}/.test(extras));
 }
 
 console.log(`\n${pass} passed, ${fail} failed`);
