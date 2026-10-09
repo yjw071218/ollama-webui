@@ -122,6 +122,21 @@ public class MainActivity extends Activity {
         catch (ActivityNotFoundException e) { message(L.t("로그인할 브라우저가 없습니다.", "There is no browser to sign in with.")); }
     }
     /**
+     * A link from the page opens inside the app, in a Custom Tab over it --
+     * back returns to the chat -- rather than leaving for the browser.
+     */
+    private void openLinkTab(Uri uri) {
+        Intent intent = new Intent(Intent.ACTION_VIEW, uri);
+        Bundle extras = new Bundle();
+        extras.putBinder("android.support.customtabs.extra.SESSION", null);
+        intent.putExtras(extras);
+        intent.putExtra("android.support.customtabs.extra.TOOLBAR_COLOR", prefs.getInt("chrome", Color.rgb(26, 25, 22)));
+        intent.putExtra("android.support.customtabs.extra.TITLE_VISIBILITY", 1);
+        intent.putExtra("android.support.customtabs.extra.SHARE_STATE", 1);
+        try { startActivity(intent); }
+        catch (ActivityNotFoundException e) { message(L.t("링크를 열 앱이 없습니다.", "There is no app to open the link.")); }
+    }
+    /**
      * Google's account chooser opened directly in the Custom Tab, answered on
      * 127.0.0.1:47615 (GoogleLoopback). If that port is taken, the server's page.
      */
@@ -577,8 +592,7 @@ public class MainActivity extends Activity {
                 if (url.startsWith(server + "/") || url.equals(server)) { view.loadUrl(proxy.origin + url.substring(server.length())); return true; }
                 if ("intent".equals(request.getUrl().getScheme())) return true;
                 if ("http".equals(request.getUrl().getScheme()) || "https".equals(request.getUrl().getScheme()))
-                    dialog().setTitle(L.t("외부 링크", "External link")).setMessage(url).setNegativeButton(L.t("취소", "Cancel"), null)
-                        .setPositiveButton(L.t("브라우저로 열기", "Open in browser"), (d,w) -> { try { startActivity(new Intent(Intent.ACTION_VIEW, request.getUrl())); } catch (Exception e) { message(L.t("링크를 열 앱이 없습니다.", "There is no app to open the link.")); } }).show();
+                    openLinkTab(request.getUrl());
                 return true;
             }
             @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) { pageReady = false; }

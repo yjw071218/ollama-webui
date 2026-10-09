@@ -16,6 +16,8 @@ import { setLanguage, tr } from './i18n.mjs';
 import { addRecent, forgetRecent } from './recent.mjs';
 import { validColor } from './theme.mjs';
 import { clampZoom, zoomStep } from './zoom.mjs';
+import { openInAppBrowser } from './browser.mjs';
+import { createRunner } from './runner.mjs';
 const showError = (title, message) => appDialog(clientWindow && !clientWindow.isDestroyed() ? clientWindow : setupWindow, { title, message });
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -64,12 +66,14 @@ const serverKey = server => {
   const old = hashOf(legacyServer(server));
   return settings.ports?.[old] ? old : key;
 };
+/* A link from the page opens in the app's own browser window (browser.mjs);
+   the system browser is one button away there. */
 async function external(url, owner) {
   if (!/^https?:\/\//i.test(url)) return;
-  const result = await appDialog(owner, { type: 'question', title: tr('외부 링크', 'External link'), message: tr('기본 브라우저에서 이 링크를 여시겠습니까?', 'Open this link in your browser?'), detail: url, buttons: [tr('취소', 'Cancel'), tr('열기', 'Open')], defaultId: 0, cancelId: 0 });
-  if (result.response === 1) await shell.openExternal(url);
+  openInAppBrowser(url, { parent: owner, background: settings.pageBackground });
 }
 let updater = null;
+let runner = null;
 const UPDATE_EVERY = 6 * 60 * 60 * 1000;
 /** In-app update: check, download with progress, verify and install (updater.mjs). */
 function notifyUpdate(manual = false) {
@@ -461,6 +465,16 @@ else {
     ipcMain.handle('client:changeServer', event => { if (!validClient(event)) throw new Error('Forbidden'); openSetup(); return true; });
     ipcMain.handle('client:checkUpdates', event => { if (!validClient(event)) throw new Error('Forbidden'); notifyUpdate(true); return true; });
     ipcMain.on('client:busy', (event, value) => { if (validClient(event)) setBusy(!!value); });
+    // Running a project on this PC (runner.mjs), for the page's Run workspace.
+    const folderKey = dir => path.resolve(dir).toLowerCase();
+    runner = createRunner({
+      valid: validClient,
+      owner: () => liveClient(),
+      send: (channel, payload) => { const win = liveClient(); if (win && !win.clientContents.isDestroyed()) win.clientContents.send(channel, payload); },
+      allowed: dir => Array.isArray(settings.runFolders) && settings.runFolders.includes(folderKey(dir)),
+      allow: dir => { settings.runFolders = [...new Set([...(settings.runFolders || []), folderKey(dir)])]; save(); },
+      openBrowser: url => openInAppBrowser(url, { parent: liveClient(), background: settings.pageBackground }),
+    });
     buildMenu();
     createTray();
     applyGlobalShortcut();
@@ -476,6 +490,6 @@ else {
     if (smoke && smokeServer) connect(smokeServer.slice(15)).catch(error => { console.error(error); app.exit(1); });
   });
   app.on('window-all-closed', () => { if (!connecting) app.quit(); });
-  app.on('before-quit', () => { quitting = true; gateway?.close(); });
+  app.on('before-quit', () => { quitting = true; runner?.stopAll(); gateway?.close(); });
   app.on('will-quit', () => globalShortcut.unregisterAll());
 }

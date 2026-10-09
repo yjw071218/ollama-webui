@@ -18,6 +18,25 @@ contextBridge.exposeInMainWorld('ollamaNative', {
   changeServer: () => ipcRenderer.invoke('client:changeServer'),
   checkUpdates: () => ipcRenderer.invoke('client:checkUpdates'),
   busy: (busy) => ipcRenderer.send('client:busy', !!busy),
+  /* Run a project on this PC (runner.mjs) and open pages in the app's own
+     browser (browser.mjs). */
+  runner: {
+    pick: () => ipcRenderer.invoke('runner:pick'),
+    inspect: (dir) => ipcRenderer.invoke('runner:inspect', dir),
+    list: () => ipcRenderer.invoke('runner:list'),
+    start: (cwd, command) => ipcRenderer.invoke('runner:start', { cwd, command }),
+    input: (id, text) => ipcRenderer.invoke('runner:input', id, text),
+    stop: (id) => ipcRenderer.invoke('runner:stop', id),
+    forget: (id) => ipcRenderer.invoke('runner:forget', id),
+    openFolder: (dir) => ipcRenderer.invoke('runner:openFolder', dir),
+    browse: (url) => ipcRenderer.invoke('runner:browse', url),
+    on: (event, callback) => {
+      if (!['output', 'exit', 'url'].includes(event) || typeof callback !== 'function') return () => {};
+      const handler = (_e, payload) => { try { callback(payload); } catch { /* the page's own */ } };
+      ipcRenderer.on('runner:' + event, handler);
+      return () => ipcRenderer.removeListener('runner:' + event, handler);
+    },
+  },
   onAction: (callback) => {
     if (typeof callback !== 'function') return () => {};
     const handler = (_event, request) => { try { callback(request); } catch { /* the page's own */ } };

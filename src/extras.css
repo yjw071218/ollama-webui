@@ -10290,6 +10290,13 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
   content-visibility: auto;
   contain-intrinsic-size: auto 260px;
 }
+/* `content-visibility: auto` also clips paint to the row, and the hover
+   strip hangs 36px below it -- so on a PC hovering an older message showed
+   nothing at all. The row under the pointer is painted in full. */
+@media (hover: hover) and (min-width: 641px) {
+  .messages-wrapper > .message-row:hover,
+  .messages-wrapper > .message-row:focus-within { content-visibility: visible; }
+}
 .history-item:not(.active):not(.dragging) {
   content-visibility: auto;
   contain-intrinsic-size: auto 40px;
@@ -10654,7 +10661,9 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
   transform: none;
   animation: msg-pill-in 0.18s var(--ease-out, ease);
 }
-.message-row.click-capsule .msg-hover-actions .action-btn { flex: 0 0 auto; width: 36px; height: 36px; padding: 0; border-radius: 999px; }
+.message-row.click-capsule .msg-hover-actions,
+.message-row.click-capsule:hover .msg-hover-actions { justify-content: center; align-items: center; padding: 4px 6px; }
+.message-row.click-capsule .msg-hover-actions .action-btn { display: inline-flex; align-items: center; justify-content: center; margin: 0; flex: 0 0 auto; width: 36px; height: 36px; padding: 0; border-radius: 999px; }
 .message-row.click-capsule .msg-hover-actions .action-btn svg { width: 17px; height: 17px; }
 form.input-container { transition: opacity 0.16s var(--ease-out, ease), transform 0.16s var(--ease-out, ease); }
 body:has(.message-row.click-capsule) form.input-container { opacity: 0; transform: translateY(6px); pointer-events: none; }
@@ -10664,3 +10673,11 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 /* An assistant reply takes its full column from the first word, so code
    blocks and work steps do not grow and shrink with the text streaming in. */
 .message-row.assistant > .message-content { flex: 1 1 auto; }
+
+/* ==== The reply being written has no actions yet ====
+   Neither hover (PC) nor a tap (phone) brings up its toolbar or capsule:
+   copying or retrying half an answer is not what anyone means (App.jsx adds
+   `.is-streaming`). */
+.message-row.is-streaming .msg-hover-actions,
+.message-row.is-streaming:hover .msg-hover-actions,
+.message-row.is-streaming:focus-within .msg-hover-actions { display: none !important; }

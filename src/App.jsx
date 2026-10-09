@@ -212,6 +212,8 @@ import {
 import ChatTimeline from './ChatTimeline.jsx';
 import { captureScreen, canCaptureScreen, canUseCamera } from './capture.js';
 import { Camera, Server as ServerIcon } from 'lucide-react';
+import RunnerWorkspace, { runnerAvailable } from './RunnerWorkspace.jsx';
+import './runner.css';
 import { turnMetrics } from './turnMetrics.js';
 import { traceOf, slowestLeg } from './turnTrace.js';
 import {
@@ -1552,6 +1554,9 @@ function App() {
      it has been, so a generation keeps being tracked while you are reading a
      chat -- see where it is rendered. */
   const [studioOpened, setStudioOpened] = useState(false);
+  // The Run workspace (Windows app only), mounted once opened so running
+  // processes keep their output while you are in a chat.
+  const [runnerOpened, setRunnerOpened] = useState(false);
   const [risuOpened, setRisuOpened] = useState(false);
   const [showAddMenu, setShowAddMenu] = useState(false);
   const [showCamera, setShowCamera] = useState(false);
@@ -2447,7 +2452,7 @@ function App() {
     const text = String(transcript || '').trim();
     if (!text) return;
     if (onHeardRef.current?.(text)) return;
-    setInput(prev => prev + (prev ? ' ' : '') + text);
+    insertAtCaret(text, { sep: ' ', focus: false });
   };
   heardRef.current = heard;
 
@@ -4672,9 +4677,7 @@ function App() {
       });
       const data = await res.json();
       if (!data.success) throw new Error(data.error || 'failed');
-      setInput(prev => (prev.trim() ? `${prev}
-
-${data.text}` : data.text));
+      insertAtCaret(data.text, { sep: '\n\n' });
       setShowSettings(false);
     } catch (e) {
       alertDialog(e.message, { title: `${server} / ${name}` });
@@ -4831,13 +4834,17 @@ ${data.text}` : data.text));
     touchHandledAtRef.current = Date.now();
     // A scroll never gets here: the browser cancels the pointer instead.
     if (press.ignore || Date.now() - press.at > 600) return;
+    if (isGenerating && index === messages.length - 1) return;
     if ((window.getSelection?.().toString() || '').length > 0) return;
     setOpenActionsIndex(prev => (prev === index ? null : index));
   };
 
-  /* A mouse click opens the same capsule on a PC: hovering shows the small
-     strip, but a click on the message is asking for its actions. */
+  /* On a PC the actions are the strip that appears on hover, right under the
+     message; a click opens nothing. Only the tap UI (phone) opens the capsule
+     at the bottom centre. The reply still being written opens neither. */
   const toggleMessageActions = (event, index) => {
+    if (!isTapUi) return;
+    if (isGenerating && index === messages.length - 1) return;
     if (Date.now() - touchHandledAtRef.current < 800) return;
     if (tapIsOnControl(event.target)) return;
     if ((window.getSelection?.().toString() || '').length > 0) return;
@@ -4963,6 +4970,44 @@ ${data.text}` : data.text));
   const selfScrollRef = useRef(false);
   const textareaRef = useRef(null);
   const abortControllerRef = useRef(null);
+
+  /* Where the composer's caret is right now (or was, when it lost focus --
+   * a textarea keeps its selection while unfocused). */
+  function composerCaret() {
+    const ta = textareaRef.current;
+    if (!ta || typeof ta.selectionStart !== 'number') return null;
+    return { start: ta.selectionStart, end: ta.selectionEnd ?? ta.selectionStart };
+  }
+
+  /* Puts text into the composer at the caret rather than at the end,
+   * replacing a selection if there is one. `sep` is what keeps it apart from
+   * its neighbours: ' ' for words and paths, '\n' for lines, '\n\n' for
+   * blocks. Pass `caret` when it had to be read before an await. */
+  function insertAtCaret(text, { sep = ' ', caret = composerCaret(), focus = true } = {}) {
+    if (!text) return;
+    let caretAfter = null;
+    setInput(prev => {
+      const cur = prev || '';
+      const start = caret ? Math.min(caret.start, cur.length) : cur.length;
+      const end = caret ? Math.min(Math.max(caret.end, start), cur.length) : start;
+      let before = cur.slice(0, start);
+      let after = cur.slice(end);
+      const ws = sep.trim() === '' && sep.includes('\n') ? /[ \t]*$/ : null;
+      if (ws) { before = before.replace(ws, ''); after = after.replace(/^[ \t]*/, ''); }
+      const needLead = before && !before.endsWith(sep) && !(sep === ' ' && /\s$/.test(before));
+      const needTrail = sep === ' ' ? !(after && /^\s/.test(after)) : (after && !after.startsWith(sep) && !text.endsWith(sep));
+      const piece = (needLead ? sep : '') + text + (needTrail ? sep : '');
+      caretAfter = before.length + piece.length;
+      return before + piece + after;
+    });
+    if (!focus) return;
+    requestAnimationFrame(() => {
+      const el = textareaRef.current;
+      if (!el) return;
+      el.focus?.();
+      if (caretAfter != null) { try { el.setSelectionRange(caretAfter, caretAfter); } catch { /* not a text field */ } }
+    });
+  }
 
   // Derived state for code versions
   // Every artifact-worthy fence in the conversation, in order.
@@ -8753,7 +8798,7 @@ ${data.text}` : data.text));
   const deletePrompt = (id) => setPromptLibrary(prev => prev.filter(p => p.id !== id));
 
   const insertPromptText = (body) => {
-    setInput(prev => (prev ? `${prev}\n${body}` : body));
+    insertAtCaret(body, { sep: '\n' });
     setShowSettings(false);
     setShowPalette(false);
     setTimeout(() => textareaRef.current?.focus(), 50);
@@ -9645,7 +9690,7 @@ ${data.text}` : data.text));
     newChat: () => { createNewSession(); setTimeout(() => textareaRef.current?.focus(), 60); },
     share: ({ files = [], text = '' }) => {
       if (files.length) { addFiles(files); addLog(`Attached ${files.length} shared file(s).`, 'success'); }
-      if (text) setInput(prev => (prev ? `${prev}\n${text}` : text));
+      if (text) insertAtCaret(text, { sep: '\n' });
       setTimeout(() => textareaRef.current?.focus(), 60);
     },
   };
@@ -9676,14 +9721,16 @@ ${data.text}` : data.text));
     // A folder goes into the message as its path, for the model (or the CLI
     // agent) to work in -- not read and attached file by file.
     if (folders.length > 0) {
+      // Where the caret was when the folder was dropped: the path goes there,
+      // not at the end. Read before the await, while it is still that spot.
+      const caret = composerCaret();
       const wanted = await Promise.all(folders.map(async f => ({ kind: 'folder', name: f.name, children: await folderChildren(f) })));
       const paths = await locatePaths(wanted);
       const text = folders.map((f, i) => {
         const p = paths[i] || f.name;
         return /\s/.test(p) ? `"${p}"` : p;
       }).join(' ');
-      setInput(prev => (prev && !/\s$/.test(prev) ? `${prev} ` : prev || '') + text + ' ');
-      requestAnimationFrame(() => textareaRef.current?.focus?.());
+      insertAtCaret(text, { sep: ' ', caret });
       addLog(`Inserted ${folders.length} folder path(s).`, 'success');
     }
   };
@@ -13272,7 +13319,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       : source;
 
     const quoted = trimmed.split('\n').map(line => `> ${line}`).join('\n');
-    setInput(prev => (prev.trim() ? `${prev.replace(/\s+$/, '')}\n\n` : '') + `${quoted}\n\n`);
+    // Ends on a blank line so what is typed next is not part of the quote.
+    insertAtCaret(`${quoted}\n\n`, { sep: '\n\n' });
     selection?.removeAllRanges();
     setOpenActionsIndex(null);
     haptic('light');
@@ -14764,7 +14812,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
          * half of what this app is, and the chat list collapses out of the way
          * when you are in it. */}
         <div className="sidebar-places" role="tablist" aria-label={t('studio.places')}>
-          {[['home', t('studio.home')], ['studio', t('studio.tab')], ['gallery', t('gallery.tab')], ['risu', t('risu.place')]].map(([place, label]) => (
+          {[['home', t('studio.home')], ['studio', t('studio.tab')], ['gallery', t('gallery.tab')], ['risu', t('risu.place')], ...(runnerAvailable() ? [['runner', t('runner.place')]] : [])].map(([place, label]) => (
             <button
               key={place}
               data-risu-tab={place === 'risu' ? '' : undefined}
@@ -14776,10 +14824,11 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 setSidebarPlace(place);
                 if (place === 'studio') setStudioOpened(true);
                 if (place === 'risu') setRisuOpened(true);
+                if (place === 'runner') setRunnerOpened(true);
                 if (place !== 'home' && isNarrow) setIsSidebarOpen(false);
               }}
             >
-              {place === 'home' ? <MessageSquare size={14} /> : place === 'studio' ? <Wand2 size={14} /> : place === 'risu' ? <Users size={14} /> : <Images size={14} />}
+              {place === 'home' ? <MessageSquare size={14} /> : place === 'studio' ? <Wand2 size={14} /> : place === 'risu' ? <Users size={14} /> : place === 'runner' ? <Terminal size={14} /> : <Images size={14} />}
               <span title={label}>{label}</span>
             </button>
           ))}
@@ -15232,6 +15281,20 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               <Wand2 size={16} />
             </button>
 
+            {/* Running and trying a project on this PC (Windows app only). */}
+            {runnerAvailable() && (
+              <button
+                className={`icon-btn bordered ${sidebarPlace === 'runner' ? 'toggled' : ''}`}
+                title={t('runner.place')}
+                onClick={() => {
+                  if (sidebarPlace !== 'runner') setRunnerOpened(true);
+                  setSidebarPlace(sidebarPlace === 'runner' ? 'home' : 'runner');
+                }}
+              >
+                <Terminal size={16} />
+              </button>
+            )}
+
             <button
               className="icon-btn bordered header-secondary"
               title={t('header.chatInfo')}
@@ -15405,7 +15468,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             onCopy={(text) => copyText(text)}
             onUse={(tags) => {
               setTagSheet(null);
-              setInput(prev => (prev.trim() ? `${prev.trimEnd()}\n${tags}` : tags));
+              insertAtCaret(tags, { sep: '\n' });
               setTimeout(() => textareaRef.current?.focus(), 30);
             }}
           />
@@ -15606,6 +15669,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             />
           </div>
         )}
+        {runnerOpened && <div className="studio-place runner-place" hidden={sidebarPlace !== 'runner'}><RunnerWorkspace open={sidebarPlace === 'runner'} /></div>}
         {risuOpened && <div className="studio-place" hidden={sidebarPlace !== 'risu'}><RisuPanel scope={profileScope} model={selectedModel} picked={handPickedModel} onPick={modelPickedByHand} /></div>}
         {studioOpened && (
           <div className="studio-place" hidden={sidebarPlace !== 'studio'}>
@@ -16032,7 +16096,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 <div
                   key={i}
                   ref={el => { messageRefs.current[i] = el; }}
-                  className={`message-row ${msg.role} ${i >= entersFrom ? 'is-entering' : ''} ${msg.starred ? 'starred' : ''} ${searchHits[searchHitIndex] === i ? 'search-current' : ''} ${openActionsIndex === i ? `actions-open${isTapUi ? '' : ' click-capsule'}` : ''} ${navIndex === i ? 'nav-focus' : ''}`}
+                  className={`message-row ${msg.role} ${i >= entersFrom ? 'is-entering' : ''} ${msg.starred ? 'starred' : ''} ${searchHits[searchHitIndex] === i ? 'search-current' : ''} ${openActionsIndex === i ? `actions-open${isTapUi ? '' : ' click-capsule'}` : ''} ${navIndex === i ? 'nav-focus' : ''} ${isGenerating && i === messages.length - 1 && msg.role === 'assistant' ? 'is-streaming' : ''}`}
                   // How the keyboard finds a row to scroll to. An index rather
                   // than a ref array: rows come and go as the transcript grows
                   // and a ref array would have to be kept in step with it.
