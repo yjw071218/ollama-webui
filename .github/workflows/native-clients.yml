@@ -30,6 +30,10 @@ jobs:
           java-version: '17'
       - run: npm ci
         working-directory: native/desktop
+      # npm now skips install scripts not in allowScripts, so Electron's
+      # binary download (its install.js) never ran: fetch it explicitly.
+      - run: node node_modules/electron/install.js
+        working-directory: native/desktop
       - run: node --test --test-timeout=300000 native/tests/*.test.mjs
         timeout-minutes: 15
       - run: node native/tests/desktop-smoke.mjs
