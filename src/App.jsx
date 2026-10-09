@@ -201,13 +201,14 @@ import { applyLiveSettings } from './liveSettings.js';
 import { NewbieGuide, guideSeen } from './NewbieGuide.jsx';
 import { stamped, conversationTime } from './sessionEdit.js';
 import { writeJournal, takeJournal, withJournal } from './unloadJournal.js';
-import { fileMarker, indexedMarker, pathMarker, extractAttachments, stripAttachments } from './attachMarkers.js';
+import { fileMarker, indexedMarker, pathMarker, webpageMarker, webpageAgainMarker, pageAlreadySent, extractAttachments, stripAttachments } from './attachMarkers.js';
 import { forHistory, isToolResult, turnStart, wireText } from './wireHistory.js';
 import { isDraft, newDraft, promoted, withoutStaleDrafts, persistable, nextSessionId } from './draftChat.js';
 import { Logo } from './Logo.jsx';
 import { Chart } from './Chart.jsx';
 import { parseChart } from './chart.js';
 import Quiz, { parseQuiz } from './Quiz.jsx';
+import ArtifactVersionPicker from './ArtifactVersionPicker.jsx';
 const MermaidDiagram = lazy(() => import('./Mermaid.jsx'));
 import {
   buildSnapshot, createShare, listShares, revokeShare,
@@ -9698,13 +9699,40 @@ function App() {
      another app shared into this one, attached to the composer. Said before
      the page was listening, it was kept on window and is taken here. */
   const nativeActions = useRef({});
+  const sidebarBeforeDockRef = useRef(null);
   nativeActions.current = {
     newChat: () => { createNewSession(); setTimeout(() => textareaRef.current?.focus(), 60); },
     /* A question asked from the in-app browser (native/desktop/browser.mjs),
        with the page it was asked about. Sent straight away unless an answer
        is still being written; then it waits in the composer. */
-    ask: ({ text = '' }) => {
+    /* Docked beside the in-app browser the chat is narrow: the side panel
+       goes while it is docked and comes back as it was afterwards. */
+    browserDock: (docked) => {
+      if (docked) {
+        if (sidebarBeforeDockRef.current === null) sidebarBeforeDockRef.current = isSidebarOpen;
+        setIsSidebarOpen(false);
+      } else if (sidebarBeforeDockRef.current !== null) {
+        // After the width change has settled, so the breakpoint rule does not undo it.
+        const was = sidebarBeforeDockRef.current;
+        sidebarBeforeDockRef.current = null;
+        setTimeout(() => setIsSidebarOpen(was && !window.matchMedia?.(NARROW_QUERY).matches), 200);
+      }
+    },
+    ask: ({ text = '', page = null }) => {
       if (!text) return;
+      /* The page rides as an attachment: its whole text goes into the message
+         as a marker the transcript draws as one chip, and its pictures go to
+         the model without being drawn (hiddenImages). */
+      // Once per page per chat: asked again, only a note that it is above --
+      // and, for a question about one picture, that picture.
+      if (page) {
+        const again = pageAlreadySent(messages, page.url);
+        setAttachments(prev => [...prev.filter(a => a.type !== 'webpage'), {
+          type: 'webpage', name: `🌐 ${page.title || page.url}`, url: page.url, title: page.title, again,
+          data: again ? '' : page.text,
+          images: again ? (page.focusImage ? page.images.slice(0, 1) : []) : page.images,
+        }]);
+      }
       setInput(text);
       if (!isGeneratingRef.current) setTimeout(() => handleSendRef.current?.(), 60);
       else setTimeout(() => textareaRef.current?.focus(), 60);
@@ -9719,6 +9747,7 @@ function App() {
     newChat: () => nativeActions.current.newChat(),
     share: (payload) => nativeActions.current.share(payload),
     ask: (payload) => nativeActions.current.ask(payload),
+    browserDock: (docked) => nativeActions.current.browserDock(docked),
   }), []);
   // The apps keep the screen on (Android) or show progress on the taskbar
   // (Windows) while an answer is being written.
@@ -10395,6 +10424,8 @@ function App() {
       // ----------------------------
       
       let messageImages = [];
+      // Pictures that came with a web page: sent, not drawn in the transcript.
+      let hiddenImages = false;
       // The passages this turn was given, in citation order. Attached to the
       // finished message so `[1]` stays pressable after a reload.
       let turnCitations = null;
@@ -10431,6 +10462,11 @@ function App() {
           // differ only in where they came from and what the chip says.
           if (att.type === 'text' || att.type === 'pasted') {
             finalInputText += fileMarker(att.name, att.data);
+          } else if (att.type === 'webpage') {
+            finalInputText += att.again
+              ? webpageAgainMarker({ title: att.title, url: att.url })
+              : webpageMarker({ title: att.title, url: att.url, text: att.data, images: att.images?.length || 0 });
+            if (att.images?.length) { messageImages.push(...att.images); hiddenImages = true; }
           } else if (att.type === 'image') {
             messageImages.push(att.data);
           } else if (att.type === 'indexed') {
@@ -10480,6 +10516,7 @@ function App() {
       if (!isAutoTool) {
         const tempUserMessage = { role: 'user', content: finalInputText, at: Date.now() };
         if (messageImages.length > 0) tempUserMessage.images = messageImages;
+        if (hiddenImages) tempUserMessage.hiddenImages = true;
         /* A painted edit rides on the question: the mask and which picture it
            was painted on. The executor reads it from there -- see
            TOOL_GENERATE_IMAGE -- and the model is told, on the wire only,
@@ -16980,7 +17017,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                               transcript -- and the moment you most want to
                               check what you sent is while reading the answer
                               about it. Same viewer the composer uses. */}
-                          {msg.images && (
+                          {msg.images && !msg.hiddenImages && (
                             <div className="user-attachments-grid" style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', marginBottom: '0.5rem' }}>
                               {msg.images.map((img, idx) => (
                                 <button
@@ -17324,8 +17361,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       <button
                         type="button"
                         className="attachment-doc"
-                        onClick={() => att.type !== 'indexing' && setViewingAttachment(att)}
-                        disabled={att.type === 'indexing'}
+                        onClick={() => att.type !== 'indexing' && att.type !== 'webpage' && setViewingAttachment(att)}
+                        disabled={att.type === 'indexing' || att.type === 'webpage'}
                         title={att.type === 'indexing' ? att.name : `${att.name} — ${t('attach.open')}`}
                       >
                         {att.type === 'indexing'
@@ -19988,15 +20025,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 {activeArtifactData.version > 0 && <span className="artifact-version">v{activeArtifactData.version}</span>}
                 {!activeArtifactData.closed && <span className="artifact-streaming">{t('artifact.streaming')}</span>}
                 {siblings.length > 0 && (
-                  <select
+                  <ArtifactVersionPicker
+                    items={codeArtifacts}
                     value={activeArtifactData.id}
-                    onChange={(e) => { setActiveArtifact({ id: e.target.value, type: activeArtifact.type }); setConsoleEntries([]); }}
-                    className="artifact-version-select"
-                  >
-                    {codeArtifacts.map(a => (
-                      <option key={a.id} value={a.id}>v{a.version} · {a.language || 'code'} · {a.lineCount} {t('common.lines')}</option>
-                    ))}
-                  </select>
+                    linesLabel={t('common.lines')}
+                    onChange={(id) => { setActiveArtifact({ id, type: activeArtifact.type }); setConsoleEntries([]); }}
+                  />
                 )}
               </div>
 

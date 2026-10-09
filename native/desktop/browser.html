@@ -1,1 +1,35 @@
-<!doctype html><html lang="ko"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'"><title>Ollama WebUI</title><link rel="stylesheet" href="browser.css"><header><button data-action="close" class="close" title="대화로 돌아가기 (Ctrl+W)" data-en-title="Back to the chat (Ctrl+W)" data-en="Chat">✕ 대화로</button><button data-action="back" title="뒤로 (Alt+←)" data-en-title="Back (Alt+Left)" disabled>←</button><button data-action="forward" title="앞으로 (Alt+→)" data-en-title="Forward (Alt+Right)" disabled>→</button><button data-action="reload" id="reload" title="새로고침 (F5)" data-en-title="Reload (F5)">↻</button><form id="go"><input id="address" spellcheck="false" autocomplete="off" aria-label="주소" data-en-label="Address"></form><form id="ask"><input id="question" spellcheck="false" autocomplete="off" placeholder="이 페이지에 대해 AI에게 질문…" data-en-placeholder="Ask AI about this page…" aria-label="AI에게 질문" data-en-label="Ask AI"></form><button data-action="dock" id="dock" title="채팅을 옆에 열기/닫기" data-en-title="Show or hide the chat beside">채팅 ▸</button><button data-action="external" title="기본 브라우저로 열기" data-en-title="Open in your browser" data-en="Browser">브라우저로</button></header><script src="browser-ui.mjs" type="module"></script></html>
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src https: http: data:"><title>Ollama WebUI</title><link rel="stylesheet" href="browser.css">
+<div id="chrome">
+<nav id="tabs" aria-label="탭" data-en-label="Tabs"><div id="tablist" role="tablist"></div><button data-action="newTab" class="newtab" title="새 탭 (Ctrl+T)" data-en-title="New tab (Ctrl+T)">＋</button></nav>
+<header>
+<button data-action="close" class="close" title="대화로 돌아가기" data-en-title="Back to the chat" data-en="Chat">✕ 대화로</button>
+<button data-action="back" title="뒤로 (Alt+←)" data-en-title="Back (Alt+Left)" disabled>←</button>
+<button data-action="forward" title="앞으로 (Alt+→)" data-en-title="Forward (Alt+Right)" disabled>→</button>
+<button data-action="reload" id="reload" title="새로고침 (F5)" data-en-title="Reload (F5)">↻</button>
+<form id="go"><input id="address" spellcheck="false" autocomplete="off" aria-label="주소" data-en-label="Address"><button type="button" id="star" data-action="bookmark" title="북마크 (Ctrl+D)" data-en-title="Bookmark (Ctrl+D)">☆</button></form>
+<span class="zoom"><button data-action="zoomOut" title="축소 (Ctrl+-)" data-en-title="Zoom out (Ctrl+-)">−</button><button data-action="zoomReset" id="zoom" title="100%로 (Ctrl+0)" data-en-title="Reset zoom (Ctrl+0)">100%</button><button data-action="zoomIn" title="확대 (Ctrl+=)" data-en-title="Zoom in (Ctrl+=)">＋</button></span>
+<button data-action="findOpen" title="페이지에서 찾기 (Ctrl+F)" data-en-title="Find in page (Ctrl+F)">🔍</button>
+<button data-panel="bookmarks" title="북마크" data-en-title="Bookmarks">★</button>
+<button data-panel="history" title="방문 기록 (Ctrl+H)" data-en-title="History (Ctrl+H)">🕘</button>
+<button data-action="external" title="기본 브라우저로 열기" data-en-title="Open in your browser">↗</button>
+</header>
+<section id="airow">
+<span class="ai-badge">AI</span>
+<form id="ask"><input id="question" spellcheck="false" autocomplete="off" placeholder="이 페이지에 대해 질문… (본문·이미지 전체가 함께 전달됩니다)" data-en-placeholder="Ask about this page… (its text and images go along)" aria-label="AI에게 질문" data-en-label="Ask AI"><span id="askmode" hidden></span></form>
+<button data-quick="summary" data-en="Summary">요약</button>
+<button data-quick="translate" data-en="Translate">번역</button>
+<button data-quick="points" data-en="Key points">핵심 정리</button>
+<button data-quick="explain" data-en="Explain">쉽게 설명</button>
+<button data-action="dock" id="dock" title="채팅을 옆에 열기/닫기" data-en-title="Show or hide the chat beside">채팅 ▸</button>
+</section>
+<section id="findrow" hidden>
+<input id="findtext" spellcheck="false" autocomplete="off" placeholder="페이지에서 찾기" data-en-placeholder="Find in page" aria-label="찾기" data-en-label="Find">
+<span id="findcount"></span>
+<button id="findprev" title="이전 (Shift+Enter)" data-en-title="Previous (Shift+Enter)">↑</button>
+<button id="findnext" title="다음 (Enter)" data-en-title="Next (Enter)">↓</button>
+<button data-action="findClose" title="닫기 (Esc)" data-en-title="Close (Esc)">✕</button>
+</section>
+</div>
+<aside id="panel" hidden><div class="panel-head"><strong id="panel-title"></strong><span class="spacer"></span><button id="clearhistory" hidden data-en="Clear all">전체 삭제</button><button id="panel-close" title="닫기" data-en-title="Close">✕</button></div><input id="panel-filter" spellcheck="false" autocomplete="off" placeholder="검색" data-en-placeholder="Search"><ul id="panel-list"></ul></aside>
+<div id="scrim" hidden></div>
+<script src="browser-ui.mjs" type="module"></script></html>

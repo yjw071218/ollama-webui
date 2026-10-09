@@ -51,6 +51,28 @@ export const indexedMarker = ({ name, pages }) =>
  * model to cite and for a CLI agent to open. Hidden from the transcript like
  * the other markers -- the chip already says which file it was.
  */
+/**
+ * A web page asked about from the Windows app's own browser (browser.mjs):
+ * all of its text for the model, and only a chip in the transcript. Its
+ * pictures travel as the message's images, hidden there too.
+ */
+export const webpageMarker = ({ title, url, text, images = 0 }) =>
+  `\n\n--- [Web Page] ${String(title || url).replace(/\s*\|\s*/g, ' ').replace(/\n/g, ' ')} | ${url} | ${images} images ---\n`
+  + `The reader is looking at this web page and is asking about it. Its full text follows`
+  + `${images ? `; the attached images are ${images > 1 ? 'the page screenshot and its pictures' : 'the page screenshot'}` : ''}.\n\n${text}\n-------------------`;
+
+/** The same page again in one chat: its text and pictures are already above. */
+export const webpageAgainMarker = ({ title, url }) =>
+  `\n\n[Web Page again: ${String(title || url).replace(/[\]\n|]/g, ' ')} | ${url} | its full text and images were sent earlier in this conversation]`;
+
+/** Whether a chat's messages already carry this page (fragment ignored). */
+export const pageAlreadySent = (messages = [], url = '') => {
+  const bare = (u) => String(u || '').split('#')[0];
+  const want = bare(url);
+  if (!want) return false;
+  return messages.some(m => m?.role === 'user' && [...String(m.content || '').matchAll(/--- \[Web Page\] .*? \| (\S*) \| \d+ images ---/g)].some(x => bare(x[1]) === want));
+};
+
 export const pathMarker = (name, where) => `\n[Attached file path: ${name} -> ${where}]`;
 
 /* ------------------------------------------------------------- the reading */
@@ -63,6 +85,8 @@ const INDEXED = /\[Attached document: (.+?)(?:, (\d+) pages)?\. Its full text ha
 // else — so a chip in the transcript can open the file the same way the chip in
 // the composer could before it was sent.
 const FILE = /---\s+Attached File:\s+(.*?)\s+---\n([\s\S]*?)\n-------------------/g;
+const WEBPAGE = /---\s+\[Web Page\]\s+(.*?) \| (\S*) \| (\d+) images ---\n[\s\S]*?\n-------------------/g;
+const WEBPAGE_AGAIN = /\n?\[Web Page again: (.*?) \| (\S*) \| [^\]\n]*\]/g;
 const URL_FETCH = /---\s+\[MCP Tool\] Fetched Content from\s+(.*?)\s+---[\s\S]*?-------------------/g;
 const IMAGE_NOTE = /---\s+Image Analysis by.*?\n[\s\S]*?-------------------\n?/g;
 // Retrieved passages and web grounding, which the export strips and the
@@ -71,7 +95,7 @@ const CONTEXT = /---\s+\[(Knowledge|Grounding)\][\s\S]*?-------------------/g;
 
 /** Every marker, for callers that only want them gone. */
 const PATH = /\n?\[Attached file path: [^\]\n]*\]/g;
-const ALL = [INDEXED, FILE, URL_FETCH, IMAGE_NOTE, CONTEXT, PATH];
+const ALL = [INDEXED, WEBPAGE, WEBPAGE_AGAIN, FILE, URL_FETCH, IMAGE_NOTE, CONTEXT, PATH];
 
 /**
  * The chips to draw above a message, and the message with the blocks removed.
@@ -97,6 +121,13 @@ export const extractAttachments = (content) => {
       // chip that looks unlike its neighbours.
       attachment: { type: 'indexed', name: m[1], pages: m[2] ? Number(m[2]) : null },
     });
+  }
+  for (const m of text.matchAll(WEBPAGE)) {
+    // Shown as a chip that does not open: the page went to the model only.
+    found.push({ at: m.index, attachment: { type: 'url', webpage: true, name: `🌐 ${m[1]}${Number(m[3]) ? ` · 이미지 ${m[3]}장` : ''}`, url: m[2] } });
+  }
+  for (const m of text.matchAll(WEBPAGE_AGAIN)) {
+    found.push({ at: m.index, attachment: { type: 'url', webpage: true, name: `🌐 ${m[1]} · 앞에서 전달됨`, url: m[2] } });
   }
   for (const m of text.matchAll(URL_FETCH)) {
     found.push({ at: m.index, attachment: { type: 'url', name: m[1] } });

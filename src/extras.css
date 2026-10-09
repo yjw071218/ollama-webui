@@ -10947,3 +10947,37 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 .quiz-count { font-size: .82rem; color: var(--text-secondary, #8b949e); }
 .quiz-score { display: inline-flex; gap: .3rem; align-items: center; font-weight: 700; color: #e3b341; animation: quiz-in .3s ease both; }
 :root[data-motion="reduced"] .quiz-card, :root[data-motion="reduced"] .quiz-q, :root[data-motion="reduced"] .quiz-option, :root[data-motion="reduced"] .quiz-feedback, :root[data-motion="reduced"] .mermaid-canvas { animation: none; transition: none; }
+
+/* ---- Artifact version picker (src/ArtifactVersionPicker.jsx) ---- */
+.artifact-version-picker { display: inline-flex; align-items: center; gap: .45rem; flex: 0 1 auto; min-width: 0; max-width: 100%; height: 28px; padding: 0 .55rem 0 .35rem; border-radius: 999px; border: 1px solid var(--border-color); background: color-mix(in srgb, var(--text-primary) 4%, transparent); color: var(--text-primary); font: inherit; font-size: .78rem; cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }
+.artifact-version-picker:hover { border-color: color-mix(in srgb, var(--primary) 55%, var(--border-color)); background: color-mix(in srgb, var(--primary) 8%, transparent); }
+.artifact-version-picker:focus-visible, .artifact-version-picker.is-open { outline: none; border-color: var(--primary); box-shadow: 0 0 0 3px color-mix(in srgb, var(--primary) 22%, transparent); }
+.artifact-version-picker .avp-meta { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-secondary); }
+.artifact-version-picker .avp-chevron { flex: none; color: var(--text-secondary); transition: transform .2s ease; }
+.artifact-version-picker.is-open .avp-chevron { transform: rotate(180deg); }
+.avp-ver { flex: none; font-weight: 700; font-size: .72rem; padding: .1rem .42rem; border-radius: 999px; color: var(--primary); background: color-mix(in srgb, var(--primary) 14%, transparent); font-variant-numeric: tabular-nums; }
+
+.artifact-version-menu { position: fixed; z-index: 10050; margin: 0; padding: .3rem; list-style: none; overflow-y: auto; overscroll-behavior: contain; border-radius: 12px; border: 1px solid var(--border-color); background: var(--surface-raised, var(--bg-secondary, var(--bg-primary))); box-shadow: 0 14px 36px rgba(0,0,0,.42), 0 2px 6px rgba(0,0,0,.25); outline: none; animation: avp-in .16s cubic-bezier(.2,.8,.2,1) both; transform-origin: top center; scrollbar-width: thin; scrollbar-color: color-mix(in srgb, var(--text-secondary) 45%, transparent) transparent; }
+.artifact-version-menu.is-up { transform-origin: bottom center; animation-name: avp-in-up; }
+@keyframes avp-in { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+@keyframes avp-in-up { from { opacity: 0; transform: translateY(4px) scale(.98); } }
+.avp-item { display: flex; align-items: center; gap: .55rem; padding: .45rem .55rem; border-radius: 8px; font-size: .8rem; color: var(--text-primary); cursor: pointer; transition: background .12s; }
+.avp-item .avp-ver { min-width: 2.6rem; text-align: center; color: var(--text-secondary); background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
+.avp-item .avp-meta { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.avp-item .avp-lines { flex: none; color: var(--text-secondary); font-size: .74rem; font-variant-numeric: tabular-nums; }
+.avp-item .avp-tag { flex: none; font-size: .66rem; font-weight: 600; padding: .05rem .4rem; border-radius: 999px; color: #3fb950; background: color-mix(in srgb, #3fb950 14%, transparent); }
+.avp-item .avp-check { flex: none; width: 14px; display: grid; place-items: center; color: var(--primary); }
+.avp-item.is-active { background: color-mix(in srgb, var(--text-primary) 7%, transparent); }
+.avp-item.is-selected { background: color-mix(in srgb, var(--primary) 14%, transparent); }
+.avp-item.is-selected .avp-ver { color: var(--primary); background: color-mix(in srgb, var(--primary) 20%, transparent); }
+:root[data-motion="reduced"] .artifact-version-menu, :root[data-motion="reduced"] .avp-chevron { animation: none; transition: none; }
+
+/* An approval in the activity fold: one line, answered in the corner box. */
+.agent-approval.is-folded { margin-top: .3rem; }
+.agent-approval-toggle { display: inline-flex; align-items: center; gap: .4rem; max-width: 100%; padding: .25rem .6rem; border-radius: 999px; border: 1px solid color-mix(in srgb, #e3b341 45%, var(--border-color)); background: color-mix(in srgb, #e3b341 10%, transparent); color: var(--text-primary); font: inherit; font-size: .76rem; cursor: pointer; transition: background .15s; }
+.agent-approval-toggle:hover { background: color-mix(in srgb, #e3b341 18%, transparent); }
+.agent-approval-toggle > span { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.agent-approval-toggle svg:first-child { color: #e3b341; flex: none; }
+.agent-approval.is-open .cli-prompt { margin-top: .4rem; }
+.agent-chip.is-waiting { color: #e3b341; border-color: color-mix(in srgb, #e3b341 45%, transparent); background: color-mix(in srgb, #e3b341 10%, transparent); animation: cli-phase-pulse 2.4s ease-in-out infinite; }
+:root[data-motion="reduced"] .agent-chip.is-waiting { animation: none; }

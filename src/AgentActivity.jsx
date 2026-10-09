@@ -135,6 +135,7 @@ const InlineApproval = ({ target }) => {
   const { t } = useI18n();
   const [question, setQuestion] = useState(null);
   const [done, setDone] = useState('');
+  const [expanded, setExpanded] = useState(false);
   useEffect(() => {
     let stopped = false, timer = null;
     const tick = async () => {
@@ -152,7 +153,18 @@ const InlineApproval = ({ target }) => {
 
   if (done) return <div className="agent-approval is-done">{t(done === 'answer' ? 'cliPrompt.answered' : `agent.decided.${done}`)}</div>;
   if (!question) return null;
-  return <div className="agent-approval"><CliPromptCard item={question} compact onDone={setDone} /></div>;
+  /* Folded: the box in the corner (CliApprovals) is where it is answered.
+     Opened here only on request, for reading the details beside the step. */
+  return (
+    <div className={`agent-approval is-folded${expanded ? ' is-open' : ''}`}>
+      <button type="button" className="agent-approval-toggle" aria-expanded={expanded} onClick={() => setExpanded(v => !v)}>
+        <ShieldQuestion size={12} aria-hidden="true" />
+        <span>{t('agent.waitingCorner')}</span>
+        <ChevronDown size={12} className={`agent-step-chevron ${expanded ? 'is-open' : ''}`} aria-hidden="true" />
+      </button>
+      {expanded && <CliPromptCard item={question} compact onDone={setDone} />}
+    </div>
+  );
 };
 
 /* ------------------------------------------------------------- steps */
@@ -226,7 +238,8 @@ const Step = ({ step }) => {
    shows the reasoning in the "생각하는 중" fold and the steps here, below it;
    with both in the one fold, every 실행/수정 appeared inside the thinking.
    Running commands are followed by the pill in the corner (CommandsDock), so
-   the fold stays shut unless a step is waiting on an approval. */
+   the fold stays shut -- an approval it waits on pops up in the corner and
+   is only marked on the summary line. */
 export const AgentActivity = ({ text, live = false, markdownProps = {}, stepsOnly = false }) => {
   const { t } = useI18n();
   const all = useMemo(() => activityOf(text, { live }), [text, live]);
@@ -234,7 +247,8 @@ export const AgentActivity = ({ text, live = false, markdownProps = {}, stepsOnl
   const summary = activitySummary(segments);
   const waiting = segments.some(s => s.status === 'waiting');
   const [opened, setOpened] = useState(null);
-  const open = !stepsOnly || (opened ?? waiting);
+  // Stays folded while waiting too: the approval pops up in the corner.
+  const open = !stepsOnly || (opened ?? false);
   const stepsTimed = segments.filter(s => s.type === 'step' && s.at);
   const total = stepsTimed.length > 1 ? (stepsTimed[stepsTimed.length - 1].endAt || stepsTimed[stepsTimed.length - 1].at) - stepsTimed[0].at : 0;
 
@@ -263,6 +277,7 @@ export const AgentActivity = ({ text, live = false, markdownProps = {}, stepsOnl
         {summary.commands > 0 && <span className="agent-chip"><Terminal size={11} />{summary.commands}</span>}
         {summary.edits > 0 && <span className="agent-chip"><FilePen size={11} />{summary.edits}</span>}
         {summary.failed > 0 && <span className="agent-chip is-failed"><X size={11} />{summary.failed}</span>}
+        {waiting && <span className="agent-chip is-waiting"><ShieldQuestion size={11} />{t('agent.waiting')}</span>}
         {summary.running && <span className="agent-chip is-running"><Loader2 size={11} className="spin" />{t('agent.working')}</span>}
       </div>
       {open && groups.map((group, n) => (group.type === 'steps'

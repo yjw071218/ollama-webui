@@ -30,10 +30,17 @@ export const fileOf = ({ name, type, data }) => {
 export const dispatchNative = (request, handlers) => {
   if (!request || typeof request !== 'object') return false;
   if (request.type === 'new-chat') { handlers.newChat?.(); return true; }
+  if (request.type === 'browser-dock') { handlers.browserDock?.(!!request.docked); return true; }
   if (request.type === 'ask') {
     const text = typeof request.text === 'string' ? request.text.trim() : '';
     if (!text) return false;
-    handlers.ask?.({ text });
+    const pg = request.page && typeof request.page === 'object' ? request.page : null;
+    const page = pg && typeof pg.url === 'string' ? {
+      url: pg.url, title: String(pg.title || ''), text: String(pg.text || ''),
+      images: (Array.isArray(pg.images) ? pg.images : []).filter(x => typeof x === 'string' && x),
+      focusImage: !!pg.focusImage,
+    } : null;
+    handlers.ask?.({ text, page });
     return true;
   }
   if (request.type === 'share') {
