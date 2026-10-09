@@ -50,10 +50,16 @@ const java = path.join(javaHome, 'bin', process.platform === 'win32' ? 'java.exe
 const javac = path.join(javaHome, 'bin', process.platform === 'win32' ? 'javac.exe' : 'javac');
 async function javaProxy(url) {
   const out = path.join(root, 'artifacts/java-tests'); mkdirSync(out, { recursive: true });
-  const result = spawnSync(javac, ['-d', out, path.join(root, 'android/app/src/main/java/io/github/yjw071218/ollamawebui/client/LoopbackProxy.java'), path.join(root, 'android/app/src/main/java/io/github/yjw071218/ollamawebui/client/L.java'), path.join(root, 'tests/ProxyHarness.java')], { encoding:'utf8' });
+  const result = spawnSync(javac, ['-encoding', 'UTF-8', '-d', out, path.join(root, 'android/app/src/main/java/io/github/yjw071218/ollamawebui/client/LoopbackProxy.java'), path.join(root, 'android/app/src/main/java/io/github/yjw071218/ollamawebui/client/L.java'), path.join(root, 'tests/ProxyHarness.java')], { encoding:'utf8' });
   assert.equal(result.status, 0, result.stderr);
   const child = spawn(java, ['-cp', out, 'ProxyHarness', url], { stdio: ['pipe','pipe','pipe'] });
-  const [buffer] = await once(child.stdout, 'data');
+  /* A harness that dies before printing its address must fail the test, not
+     wait for a line that never comes (CI sat on this for six hours). */
+  const buffer = await Promise.race([
+    once(child.stdout, 'data').then(([b]) => b),
+    once(child, 'exit').then(([code]) => { throw new Error('ProxyHarness exited early with code ' + code); }),
+    new Promise((_, reject) => setTimeout(() => { child.kill(); reject(new Error('ProxyHarness did not start in 20s')); }, 20000).unref()),
+  ]);
   const [origin, token] = buffer.toString().trim().split(' ');
   return { origin, token, close: async () => { child.stdin.end('x'); await once(child, 'exit'); } };
 }
@@ -101,9 +107,13 @@ for (const kind of ['desktop', 'android']) test(kind + ' gateway integration', {
   });
   backend.listen(0, '127.0.0.1'); await once(backend, 'listening');
   const target = 'http://127.0.0.1.nip.io:' + backend.address().port;
-  const gateway = await (kind === 'desktop' ? startProxy : javaProxy)(target);
+  const closeBackend = async () => { for (const socket of backendSockets) socket.destroy(); await new Promise(resolve => backend.close(resolve)); };
+  let gateway;
+  // If the gateway cannot start, the backend still closes; a listening server kept the run alive for hours.
+  try { gateway = await (kind === 'desktop' ? startProxy : javaProxy)(target); }
+  catch (error) { await closeBackend(); throw error; }
   const auth = kind === 'desktop' ? { 'x-native-gateway': gateway.token } : { cookie: '__ollama_native_gate=' + gateway.token + '; session=abc' };
-  t.after(async () => { await gateway.close(); for (const socket of backendSockets) socket.destroy(); await new Promise(resolve => backend.close(resolve)); });
+  t.after(async () => { await gateway.close(); await closeBackend(); });
   await t.test('rejects unknown clients, foreign Origin, Host and cross-site fetch', async () => {
     assert.equal((await request(gateway.origin)).status, 403);
     assert.equal((await request(gateway.origin, { ...auth, origin: 'https://evil.example' })).status, 403);
@@ -175,7 +185,7 @@ for (const kind of ['desktop', 'android']) test(kind + ' gateway integration', {
       + ' if (a[0].equals("probe")) { try { ' + P + '.probe(a[1]); System.out.println("server"); }'
       + ' catch (' + P + '.NotServerException e) { System.out.println("not-server"); } catch (java.io.IOException e) { System.out.println("unreachable"); } return; }'
       + ' for (String s : a) { try { System.out.println(' + P + '.normalize(s)); } catch (IllegalArgumentException e) { System.out.println("REJECTED"); } } } }');
-    assert.equal(spawnSync(javac, ['-cp', out, '-d', out, probe]).status, 0);
+    assert.equal(spawnSync(javac, ['-encoding', 'UTF-8', '-cp', out, '-d', out, probe]).status, 0);
     const run = spawnSync(java, ['-cp', out, 'NormalizeProbe', ...ACCEPTED.map(([given]) => given), ...REJECTED], { encoding: 'utf8' });
     assert.deepEqual(run.stdout.trim().split(/\r?\n/), [...ACCEPTED.map(([, want]) => want), ...REJECTED.map(() => 'REJECTED')]);
     const ours = http.createServer((req, res) => { if (!whoami(req, res)) res.end('page'); });
