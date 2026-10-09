@@ -1676,6 +1676,10 @@ export class ClaudeReader {
            paragraph; without this they ran into each other and into the
            tool notes. A redacted one is said, not silently dropped. */
         if (block.type === 'thinking' && this.thoughts) return { thinking: '\n\n', reasoning: true };
+        /* Newer models stream thinking as empty deltas ("updates" display).
+           Without a mark nothing reached the chat until the answer began, so
+           "thinking" never showed. A zero-width mark opens the live fold. */
+        if (block.type === 'thinking' && !this.thinkingMarked) { this.thinkingMarked = true; return { thinking: '​', reasoning: true }; }
         if (block.type === 'redacted_thinking') return { thinking: '\n[thinking hidden by the model]\n', reasoning: true };
         if (block.type === 'tool_use' || block.type === 'server_tool_use') {
           /* Said once its arguments are in (content_block_stop), so the note
@@ -2047,11 +2051,33 @@ export class AgyReader {
       const started = this.began ? {} : { started: true };
       this.began = true;
       // Its reasoning, when the model shares any.
-      if (step.thinking_delta) { this.sawThinking = true; return { ...started, thinking: String(step.thinking_delta), reasoning: true }; }
+      if (step.thinking_delta) {
+        this.sawThinking = true;
+        /* agy sometimes stops an answer, thinks again and then sends the whole
+           answer from the start. A response after thinking is held as a
+           possible replay until it either diverges or runs past what was sent. */
+        if (this.sawText) this.replay = '';
+        return { ...started, thinking: String(step.thinking_delta), reasoning: true };
+      }
       if (step.step_type === 'agent_response' && step.text_delta) {
         this.sawText = true;
-        this.text = (this.text || '') + String(step.text_delta);
-        return { ...started, content: step.text_delta };
+        const delta = String(step.text_delta);
+        const sent = this.text || '';
+        if (this.replay != null) {
+          const replay = this.replay + delta;
+          if (sent.startsWith(replay)) { this.replay = replay; return started.started ? started : null; }
+          this.replay = null;
+          if (replay.startsWith(sent)) {
+            this.text = replay;
+            const fresh = replay.slice(sent.length);
+            return fresh ? { ...started, content: fresh } : (started.started ? started : null);
+          }
+          // Not a replay after all: what was held is new text.
+          this.text = sent + replay;
+          return { ...started, content: replay };
+        }
+        this.text = sent + delta;
+        return { ...started, content: delta };
       }
       return started.started ? started : null;
     }

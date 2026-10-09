@@ -6,6 +6,16 @@ let editing = false;
 address.addEventListener('focus', () => { editing = true; address.select(); });
 address.addEventListener('blur', () => { editing = false; });
 $('#go').addEventListener('submit', (e) => { e.preventDefault(); window.appBrowser.action('go', address.value); address.blur(); });
+const question = $('#question');
+$('#ask').addEventListener('submit', (e) => {
+  e.preventDefault();
+  const q = question.value.trim();
+  if (!q) return;
+  window.appBrowser.action('ask', q);
+  question.value = '';
+  question.blur();
+});
+const chatLabel = (open) => (document.documentElement.lang === 'ko' ? '채팅 ' : 'Chat ') + (open ? '◂' : '▸');
 document.querySelectorAll('[data-action]').forEach((b) => b.addEventListener('click', () => {
   const a = b.dataset.action;
   window.appBrowser.action(a === 'reload' && b.dataset.loading === '1' ? 'stop' : a);
@@ -22,6 +32,9 @@ window.appBrowser.onState((state) => {
   if (!editing) address.value = state.url || '';
   $('[data-action="back"]').disabled = !state.back;
   $('[data-action="forward"]').disabled = !state.forward;
+  const d = $('#dock');
+  d.classList.toggle('on', !!state.docked);
+  d.textContent = chatLabel(state.docked);
   const r = $('#reload');
   r.dataset.loading = state.loading ? '1' : '';
   r.textContent = state.loading ? '✕' : '↻';

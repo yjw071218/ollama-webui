@@ -32,7 +32,11 @@ export function createClientWindow({ pageBackground, ...options }, actions) {
     if (!win.webContents.isDestroyed()) win.webContents.send('chrome:colors', colors);
   };
   attachShortcuts(win, view.webContents); // F5, Ctrl+F5, F11 (shortcuts.mjs)
-  const resize = () => { const [width, height] = win.getContentSize(); const top = win.isFullScreen() ? 0 : 44; view.setBounds({x:0,y:top,width,height:Math.max(0,height-top)}); };
+  /* The in-app browser can dock to the left with the chat beside it
+     (browser.mjs); `clientLeft` is where the chat then starts. */
+  win.clientLeft = 0;
+  const resize = () => { const [width, height] = win.getContentSize(); const top = win.isFullScreen() ? 0 : 44; const x = Math.min(Math.max(0, win.clientLeft || 0), Math.max(0, width - 320)); view.setBounds({x,y:top,width:Math.max(0,width-x),height:Math.max(0,height-top)}); };
+  win.layoutClient = resize;
   for (const event of ['resize','enter-full-screen','leave-full-screen']) win.on(event,resize);
   resize();
   win.webContents.on('will-navigate', event=>event.preventDefault());

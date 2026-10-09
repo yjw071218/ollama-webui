@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkCjkFriendly from 'remark-cjk-friendly';
 import {
   Terminal, FilePen, FileText, Search, Globe, Wrench, ShieldQuestion, ListTodo,
   Check, X, Loader2, Clock, ChevronDown, Square, Activity, Download, ExternalLink, Radio, Braces,
@@ -272,7 +273,7 @@ export const AgentActivity = ({ text, live = false, markdownProps = {}, stepsOnl
         )
         : (
           <div key={n} className="agent-prose">
-            <ReactMarkdown remarkPlugins={[remarkGfm]} {...markdownProps}>{group.text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkFriendly]} {...markdownProps}>{group.text}</ReactMarkdown>
           </div>
         )))}
     </div>

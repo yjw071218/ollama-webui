@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { X, Play, Square, RefreshCcw, Copy, Check, Cpu, TriangleAlert, Scale } from 'lucide-react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkCjkFriendly from 'remark-cjk-friendly';
 import { useI18n } from './i18n.jsx';
 import { copyText } from './clipboard.js';
 import { canSynthesise, answersFor, consensusPrompt, pickJudge, wordOverlap } from './consensus.js';
@@ -73,7 +74,7 @@ const Column = ({ run, onCopy, copied }) => {
         {thinking && showThinking && <pre className="compare-thinking">{thinking}</pre>}
 
         {answer
-          ? <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm]}>{answer}</ReactMarkdown></div>
+          ? <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkFriendly]}>{answer}</ReactMarkdown></div>
           : run.status === 'running'
             ? <div className="stream-dots"><span /><span /><span /></div>
             : !run.error && <div className="compare-empty">{t('compare.noOutput')}</div>}
@@ -427,7 +428,7 @@ export const ModelCompare = ({ models, defaultPrompt, systemPrompt, options, lan
             {consensus?.content
               ? (
                 <div className="markdown-body">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>{consensus.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkFriendly]}>{consensus.content}</ReactMarkdown>
                 </div>
               )
               : consensus?.status === 'running'

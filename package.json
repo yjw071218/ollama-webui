@@ -1,7 +1,7 @@
 {
   "name": "ollama-webui",
   "private": true,
-  "version": "1.0.25",
+  "version": "1.0.26",
   "type": "module",
   "scripts": {
     "risu:setup": "node scripts/risu-setup.mjs",
@@ -126,6 +126,7 @@
     "katex": "^0.17.0",
     "localforage": "^1.10.0",
     "lucide-react": "^1.21.0",
+    "mermaid": "^12.1.0",
     "nsfwjs": "^4.4.0",
     "pdfjs-dist": "^6.2.108",
     "react": "^19.2.7",
@@ -133,6 +134,7 @@
     "react-markdown": "^10.1.0",
     "rehype-highlight": "^7.0.2",
     "rehype-katex": "^7.0.1",
+    "remark-cjk-friendly": "^2.3.2",
     "remark-gfm": "^4.0.1",
     "remark-math": "^6.0.0",
     "xlsx": "https://cdn.sheetjs.com/xlsx-0.20.3/xlsx-0.20.3.tgz"

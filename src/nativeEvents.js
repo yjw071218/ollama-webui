@@ -8,6 +8,7 @@
  * `window.ollamaNative.onAction` (client-preload.cjs).
  *
  *   { type: 'new-chat' }
+ *   { type: 'ask', text }   a question from the in-app browser
  *   { type: 'share', text, files: [{ name, type, data /* base64 *\/ }] }
  *
  * Pure apart from `window`, so it is tested with a stand-in for one
@@ -29,6 +30,12 @@ export const fileOf = ({ name, type, data }) => {
 export const dispatchNative = (request, handlers) => {
   if (!request || typeof request !== 'object') return false;
   if (request.type === 'new-chat') { handlers.newChat?.(); return true; }
+  if (request.type === 'ask') {
+    const text = typeof request.text === 'string' ? request.text.trim() : '';
+    if (!text) return false;
+    handlers.ask?.({ text });
+    return true;
+  }
   if (request.type === 'share') {
     const files = (Array.isArray(request.files) ? request.files : []).map((f) => {
       try { return fileOf(f); } catch { return null; }

@@ -1,11 +1,12 @@
 import { flushSync } from 'react-dom';
 import { resumableChatReader } from './chatStream.js';
-import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, useCallback } from 'react';
+import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, useCallback, lazy, Suspense } from 'react';
 import { jankPhase } from './jankWatch.js';
 import localforage from 'localforage';
 import { ArrowUp, Paperclip, Sparkles, RefreshCcw, Trash2, Copy, Check, Terminal, Settings, Edit, MessageSquare, ChevronDown, Download, Square, X, Play, Mic, MicOff, Volume2, Search, Code, Maximize2, Sun, Moon, Monitor, Pin, PinOff, GitBranch, FileDown, Command, Cpu, Plus, Save, ArrowDown, Zap, Layers, Server, ExternalLink, Star, Info, TriangleAlert, FileText, Minimize2, PanelLeft, ListTree, LogOut, UserPlus, Languages, User, Activity, Globe, Folder, FolderPlus, MoreHorizontal, ChevronLeft, ChevronRight, SlidersHorizontal, CornerDownRight, Archive, WrapText, ListChecks, ChevronUp, Vibrate, Smartphone, FolderInput, StretchHorizontal, TextQuote, Brain, HelpCircle, Baby, Share2, ClipboardPaste, Upload, Users, Telescope, ShieldCheck, Wand2, Clock, Film, Brush, Scissors, Tags, Images, SquareSplitHorizontal, Undo2, Music, FileEdit } from 'lucide-react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkCjkFriendly from 'remark-cjk-friendly';
 import remarkMath from 'remark-math';
 import { useRichRehype, highlightPlugin } from './richMarkdown.js';
 import {
@@ -206,6 +207,8 @@ import { isDraft, newDraft, promoted, withoutStaleDrafts, persistable, nextSessi
 import { Logo } from './Logo.jsx';
 import { Chart } from './Chart.jsx';
 import { parseChart } from './chart.js';
+import Quiz, { parseQuiz } from './Quiz.jsx';
+const MermaidDiagram = lazy(() => import('./Mermaid.jsx'));
 import {
   buildSnapshot, createShare, listShares, revokeShare,
   loadShareUrls, rememberShareUrl, forgetShareUrl, picturePayload,
@@ -1122,6 +1125,9 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
     const drawn = <Chart source={codeContent} t={t} />;
     if (drawn && parseChart(codeContent)) return drawn;
   }
+  // Diagrams and quizzes are drawn in place too (src/Mermaid.jsx, src/Quiz.jsx).
+  if (language === 'mermaid') return <Suspense fallback={<pre className="mermaid-source"><code>{codeContent}</code></pre>}><MermaidDiagram source={codeContent} /></Suspense>;
+  if (language === 'quiz' && parseQuiz(codeContent)) return <Quiz source={codeContent} />;
 
   const previewable = isPreviewable(language);
   const runnable = isPythonish(language);
@@ -1211,7 +1217,7 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
    streamed token, a scroll button appearing -- parsed every answer in the
    chat again with remark/rehype/KaTeX, and remounted each code block because
    `components` was a new object each time. On a phone that was the lag. */
-const ANSWER_REMARK = [remarkGfm, remarkMath];
+const ANSWER_REMARK = [remarkGfm, remarkCjkFriendly, remarkMath];
 const isLocalAnswerPath = value => /^(?:[a-z]:[\\/]|file:\/\/)/i.test(value || '');
 const answerUrlTransform = (url, key) => key === 'href' && isLocalAnswerPath(url) ? url : defaultUrlTransform(url);
 const AnswerLink = ({ node, ...props }) => {
@@ -9694,6 +9700,15 @@ function App() {
   const nativeActions = useRef({});
   nativeActions.current = {
     newChat: () => { createNewSession(); setTimeout(() => textareaRef.current?.focus(), 60); },
+    /* A question asked from the in-app browser (native/desktop/browser.mjs),
+       with the page it was asked about. Sent straight away unless an answer
+       is still being written; then it waits in the composer. */
+    ask: ({ text = '' }) => {
+      if (!text) return;
+      setInput(text);
+      if (!isGeneratingRef.current) setTimeout(() => handleSendRef.current?.(), 60);
+      else setTimeout(() => textareaRef.current?.focus(), 60);
+    },
     share: ({ files = [], text = '' }) => {
       if (files.length) { addFiles(files); addLog(`Attached ${files.length} shared file(s).`, 'success'); }
       if (text) insertAtCaret(text, { sep: '\n' });
@@ -9703,6 +9718,7 @@ function App() {
   useEffect(() => listenNative({
     newChat: () => nativeActions.current.newChat(),
     share: (payload) => nativeActions.current.share(payload),
+    ask: (payload) => nativeActions.current.ask(payload),
   }), []);
   // The apps keep the screen on (Android) or show progress on the taskbar
   // (Windows) while an answer is being written.
@@ -11131,7 +11147,35 @@ Charts and graphs
   Use it when the answer compares numbers -- over time, between things, as
   shares of a whole -- and write the numbers in the text as well, because a
   chart is not quotable. Do not draw a single number, and do not draw a table
-  that is already readable as a table.`;
+  that is already readable as a table.
+
+Diagrams and infographics
+  A fenced \`\`\`mermaid block is drawn as a diagram the reader can zoom and pan:
+  flowchart LR/TD (pipelines, architectures, decision trees), sequenceDiagram
+  (who talks to whom, with loop/alt/par boxes), timeline, mindmap,
+  stateDiagram-v2, erDiagram, classDiagram, gantt, journey, quadrantChart.
+  Use one when structure, flow or order is the point -- a system's modules, a
+  data pipeline, a process -- and explain it in prose as well. Quote labels that
+  contain brackets, slashes or punctuation: A["Python Tracker (MediaPipe)"].
+  Keep it to what one screen can show; split a large system into two diagrams.
+
+Interactive quizzes
+  When the reader asks to be quizzed or tested ("퀴즈 내줘", "문제 내줘", "테스트해줘"),
+  or a study answer ends with a check, write a fenced \`\`\`quiz block of JSON.
+  The reader answers it in place and gets feedback, explanations and a score:
+
+  \`\`\`quiz
+  {"title":"SQL 기초","questions":[
+    {"q":"DDL이 아닌 것은?","options":["CREATE","ALTER","SELECT","DROP"],"answer":2,"explain":"SELECT는 데이터를 조회하는 DML입니다.","hint":"정의 vs 조작"},
+    {"q":"기본키의 성질을 모두 고르세요","options":["유일성","NULL 허용","최소성"],"answer":[0,2],"explain":"..."},
+    {"q":"외래키는 NULL 값을 가질 수 있다","type":"ox","answer":true,"explain":"..."},
+    {"q":"구조적 질의 언어의 약자는?","type":"short","answer":["SQL"],"explain":"..."}
+  ]}
+  \`\`\`
+
+  \`answer\` is the 0-based option index; a list of indices means "choose all".
+  Every question gets an \`explain\`. Do not reveal the answers in the prose
+  around the block -- the block reveals them after each answer.`;
 
         /* The conversation's character, when one has been chosen. Said here so
            the model stops writing her at all: the tags are added to every
@@ -16189,7 +16233,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           const internalBlocks = allBlocks.filter(b => {
                             if (b.type === 'text') return false;
                             if (b.type !== 'think') return true;
-                            const body = String(b.content || '');
+                            const body = String(b.content || '').replace(/​/g, '');
                             return (hasActivity(body) ? proseOf(body) : body).trim().length > 0
                               || (!b.isComplete && streamingNow);
                           });

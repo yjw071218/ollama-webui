@@ -70,12 +70,46 @@ function embed(host, background) {
   /* Laid out under the title bar, over exactly the area the chat has. `shift`
      slides it in from a little below, the way the app's own panels arrive. */
   let shift = 0;
+  /* Docked: the page on the left, the chat on the right, so a question about
+     the page is answered beside it. The chat keeps at least 360px. */
+  let docked = false;
+  const pageWidth = (w) => (docked ? Math.max(320, Math.min(Math.round(w * 0.58), w - 360)) : w);
   const layout = () => {
     if (b.closed || host.isDestroyed()) return;
     const [w, h] = host.getContentSize();
     const top = (host.isFullScreen() ? 0 : TITLE) + shift;
-    bar.setBounds({ x: 0, y: top, width: w, height: BAR });
-    view.setBounds({ x: 0, y: top + BAR, width: w, height: Math.max(0, h - top - BAR) });
+    const pw = pageWidth(w);
+    bar.setBounds({ x: 0, y: top, width: pw, height: BAR });
+    view.setBounds({ x: 0, y: top + BAR, width: pw, height: Math.max(0, h - top - BAR) });
+    const left = docked && pw < w ? pw : 0;
+    if (host.clientLeft !== left) { host.clientLeft = left; host.layoutClient?.(); }
+  };
+  const dock = (on) => { docked = !!on; layout(); sendState(); };
+
+  /* What the question is about: the selection if there is one, else the
+     page's readable text, read in an isolated world so the page's own
+     scripts cannot see or change the reading. */
+  const pageContext = async () => {
+    try {
+      const [res] = await site.executeJavaScriptInIsolatedWorld(1997, [{ code: `(() => {
+        const sel = String(getSelection?.() || '').trim();
+        const main = document.querySelector('main, article, [role=main]') || document.body;
+        const text = String(main?.innerText || '').replace(/\n{3,}/g, '\n\n').trim();
+        return { sel: sel.slice(0, 8000), text: text.slice(0, 12000) };
+      })()` }]);
+      return res || {};
+    } catch { return {}; }
+  };
+  const ask = async (question) => {
+    const q = String(question || '').trim();
+    if (!q || !host.clientContents || host.clientContents.isDestroyed()) return;
+    const { sel = '', text = '' } = await pageContext();
+    const url = site.getURL(), title = site.getTitle();
+    const fence = (label, body) => `${label}\n\`\`\`text\n${body.replace(/```/g, '`​``')}\n\`\`\``;
+    const context = sel ? fence('선택한 부분:', sel) : text ? fence('페이지 내용 (일부):', text) : '';
+    const body = `${q}\n\n---\n보고 있는 웹페이지: ${title ? title + ' — ' : ''}${url}${context ? '\n\n' + context : ''}`;
+    dock(true);
+    host.clientContents.send('client:action', { type: 'ask', text: body });
   };
   let anim = null;
   b.reveal = () => {
@@ -100,7 +134,7 @@ function embed(host, background) {
       url: site.getURL(), title: site.getTitle(), loading: site.isLoading(),
       back: nav ? nav.canGoBack() : site.canGoBack(),
       forward: nav ? nav.canGoForward() : site.canGoForward(),
-      colors, embedded: true,
+      colors, embedded: true, docked,
     });
   };
   const goBack = () => {
@@ -136,6 +170,8 @@ function embed(host, background) {
     else if (action === 'close') b.close();
     else if (action === 'external') { const u = site.getURL(); if (web(u)) void shell.openExternal(u); }
     else if (action === 'go' && typeof value === 'string') b.load(addressToUrl(value));
+    else if (action === 'ask' && typeof value === 'string') void ask(value.slice(0, 4000));
+    else if (action === 'dock') dock(!docked);
   };
   const ready = (e) => { if (fromBar(e)) sendState(); };
   ipcMain.on('browser:action', command);
@@ -148,6 +184,7 @@ function embed(host, background) {
     ipcMain.removeListener('browser:action', command);
     ipcMain.removeListener('browser:ready', ready);
     if (!host.isDestroyed()) {
+      if (host.clientLeft) { host.clientLeft = 0; host.layoutClient?.(); }
       for (const ev of events) host.removeListener(ev, layout);
       try { host.contentView.removeChildView(bar); host.contentView.removeChildView(view); } catch { /* gone */ }
       host.clientContents?.focus?.();

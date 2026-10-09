@@ -14,6 +14,7 @@
 import { useEffect, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
+import remarkCjkFriendly from 'remark-cjk-friendly';
 import remarkMath from 'remark-math';
 import { useRichRehype } from './richMarkdown.js';
 import { RefreshCcw, Sparkles, Link2Off, MessageSquare, Image as ImageIcon } from 'lucide-react';
@@ -41,7 +42,7 @@ const Bubble = ({ message, rich }) => (
       {message.role === 'assistant' ? (
         <div className="markdown-body">
           <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkMath]}
+            remarkPlugins={[remarkGfm, remarkCjkFriendly, remarkMath]}
             rehypePlugins={rich}
           >
             {message.content}
