@@ -116,6 +116,42 @@ const renderTabs = () => {
   }));
 };
 
+/* ---- model picker ---- */
+const modelBtn = $('#model');
+const modelMenu = $('#model-menu');
+let menuOpen = false;
+const shortName = (m) => String(m || '').replace(/^.*\//, '');
+const closeModels = () => { menuOpen = false; modelMenu.hidden = true; modelBtn.setAttribute('aria-expanded', 'false'); api.action('modelMenu', false); };
+const renderModels = () => {
+  const models = state.models || [];
+  modelBtn.hidden = !models.length;
+  $('#model-name').textContent = shortName(state.model) || tr('모델 선택', 'Pick a model');
+  modelBtn.title = state.model || tr('사용할 AI 모델', 'AI model');
+  if (!menuOpen) return;
+  modelMenu.replaceChildren(...models.map((m) => {
+    const li = document.createElement('li');
+    li.setAttribute('role', 'option');
+    li.setAttribute('aria-selected', String(m === state.model));
+    li.className = m === state.model ? 'on' : '';
+    li.textContent = m;
+    li.tabIndex = -1;
+    li.addEventListener('click', () => { api.action('model', m); closeModels(); });
+    return li;
+  }));
+  const r = modelBtn.getBoundingClientRect();
+  modelMenu.style.left = `${Math.max(8, Math.min(r.left, innerWidth - 300))}px`;
+  modelMenu.style.top = `${r.bottom + 4}px`;
+};
+modelBtn.addEventListener('click', () => {
+  if (menuOpen) { closeModels(); return; }
+  menuOpen = true; modelMenu.hidden = false; modelBtn.setAttribute('aria-expanded', 'true');
+  api.action('modelMenu', true); // the bar grows over the page so the list is not cut off
+  renderModels();
+  modelMenu.querySelector('.on')?.scrollIntoView({ block: 'center' });
+});
+modelMenu.addEventListener('keydown', (e) => { if (e.key === 'Escape') closeModels(); });
+document.addEventListener('pointerdown', (e) => { if (menuOpen && !modelMenu.contains(e.target) && !modelBtn.contains(e.target)) closeModels(); });
+
 /* ---- keys inside the bar ---- */
 window.addEventListener('keydown', (e) => {
   const k = e.key.toLowerCase();
@@ -159,6 +195,7 @@ api.onState((next) => {
   $('#findcount').textContent = state.findResult && findtext.value ? `${state.findResult.at}/${state.findResult.of}` : '';
   renderTabs();
   renderPanel();
+  renderModels();
   const style = document.documentElement.style;
   for (const n of ['bg', 'fg', 'muted', 'line', 'hover']) if (/^#[0-9a-f]{6}$/i.test(state.colors?.[n] || '')) style.setProperty('--' + n, state.colors[n]);
 });

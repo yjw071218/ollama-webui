@@ -20,6 +20,11 @@ contextBridge.exposeInMainWorld('ollamaNative', {
   changeServer: () => ipcRenderer.invoke('client:changeServer'),
   checkUpdates: () => ipcRenderer.invoke('client:checkUpdates'),
   busy: (busy) => ipcRenderer.send('client:busy', !!busy),
+  // The models the in-app browser's picker offers (browser.mjs).
+  browserModels: (value) => ipcRenderer.send('client:browserModels', {
+    models: (Array.isArray(value?.models) ? value.models : []).slice(0, 300).map(String),
+    selected: String(value?.selected || ''),
+  }),
   /* Run a project on this PC (runner.mjs) and open pages in the app's own
      browser (browser.mjs). */
   runner: {

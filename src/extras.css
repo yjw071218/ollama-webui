@@ -10981,3 +10981,9 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 .agent-approval.is-open .cli-prompt { margin-top: .4rem; }
 .agent-chip.is-waiting { color: #e3b341; border-color: color-mix(in srgb, #e3b341 45%, transparent); background: color-mix(in srgb, #e3b341 10%, transparent); animation: cli-phase-pulse 2.4s ease-in-out infinite; }
 :root[data-motion="reduced"] .agent-chip.is-waiting { animation: none; }
+
+/* Docked beside the in-app browser: chat only, the model picker kept in reach. */
+.main-header.is-browser-docked .header-secondary { display: none !important; }
+.main-header.is-browser-docked .model-selector-container { display: flex !important; flex: 0 1 auto; min-width: 0; margin-inline-start: auto; }
+.main-header.is-browser-docked .model-selector-container .model-name { max-width: 160px; }
+.browser-dock-new { flex: none; margin-inline-end: .35rem; }

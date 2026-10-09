@@ -16,7 +16,7 @@ import { setLanguage, tr } from './i18n.mjs';
 import { addRecent, forgetRecent } from './recent.mjs';
 import { validColor } from './theme.mjs';
 import { clampZoom, zoomStep } from './zoom.mjs';
-import { openInAppBrowser } from './browser.mjs';
+import { openInAppBrowser, setBrowserModels, restoreInAppBrowser } from './browser.mjs';
 import { createRunner } from './runner.mjs';
 import { localPath } from './localPath.mjs';
 const showError = (title, message) => appDialog(clientWindow && !clientWindow.isDestroyed() ? clientWindow : setupWindow, { title, message });
@@ -235,6 +235,8 @@ async function connect(value) {
     win.once('closed', () => ipcMain.removeListener('client:chrome', onChrome));
     // The zoom this server was last read at, and Ctrl+wheel to change it.
     win.clientContents.on('did-finish-load', () => {
+      // The pages that were open in the in-app browser last time.
+      if (!smoke) restoreInAppBrowser(win, { background: settings.pageBackground });
       const factor = settings.zoom?.[key];
       if (Number.isFinite(factor)) win.clientContents.setZoomFactor(clampZoom(factor));
     });
@@ -484,6 +486,7 @@ else {
     ipcMain.handle('client:changeServer', event => { if (!validClient(event)) throw new Error('Forbidden'); openSetup(); return true; });
     ipcMain.handle('client:checkUpdates', event => { if (!validClient(event)) throw new Error('Forbidden'); notifyUpdate(true); return true; });
     ipcMain.on('client:busy', (event, value) => { if (validClient(event)) setBusy(!!value); });
+    ipcMain.on('client:browserModels', (event, value) => { const win = liveClient(); if (win && validClient(event)) setBrowserModels(win, value); });
     // Running a project on this PC (runner.mjs), for the page's Run workspace.
     const folderKey = dir => path.resolve(dir).toLowerCase();
     runner = createRunner({

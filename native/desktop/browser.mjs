@@ -170,6 +170,43 @@ async function fetchImage(ses, src) {
 
 const embedded = new WeakMap(); // app window -> its browser
 
+/* The open pages, kept so that closing the browser -- or the app -- and
+   coming back finds them where they were. Written at once rather than on the
+   save timer: the app may be quitting. */
+export const sessionOf = (s) => {
+  const v = s?.session && typeof s.session === 'object' ? s.session : {};
+  const tabs = (Array.isArray(v.tabs) ? v.tabs : []).filter(web).slice(0, 30);
+  return { open: !!v.open && tabs.length > 0, tabs, active: Math.min(Math.max(0, Number(v.active) || 0), Math.max(0, tabs.length - 1)) };
+};
+const writeSession = (session) => {
+  const s = readStore();
+  s.session = session;
+  clearTimeout(saveTimer);
+  try { fs.writeFileSync(storeFile(), JSON.stringify(s)); } catch { /* read-only profile */ }
+};
+
+/* The chat's models, for the bar's picker (client-preload.cjs browserModels). */
+const modelsFor = new WeakMap();
+export function setBrowserModels(host, value) {
+  const models = (Array.isArray(value?.models) ? value.models : []).map(String).filter(Boolean).slice(0, 300);
+  modelsFor.set(host, { models, selected: String(value?.selected || '') });
+  const open = embedded.get(host);
+  if (open && !open.closed) open.refresh();
+}
+
+/** Brings back the pages that were open when the app was last closed. */
+export function restoreInAppBrowser(host, { background } = {}) {
+  if (!host || host.isDestroyed()) return null;
+  const open = embedded.get(host);
+  if (open && !open.closed) return open;
+  const saved = sessionOf(readStore());
+  if (!saved.open) return null;
+  const b = embed(host, background);
+  embedded.set(host, b);
+  b.restore(saved);
+  return b;
+}
+
 /** Opens `url` over the chat in `parent`, in a new tab of the browser already open there. */
 export function openInAppBrowser(url, { parent, background } = {}) {
   if (!web(url)) return null;
@@ -179,7 +216,11 @@ export function openInAppBrowser(url, { parent, background } = {}) {
   if (open && !open.closed) { open.openTab(url); open.reveal(); return open; }
   const b = embed(host, background);
   embedded.set(host, b);
-  b.openTab(url);
+  // The pages from last time come back beside the new one.
+  const saved = sessionOf(readStore());
+  if (saved.tabs.length) b.restore(saved);
+  const same = b.tabs.find(t => t.url === url);
+  if (same) b.command('selectTab', same.id); else b.openTab(url);
   return b;
 }
 
@@ -198,8 +239,21 @@ function embed(host, background) {
   let panel = false;
   let findResult = null;
   let asking = false;
+  let modelMenu = false;
 
   const site = () => active?.view.webContents;
+  let restoring = false;
+  const saveSession = (open = true) => {
+    if (restoring) return;
+    const urls = tabs.map(t => t.view.webContents.getURL() || t.url).filter(web);
+    writeSession({ open: open && urls.length > 0, tabs: urls, active: Math.max(0, tabs.indexOf(active)) });
+  };
+  b.restore = (saved) => {
+    restoring = true;
+    try { for (const url of saved.tabs) b.openTab(url); } finally { restoring = false; }
+    if (tabs[saved.active]) select(tabs[saved.active]);
+    saveSession();
+  };
   const navOf = (wc) => wc.navigationHistory;
   const canBack = (wc) => !!wc && navOf(wc).canGoBack();
   const canForward = (wc) => !!wc && navOf(wc).canGoForward();
@@ -215,7 +269,7 @@ function embed(host, background) {
     const top = (host.isFullScreen() ? 0 : TITLE) + shift;
     const pw = pageWidth(w);
     const bh = barHeight();
-    bar.setBounds({ x: 0, y: top, width: pw, height: panel ? Math.max(bh, h - top) : bh });
+    bar.setBounds({ x: 0, y: top, width: pw, height: panel || modelMenu ? Math.max(bh, h - top) : bh });
     for (const t of tabs) {
       if (t === active) t.view.setBounds({ x: 0, y: top + bh, width: pw, height: Math.max(0, h - top - bh) });
       else t.view.setBounds({ x: 0, y: top + bh, width: 0, height: 0 });
@@ -257,6 +311,7 @@ function embed(host, background) {
       tabs: tabs.map(t => ({ id: t.id, title: t.view.webContents.getTitle() || t.view.webContents.getURL() || tr('새 탭', 'New tab'), loading: t.view.webContents.isLoading(), favicon: t.favicon || '' })),
       active: active?.id || 0,
       colors, embedded: true, docked, findOpen, findResult, panel, asking,
+      models: modelsFor.get(host)?.models || [], model: modelsFor.get(host)?.selected || '',
     });
   };
   const sendLists = () => {
@@ -271,6 +326,7 @@ function embed(host, background) {
     if (!tab || b.closed) return;
     if (active && active !== tab) active.view.webContents.stopFindInPage('clearSelection');
     active = tab;
+    saveSession();
     findResult = null;
     // The active page on top of the hidden ones, the bar on top of all.
     host.contentView.addChildView(tab.view);
@@ -285,7 +341,8 @@ function embed(host, background) {
     tabs.splice(i, 1);
     try { host.contentView.removeChildView(tab.view); } catch { /* gone */ }
     if (!tab.view.webContents.isDestroyed()) tab.view.webContents.close();
-    if (!tabs.length) { b.close(); return; }
+    if (!tabs.length) { saveSession(false); b.close(); return; }
+    saveSession();
     if (active === tab) select(tabs[Math.min(i, tabs.length - 1)]);
     else sendState();
   };
@@ -341,7 +398,7 @@ function embed(host, background) {
   b.openTab = (url = START) => {
     const view = new WebContentsView({ webPreferences: { session: siteSession(), backgroundThrottling: false, contextIsolation: true, nodeIntegration: false, sandbox: true } });
     view.setBackgroundColor(colors.bg);
-    const tab = { id: nextId++, view, favicon: '' };
+    const tab = { id: nextId++, view, favicon: '', url };
     tabs.push(tab);
     host.contentView.addChildView(view);
     const wc = view.webContents;
@@ -351,7 +408,7 @@ function embed(host, background) {
       s.history = addVisit(s.history, { url: wc.getURL(), title: wc.getTitle() });
       saveStore(); sendState();
     };
-    wc.on('did-navigate', () => { tab.favicon = ''; visited(); });
+    wc.on('did-navigate', () => { tab.favicon = ''; tab.url = wc.getURL(); visited(); saveSession(); });
     wc.on('page-title-updated', visited);
     wc.on('page-favicon-updated', (_e, icons) => { tab.favicon = (icons || []).find(web) || ''; sendState(); });
     // A pop-up opens as a new tab; anything not http(s) is refused.
@@ -449,6 +506,15 @@ function embed(host, background) {
       void ask(value, { selection: opts.mode === 'selection', image: opts.mode === 'image' && web(opts.src) ? opts.src : null });
     }
     else if (action === 'quick' && typeof value === 'string' && QUICK[value]) void ask(QUICK[value]());
+    else if (action === 'modelMenu') { modelMenu = !!value; layout(); }
+    else if (action === 'model' && typeof value === 'string') {
+      const client = host.clientContents;
+      if ((modelsFor.get(host)?.models || []).includes(value) && client && !client.isDestroyed()) {
+        client.send('client:action', { type: 'browser-model', model: value });
+        modelsFor.set(host, { ...modelsFor.get(host), selected: value });
+        sendState();
+      }
+    }
     else if (action === 'dock') { docked = !docked; layout(); sendState(); }
     else if (action === 'newTab') { b.openTab(); toBar('browser:focusAddress'); }
     else if (action === 'selectTab') select(tabs.find(t => t.id === Number(value)));
@@ -474,8 +540,11 @@ function embed(host, background) {
   ipcMain.on('browser:action', command);
   ipcMain.on('browser:ready', ready);
 
-  b.close = () => {
+  b.close = ({ keepOpen = false } = {}) => {
     if (b.closed) return;
+    // Closed by the reader: the pages are kept for next time, but it does not
+    // reopen by itself. Closed with the app: it does.
+    if (tabs.length) saveSession(keepOpen === true);
     b.closed = true;
     clearInterval(anim);
     ipcMain.removeListener('browser:action', command);
@@ -486,6 +555,7 @@ function embed(host, background) {
         if (host.clientContents && !host.clientContents.isDestroyed()) host.clientContents.send('client:action', { type: 'browser-dock', docked: false });
       }
       for (const ev of events) host.removeListener(ev, layout);
+      host.removeListener('close', keepForNext);
       try { host.contentView.removeChildView(bar); } catch { /* gone */ }
       for (const t of tabs) { try { host.contentView.removeChildView(t.view); } catch { /* gone */ } }
       host.clientContents?.focus?.();
@@ -494,7 +564,10 @@ function embed(host, background) {
     if (!bar.webContents.isDestroyed()) bar.webContents.close();
     if (embedded.get(host) === b) embedded.delete(host);
   };
-  host.once('closed', b.close);
+  const keepForNext = () => { if (!b.closed && tabs.length) saveSession(true); };
+  host.on('close', keepForNext);
+  host.once('closed', () => b.close({ keepOpen: true }));
+  b.refresh = () => sendState();
   // For the main process (and its smoke test): the bar's commands, by name.
   b.command = (action, value, extra) => command(null, action, value, extra);
   b.tabs = tabs;

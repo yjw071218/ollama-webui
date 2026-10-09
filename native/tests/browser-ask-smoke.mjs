@@ -6,6 +6,7 @@ import assert from 'node:assert/strict';
 import os from 'node:os';
 import path from 'node:path';
 import fs from 'node:fs';
+app.on('window-all-closed', () => {}); // the test closes the window to mimic quitting
 app.setPath('userData', fs.mkdtempSync(path.join(os.tmpdir(), 'inapp-browser-')));
 const png = nativeImage.createFromBitmap(Buffer.alloc(200 * 200 * 4, 0x80), { width: 200, height: 200 }).toPNG();
 const long = 'LONGTEXT '.repeat(3000);
@@ -20,7 +21,7 @@ const until = async (f, ms = 8000) => { const end = Date.now() + ms; while (Date
 app.whenReady().then(async () => {
   await new Promise(r => server.listen(0, '127.0.0.1', r));
   const origin = `http://127.0.0.1:${server.address().port}`;
-  const { openInAppBrowser } = await import('../desktop/browser.mjs');
+  const { openInAppBrowser, setBrowserModels, restoreInAppBrowser, sessionOf } = await import('../desktop/browser.mjs');
   let host;
   try {
     host = new BrowserWindow({ show: true, x: -3000, y: 0, width: 1300, height: 900 });
@@ -60,7 +61,29 @@ app.whenReady().then(async () => {
     assert.equal(errors.length, 0, errors.join(' | '));
     b.command('newTab'); assert.equal(b.tabs.length, 2, 'new tab');
     b.command('closeTab', 2); assert.equal(b.tabs.length, 1, 'tab closed');
+    setBrowserModels(host, { models: ['llama3', 'qwen3'], selected: 'llama3' });
+    assert.ok(await until(async () => (await b.bar.webContents.executeJavaScript('document.querySelector("#model-name").textContent')) === 'llama3'), 'bar shows the model');
+    b.command('model', 'qwen3');
+    assert.ok(sent.some(([, x]) => x.type === 'browser-model' && x.model === 'qwen3'), 'model choice reaches the chat');
+    b.command('model', 'not-installed');
+    assert.ok(!sent.some(([, x]) => x.model === 'not-installed'), 'unknown model refused');
+    b.command('newTab');
+    await until(() => b.tabs.length === 2);
+    b.tabs[1].view.webContents.loadURL(origin + '/second');
+    assert.ok(await until(() => b.tabs[1].view.webContents.getURL().endsWith('/second')), 'second page');
     b.command('close'); assert.equal(host.clientLeft, 0, 'chat restored');
+    const read = () => sessionOf(JSON.parse(fs.readFileSync(file, 'utf8')));
+    assert.equal(read().tabs.length, 2, 'both pages kept after closing'); assert.equal(read().open, false);
+    const again = openInAppBrowser(origin + '/third', { parent: host });
+    assert.equal(again.tabs.length, 3, 'old pages come back with the new one');
+    host.close();
+    assert.ok(await until(() => host.isDestroyed()), 'app window closed');
+    assert.equal(read().open, true, 'kept open for the next launch'); assert.equal(read().tabs.length, 3);
+    host = new BrowserWindow({ show: true, x: -3000, y: 0, width: 1300, height: 900 });
+    host.clientContents = { isDestroyed: () => false, send() {}, focus() {} };
+    const restored = restoreInAppBrowser(host);
+    assert.equal(restored?.tabs.length, 3, 'pages restored after restart');
+    assert.ok(await until(() => restored.tabs.every(t => t.view.webContents.getURL().startsWith(origin))), 'restored pages load');
     assert.ok(sent.some(([, x]) => x.type === 'browser-dock' && x.docked === false), 'side panel comes back');
     console.log('PASS in-app browser: whole page + images to AI, dock, find, zoom, bookmarks, history, tabs');
   } catch (e) { console.error(e); process.exitCode = 1; }

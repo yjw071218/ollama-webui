@@ -30,6 +30,7 @@ export const fileOf = ({ name, type, data }) => {
 export const dispatchNative = (request, handlers) => {
   if (!request || typeof request !== 'object') return false;
   if (request.type === 'new-chat') { handlers.newChat?.(); return true; }
+  if (request.type === 'browser-model') { if (typeof request.model === 'string' && request.model) handlers.browserModel?.(request.model); return true; }
   if (request.type === 'browser-dock') { handlers.browserDock?.(!!request.docked); return true; }
   if (request.type === 'ask') {
     const text = typeof request.text === 'string' ? request.text.trim() : '';

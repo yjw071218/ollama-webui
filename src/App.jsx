@@ -1548,6 +1548,12 @@ function App() {
    * conversations, or the studio. Kept here rather than in the sidebar because
    * the main area is what actually changes. */
   const [sidebarPlace, setSidebarPlaceNow] = useState('home');
+  /* Docked beside the in-app browser (native/desktop/browser.mjs): the chat
+     is the only place, the side panel stays shut, and the header keeps only
+     the model picker and a new-chat button. */
+  const [browserDocked, setBrowserDocked] = useState(false);
+  const browserDockedRef = useRef(false);
+  useEffect(() => { if (browserDocked && isSidebarOpen) setIsSidebarOpen(false); }, [browserDocked, isSidebarOpen]);
   /* Moving between places cross-fades through the View Transitions API where
    * the browser has it; elsewhere, and under reduced motion, it just switches.
    * flushSync makes React paint the new place inside the transition's
@@ -1556,11 +1562,13 @@ function App() {
     const reduced = document.documentElement.dataset.motion === 'reduced'
       || (document.documentElement.dataset.motion !== 'full'
         && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
+    if (browserDockedRef.current && (typeof next === 'function' ? next(sidebarPlaceRef.current) : next) !== 'home') return;
     if (!document.startViewTransition || reduced || document.hidden) {
       setSidebarPlaceNow(next);
       return;
     }
     const target = typeof next === 'function' ? next(sidebarPlaceRef.current) : next;
+    if (browserDockedRef.current && target !== 'home') return;
     if (target === sidebarPlaceRef.current) return;
     try {
       document.startViewTransition(() => { flushSync(() => setSidebarPlaceNow(target)); });
@@ -9702,15 +9710,19 @@ function App() {
   const sidebarBeforeDockRef = useRef(null);
   nativeActions.current = {
     newChat: () => { createNewSession(); setTimeout(() => textareaRef.current?.focus(), 60); },
+    browserModel: (model) => { if (models.some(m => m.name === model)) { setSelectedModel(model); noteHandPick(model); } },
     /* A question asked from the in-app browser (native/desktop/browser.mjs),
        with the page it was asked about. Sent straight away unless an answer
        is still being written; then it waits in the composer. */
     /* Docked beside the in-app browser the chat is narrow: the side panel
        goes while it is docked and comes back as it was afterwards. */
     browserDock: (docked) => {
+      browserDockedRef.current = !!docked;
+      setBrowserDocked(!!docked);
       if (docked) {
         if (sidebarBeforeDockRef.current === null) sidebarBeforeDockRef.current = isSidebarOpen;
         setIsSidebarOpen(false);
+        setSidebarPlaceNow('home');
       } else if (sidebarBeforeDockRef.current !== null) {
         // After the width change has settled, so the breakpoint rule does not undo it.
         const was = sidebarBeforeDockRef.current;
@@ -9748,7 +9760,16 @@ function App() {
     share: (payload) => nativeActions.current.share(payload),
     ask: (payload) => nativeActions.current.ask(payload),
     browserDock: (docked) => nativeActions.current.browserDock(docked),
+    // The model picked in the in-app browser's bar (native/desktop/browser.mjs).
+    browserModel: (model) => nativeActions.current.browserModel?.(model),
   }), []);
+  /* What the in-app browser's model picker offers: the same list as the
+     header's, and which one is in use. */
+  useEffect(() => {
+    const tell = window.ollamaNative?.browserModels;
+    if (typeof tell !== 'function') return;
+    tell({ models: models.slice(0, 300).map(m => String(m.name)), selected: String(selectedModel || '') });
+  }, [models, selectedModel]);
   // The apps keep the screen on (Android) or show progress on the taskbar
   // (Windows) while an answer is being written.
   useEffect(() => { tellNativeBusy(isGenerating); }, [isGenerating]);
@@ -15298,7 +15319,17 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           <div className="dropzone-overlay is-chat-wide">{t('composer.dropFiles')}</div>
         )}
         {/* Top Navigation */}
-        <div className="main-header" ref={measureHeader}>
+        <div className={`main-header${browserDocked ? ' is-browser-docked' : ''}`} ref={measureHeader}>
+          {browserDocked ? (
+            <button
+              className="icon-btn bordered browser-dock-new"
+              title={t('sidebar.newChat')}
+              aria-label={t('sidebar.newChat')}
+              onClick={() => { createNewSession(); setTimeout(() => textareaRef.current?.focus(), 60); haptic('light'); }}
+            >
+              <Plus size={16} />
+            </button>
+          ) : (
           <button
             className="toggle-sidebar"
             aria-label={isSidebarOpen ? t('sidebar.close') : t('sidebar.open')}
@@ -15307,7 +15338,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           >
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
           </button>
-          
+          )}
+
           <div className="header-tools">
             {showSystemStrip && <SystemStrip onOpen={() => setShowSystemMonitor(true)} inHeader />}
 
@@ -15411,7 +15443,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             {/* Generating a picture is a thing people come to the app to do
                 rather than a setting they occasionally check, so it gets its own
                 way in rather than living three clicks inside the monitor. */}
-            <button
+            {!browserDocked && <button
               className={`icon-btn bordered ${sidebarPlace === 'studio' ? 'toggled' : ''}`}
               title={t('studio.title')}
               onClick={() => {
@@ -15420,10 +15452,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               }}
             >
               <Wand2 size={16} />
-            </button>
+            </button>}
 
             {/* Running and trying a project on this PC (Windows app only). */}
-            {runnerAvailable() && (
+            {runnerAvailable() && !browserDocked && (
               <button
                 className={`icon-btn bordered ${sidebarPlace === 'runner' ? 'toggled' : ''}`}
                 title={t('runner.place')}

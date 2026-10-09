@@ -46,6 +46,18 @@ button.close{color:var(--muted);margin-inline-end:4px}button.close:hover{color:v
 body.asking .ai-badge{animation:pulse 1.2s ease-in-out infinite}
 @keyframes pulse{50%{opacity:.45}}
 
+/* model picker */
+.model{display:flex;align-items:center;gap:4px;max-width:200px;height:28px;padding:0 10px;border:1px solid var(--line);border-radius:999px;color:var(--fg)}
+.model[hidden]{display:none}
+#model-name{min-width:0;overflow:hidden;text-overflow:ellipsis}
+.caret{color:var(--muted);font-size:10px}
+#model-menu{position:fixed;z-index:4;width:290px;max-height:min(360px,calc(100% - 120px));margin:0;padding:4px;list-style:none;overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px #0008;animation:tab-in .15s ease both;scrollbar-width:thin}
+#model-menu[hidden]{display:none}
+#model-menu li{padding:7px 10px;border-radius:8px;cursor:pointer;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#model-menu li:hover{background:var(--hover)}
+#model-menu li.on{background:color-mix(in srgb,var(--accent) 22%,transparent);color:var(--fg)}
+#model-menu li.on::before{content:'✓ ';color:var(--accent)}
+
 /* find */
 #findrow{height:36px;display:flex;align-items:center;gap:4px;padding:0 8px 6px;animation:tab-in .15s ease both}
 #findrow[hidden]{display:none}
