@@ -144,6 +144,7 @@ export function createRunner({ valid, owner, send, allowed, allow, openBrowser }
       }
       const keep = [...windows.values()].filter(w => w.id === p.id).map(w => w.hwnd);
       const found = await win32.scan(p.child.pid, keep);
+      if (p.finished || p.stopping) continue;
       for (const w of found) {
         const known = windows.get(w.hwnd);
         // Its own size is remembered from before it was taken in; afterwards the client rect is ours.
@@ -251,6 +252,8 @@ export function createRunner({ valid, owner, send, allowed, allow, openBrowser }
       let text = decoder.decode(buf, { stream: true });
       if (text.length > MAX_CHUNK) text = text.slice(-MAX_CHUNK);
       send('runner:output', { id, stream, text });
+      // Buffered output may arrive after Stop; it must not reopen a preview.
+      if (p.finished || p.stopping) return;
       for (const m of text.replace(ANSI, '').matchAll(URL_RE)) {
         const url = m[0].replace(/0\.0\.0\.0|\[::1?\]/, 'localhost').replace(/[.,;:]+$/, '');
         if (!p.urls.has(url)) { p.urls.add(url); send('runner:url', { id, url }); }

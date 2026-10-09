@@ -24,6 +24,7 @@ import {
 import { panelKey, legacyWidth } from './clientKind.js';
 import { listenNative, tellNativeBusy } from './nativeEvents.js';
 import { noteAnchor, restoreAnchor } from './viewAnchor.js';
+import { observeConversationTail } from './conversationTail.js';
 import { fitTextarea } from './fitTextarea.js';
 import { usePersistedNumber, ResizeHandle, Popover, AnchoredMenu, Collapsible, Transition, SettingToggle, Switch, clamp, useDialog } from './ui.jsx';
 import { I18nProvider, useI18n, LANGUAGES, promptLanguageName } from './i18n.jsx';
@@ -2992,11 +2993,14 @@ function App() {
      there, or a jump to an older message (search, outline, keys, gallery)
      brings them back. Starred-only and search show every match. */
   const HISTORY_WINDOW = 40, HISTORY_WINDOW_FROM = 60;
+  const scrollMemoryRef = useRef(new Map());
+  const restoringPlaceRef = useRef(false);
   const [historyWindow, setHistoryWindow] = useState({ chat: null, from: Infinity });
   const historyStart = (() => {
     if (starredOnly || chatSearchQuery.trim() || messages.length <= HISTORY_WINDOW_FROM) return 0;
     let from = Math.max(0, messages.length - HISTORY_WINDOW);
     if (historyWindow.chat === currentSessionId) from = Math.min(from, historyWindow.from);
+    else from = Math.min(from, scrollMemoryRef.current.get(currentSessionId)?.from ?? Infinity);
     // From a question, so no answer is shown without what it answered (and no
     // continuation row loses the row it is folded into).
     while (from > 0 && messages[from]?.role !== 'user') from--;
@@ -4539,15 +4543,8 @@ function App() {
     try { localStorage.setItem(DRAFTS_KEY, JSON.stringify(drafts)); } catch (e) { /* quota */ }
   };
 
-  // Where the reader was in each chat. `atBottom` rather than a number for the
-  // commonest case: a chat read to the end should reopen at the end even
-  // though the answer has grown since, and a stored pixel offset would put it
-  // slightly above wherever the end now is.
-  const scrollMemoryRef = useRef(new Map());
-  const restorePlaceRef = useRef(null);
-
   /**
-   * Swap one chat's draft and reading position for another's.
+   * Swap one chat's draft for another's.
    *
    * Driven by an effect on `currentSessionId` rather than by the click
    * handlers, because a chat can also change from the command palette, from a
@@ -4562,19 +4559,6 @@ function App() {
     previousSessionRef.current = currentSessionId;
 
     writeDraft(leaving, inputRef.current);
-    // The place is not saved here. By the time this effect runs React has
-    // already rendered the *new* chat, so the scroll container is showing that
-    // one and reading its offset would file the new chat's position under the
-    // old chat's id. It is recorded continuously in `handleScroll` instead,
-    // where the position and the chat it belongs to are still the same thing.
-
-    // Where to land in the chat being opened. Decided here, applied by the
-    // effect below once the messages have actually been laid out -- the height
-    // to scroll within does not exist yet at this point.
-    const place = scrollMemoryRef.current.get(currentSessionId);
-    isAutoScrollRef.current = !place || place.atBottom;
-    restorePlaceRef.current = (place && !place.atBottom) ? place.top : null;
-
     const draft = readDrafts()[currentSessionId] || '';
     setInput(draft);
     // The textarea keeps whatever height it was given by hand; it only resizes
@@ -4947,32 +4931,6 @@ function App() {
   // how far through the *previous* conversation the reader had got.
   useEffect(() => { setScrollProgress(0); setShowTopBtn(false); scrollFlagsRef.current.top = false; }, [currentSessionId, setScrollProgress]);
 
-  /**
-   * Put the reader back where they were in this chat.
-   *
-   * Two frames, not one. The first gets the messages into the document; the
-   * second is after the browser has laid them out, which is when the container
-   * finally has something to scroll within. Restoring before that scrolls to
-   * the bottom of a box that is still one screen tall.
-   *
-   * Marked as this code's own scroll, or the scroll handler reads the landing
-   * position as the reader choosing to be there and turns following off for a
-   * chat they have not touched.
-   */
-  useEffect(() => {
-    if (restorePlaceRef.current == null) return undefined;
-    const top = restorePlaceRef.current;
-    restorePlaceRef.current = null;
-    const frame = requestAnimationFrame(() => requestAnimationFrame(() => {
-      const area = scrollAreaRef.current;
-      if (!area) return;
-      selfScrollRef.current = true;
-      area.scrollTop = Math.min(top, area.scrollHeight - area.clientHeight);
-      requestAnimationFrame(() => { selfScrollRef.current = false; });
-    }));
-    return () => cancelAnimationFrame(frame);
-  }, [currentSessionId]);
-
   // Logs & Refs
   const [copiedIndex, setCopiedIndex] = useState(null);
   const [logs, setLogs] = useState([]);
@@ -4985,6 +4943,7 @@ function App() {
   // Set while a scroll this code caused is still on its way to the scroll
   // handler, so that scroll is not mistaken for the reader's own.
   const selfScrollRef = useRef(false);
+  const scrollGeometryRef = useRef({ height: 0, viewport: 0 });
   const textareaRef = useRef(null);
   const abortControllerRef = useRef(null);
   // Empty answers asked for again in a row (handleSend), and the most it tries.
@@ -8510,8 +8469,40 @@ function App() {
     selfScrollRef.current = true;
     if (smooth) area.scrollTo({ top: area.scrollHeight, behavior: 'smooth' });
     else area.scrollTop = area.scrollHeight;
+    scrollGeometryRef.current = { height: area.scrollHeight, viewport: area.clientHeight };
     requestAnimationFrame(() => { selfScrollRef.current = false; });
   }, []);
+
+  useLayoutEffect(() => {
+    const place = scrollMemoryRef.current.get(currentSessionId);
+    isAutoScrollRef.current = !place || place.atBottom;
+    restoringPlaceRef.current = true;
+    let frame = 0, clear = 0;
+    const land = () => {
+      const area = scrollAreaRef.current;
+      if (!area) return;
+      if (isAutoScrollRef.current) followTail();
+      else {
+        selfScrollRef.current = true;
+        area.scrollTop = Math.max(0, Math.min(place?.top || 0, area.scrollHeight - area.clientHeight));
+        scrollGeometryRef.current = { height: area.scrollHeight, viewport: area.clientHeight };
+      }
+    };
+    land();
+    frame = requestAnimationFrame(() => {
+      frame = requestAnimationFrame(() => {
+        land();
+        clear = requestAnimationFrame(() => { restoringPlaceRef.current = false; selfScrollRef.current = false; });
+      });
+    });
+    return () => { cancelAnimationFrame(frame); cancelAnimationFrame(clear); restoringPlaceRef.current = false; };
+  }, [currentSessionId, followTail]);
+
+  useEffect(() => {
+    const area = scrollAreaRef.current;
+    if (!area) return undefined;
+    return observeConversationTail(area, () => isAutoScrollRef.current, () => followTail());
+  }, [currentSessionId, messages.length, followTail]);
 
   const scrollToBottom = () => {
     isAutoScrollRef.current = true;
@@ -9002,9 +8993,9 @@ function App() {
 
   useEffect(() => {
     if (!isAutoScrollRef.current) return;
-    // Smooth scrolling on every streamed token fights itself and stutters;
-    // jump instantly while generating, animate only for finished turns.
-    followTail(!isGenerating);
+    // Automatic layout updates must not interrupt a smooth scroll mid-flight.
+    // Only the explicit jump-to-bottom button asks for smooth scrolling.
+    followTail();
   }, [messages, isGenerating, followTail]);
 
   useEffect(() => {
@@ -9024,7 +9015,9 @@ function App() {
 
     // A scroll this code caused says nothing about where the reader wants to
     // be, and reading it as though it did is what made following inescapable.
-    if (!selfScrollRef.current) {
+    const resized = scrollGeometryRef.current.height !== scrollHeight || scrollGeometryRef.current.viewport !== clientHeight;
+    scrollGeometryRef.current = { height: scrollHeight, viewport: clientHeight };
+    if (!selfScrollRef.current && !restoringPlaceRef.current && !resized) {
       isAutoScrollRef.current = distanceFromBottom <= STICK_SLACK;
     }
     // What is at the top of the view now (see `keepViewAnchor`).
@@ -9052,17 +9045,10 @@ function App() {
     const topBtn = scrollTop > clientHeight;
     if (scrollFlagsRef.current.top !== topBtn) { scrollFlagsRef.current.top = topBtn; setShowTopBtn(topBtn); }
 
-    // Where the reader is in this chat, remembered as they go. See the effect
-    // that swaps drafts for why it cannot be captured at the moment of
-    // leaving: by then the container is already showing the chat being opened.
-    //
-    // `atBottom` rather than the number, for the commonest case: a chat read
-    // to the end should reopen at the end even though the answer has grown
-    // since, and a stored offset would land slightly above wherever the end
-    // now is.
-    scrollMemoryRef.current.set(currentSessionIdRef.current, {
+    if (!restoringPlaceRef.current) scrollMemoryRef.current.set(currentSessionIdRef.current, {
       top: scrollTop,
-      atBottom: distanceFromBottom <= STICK_SLACK,
+      atBottom: isAutoScrollRef.current,
+      from: historyStartRef.current,
     });
   }, [setScrollProgress, queueViewAnchor]);
 

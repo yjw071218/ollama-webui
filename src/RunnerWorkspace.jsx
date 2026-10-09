@@ -1,4 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { createFramePool } from './runnerFrames.js';
+import { followRunnerOutput } from './runnerOutput.js';
+import React, { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from 'react';
 import { Play, Square, FolderOpen, Folder, RefreshCcw, Trash2, Globe, ExternalLink, Terminal, X, PanelRightOpen, PanelRightClose, CornerDownLeft, Eraser, Maximize, Maximize2, Minimize2, AppWindow, LayoutGrid, SquareArrowOutUpRight, SquareArrowDownLeft, Columns3, Square as SquareIcon, Check, ChevronDown, EyeOff, Eye, Copy as CopyIcon } from 'lucide-react';
 import { ansiSpans, lineTone } from './terminalText.js';
 
@@ -92,7 +94,7 @@ function NativeSlot({ hwnd, active, fill, style, z = 0 }) {
   );
 }
 
-function PreviewStage({ screen, frameKey, viewport, active, onPopIn, z = 0 }) {
+function PreviewStage({ screen, framePool, frameKey, viewport, active, onPopIn, z = 0 }) {
   const stageRef = useRef(null);
   const [box, setBox] = useState({ w: 0, h: 0 });
   useEffect(() => {
@@ -122,6 +124,11 @@ function PreviewStage({ screen, frameKey, viewport, active, onPopIn, z = 0 }) {
     }
   }
   if (native && !boxed && screen.w && screen.h) note = `${screen.w}×${screen.h}`;
+  const frameHost = useRef(null);
+  useLayoutEffect(() => {
+    if (native || !frameHost.current) return undefined;
+    return framePool.attach(frameHost.current, screen.url, frameKey, style);
+  }, [native, screen.url, framePool, frameKey, JSON.stringify(style)]);
   const goFull = () => {
     const el = stageRef.current?.querySelector('iframe');
     el?.requestFullscreen?.().catch(() => {});
@@ -139,9 +146,7 @@ function PreviewStage({ screen, frameKey, viewport, active, onPopIn, z = 0 }) {
           )
           : <NativeSlot hwnd={screen.hwnd} active={active} fill={v.id === 'stretch' || boxed} style={style} z={z} />)
         : (
-          <iframe key={frameKey} className="runner-frame" src={screen.url} title="preview" style={style}
-            allow="fullscreen; autoplay; gamepad; pointer-lock; clipboard-read; clipboard-write; accelerometer; gyroscope; xr-spatial-tracking"
-            allowFullScreen />
+          <div ref={frameHost} className="runner-frame-host" />
         )}
       {note && <span className="runner-stage-note">{note}</span>}
       {!native && <button type="button" className="runner-icon runner-stage-full" title={L('전체 화면 (Esc로 나가기)', 'Full screen (Esc to leave)')} onClick={goFull}><Maximize size={14} /></button>}
@@ -307,7 +312,7 @@ function FreeDesk({ screens, focused, onFocus, render }) {
   );
 }
 
-const sortUrls = (list) => [...list].sort((a, b) => urlRank(a) - urlRank(b));
+const sortUrls = (list) => [...new Set([...list].map(value => { try { return new URL(value).href; } catch { return value; } }))].sort((a, b) => urlRank(a) - urlRank(b));
 const MAX_OUTPUT = 400_000;
 const ko = /^ko\b/i.test(document.documentElement.lang || navigator.language || '');
 const L = (k, e) => (ko ? k : e);
@@ -328,14 +333,17 @@ const appendOutput = (prev, text) => {
 
 const OutputView = React.memo(function OutputView({ text }) {
   const ref = useRef(null);
-  const stick = useRef(true);
+  const follower = useRef(null);
   const lines = useMemo(() => text.split('\n').slice(-3000), [text]);
-  useEffect(() => { const el = ref.current; if (el && stick.current) el.scrollTop = el.scrollHeight; }, [lines]);
+  useLayoutEffect(() => {
+    follower.current = followRunnerOutput(ref.current);
+    return () => { follower.current.destroy(); follower.current = null; };
+  }, []);
+  useLayoutEffect(() => { follower.current?.update(); }, [lines]);
   return (
     <pre
       ref={ref}
       className="runner-output"
-      onScroll={(e) => { const el = e.currentTarget; stick.current = el.scrollHeight - el.scrollTop - el.clientHeight < 40; }}
     >
       {lines.map((line, i) => (
         <span key={i} className={`runner-line tone-${lineTone(line) || 'plain'}`}>
@@ -351,6 +359,8 @@ const OutputView = React.memo(function OutputView({ text }) {
 
 export default function RunnerWorkspace({ open, initialFolder = '' }) {
   const api = window.ollamaNative?.runner;
+  const framePool = useMemo(() => createFramePool(), []);
+  useEffect(() => () => framePool.destroy(), [framePool]);
   const [folder, setFolder] = useState(() => initialFolder || loadRecent()[0] || '');
   const [project, setProject] = useState(null);
   const [error, setError] = useState('');
@@ -363,7 +373,7 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
   const [selected, setSelected] = useState(null);
   const [stdin, setStdin] = useState('');
   const [preview, setPreview] = useState(null);    // url shown on the right
-  const [previewKey, setPreviewKey] = useState(0);
+  const [previewKey, setPreviewKey] = useState({});
   const [viewport, setViewport] = useState(() => { try { return localStorage.getItem(VIEWPORT_KEY) || 'fit'; } catch { return 'fit'; } });
   const [wide, setWide] = useState(false); // the preview alone, across the whole workspace
   // One screen, several side by side, or a desktop of free windows.
@@ -442,7 +452,7 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
     const offs = [
       api.on('output', ({ id, text }) => queueOutput(id, text)),
       api.on('exit', ({ id, code }) => {
-        setProcs(prev => prev.map(p => (p.id === id ? { ...p, exited: true, code } : p)));
+        setProcs(prev => prev.map(p => (p.id === id ? { ...p, exited: true, code, urls: [], windows: [] } : p)));
         queueOutput(id, `\n\u001b[${code === 0 ? '32' : '31'}m[${L('종료', 'exited')}: ${code}]\u001b[0m\n`);
       }),
       api.on('conflict', (c) => setConflicts(prev => ({ ...prev, [c.id]: c }))),
@@ -527,13 +537,27 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
      windows their programs opened, running ones first. One project can open
      several -- a game and its editor, a server and its admin page. */
   const screens = [];
-  for (const p of [...procs].sort((a, b) => Number(a.exited) - Number(b.exited))) {
+  for (const p of procs.filter(p => !p.exited)) {
     for (const w of p.windows || []) screens.push({ key: `win:${w.hwnd}`, kind: 'app', hwnd: w.hwnd, w: w.w, h: w.h, popped: w.popped, label: w.title || L('프로그램 창', 'Window'), proc: p });
     for (const u of p.urls || []) if (!screens.some(x => x.key === u)) screens.push({ key: u, kind: 'web', url: u, label: u.replace(/^https?:\/\//, ''), proc: p });
   }
   const screenOf = (key) => screens.find(x => x.key === key)
     || (key && !key.startsWith('win:') ? { key, kind: 'web', url: key, label: key.replace(/^https?:\/\//, '') } : null);
   const shown = screenOf(preview);
+  const previousScreens = useRef(new Set());
+  useEffect(() => {
+    const live = new Set(screens.map(x => x.key));
+    const closed = previousScreens.current.has(preview) && !live.has(preview);
+    if (closed) {
+      chosePreview.current = false;
+      setPreview(screens[0]?.key || null);
+    }
+    framePool.retain(new Set([
+      ...screens.filter(x => x.kind === 'web').map(x => x.url),
+      ...(!closed && shown?.kind === 'web' ? [shown.url] : []),
+    ]));
+    previousScreens.current = live;
+  });
   const running = procs.filter(p => !p.exited).length;
   /* The address is often printed before the server answers (ComfyUI loads
      its nodes for a minute first), and the frame then shows an error page
@@ -546,7 +570,7 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
       if (stop) return;
       try {
         await fetch(preview, { mode: 'no-cors', cache: 'no-store' });
-        if (failed && !stop) setPreviewKey(k => k + 1);
+        if (failed && !stop) setPreviewKey(k => ({ ...k, [preview]: (k[preview] || 0) + 1 }));
         return;
       } catch { failed = true; }
       timer = setTimeout(probe, 1000);
@@ -687,7 +711,7 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
           <code className="runner-title">{current ? current.command : L('터미널', 'Terminal')}</code>
           <span className="runner-space" />
           {screens.filter(x => x.proc === current).map(x => (
-            <button key={x.key} type="button" className={`runner-chip ${preview === x.key ? 'is-on' : ''}`} onClick={() => { chosePreview.current = true; setPreview(x.key); setPreviewKey(k => k + 1); }} title={L('옆에서 미리보기', 'Preview beside')}>
+            <button key={x.key} type="button" className={`runner-chip ${preview === x.key ? 'is-on' : ''}`} onClick={() => { chosePreview.current = true; setPreview(x.key); setPreviewKey(k => ({ ...k, [preview]: (k[preview] || 0) + 1 })); }} title={L('옆에서 미리보기', 'Preview beside')}>
               {x.kind === 'app' ? <AppWindow size={12} /> : <Globe size={12} />} <span className="runner-chip-text">{x.label}</span>
             </button>
           ))}
@@ -698,7 +722,7 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
           </button>
         </header>
         {current
-          ? <OutputView text={outputs[current.id] || ''} />
+          ? <OutputView key={current.id} text={outputs[current.id] || ''} />
           : (
             <div className="runner-welcome">
               <Terminal size={30} />
@@ -724,11 +748,11 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
             {shown.kind === 'app'
               ? <span className="runner-url runner-url-label" title={shown.label}>{shown.label}</span>
               : <input className="runner-url" defaultValue={shown.url} key={shown.url}
-                onKeyDown={(e) => { if (e.key === 'Enter') { let v = e.currentTarget.value.trim(); if (v && !/^https?:\/\//i.test(v)) v = `http://${v}`; chosePreview.current = true; setPreview(v); setPreviewKey(k => k + 1); } }} spellCheck={false} />}
+                onKeyDown={(e) => { if (e.key === 'Enter') { let v = e.currentTarget.value.trim(); if (v && !/^https?:\/\//i.test(v)) v = `http://${v}`; chosePreview.current = true; setPreview(v); setPreviewKey(k => ({ ...k, [preview]: (k[preview] || 0) + 1 })); } }} spellCheck={false} />}
             <select className="runner-viewport" value={viewport} onChange={e => pickViewport(e.target.value)} title={L('화면 비율·해상도', 'Aspect ratio / resolution')}>
               {VIEWPORTS.map(v => <option key={v.id} value={v.id}>{v.label ? v.label() : v.id}</option>)}
             </select>
-            {shown.kind !== 'app' && <button type="button" className="runner-icon" title={L('새로고침', 'Reload')} onClick={() => setPreviewKey(k => k + 1)}><RefreshCcw size={14} /></button>}
+            {shown.kind !== 'app' && <button type="button" className="runner-icon" title={L('새로고침', 'Reload')} onClick={() => setPreviewKey(k => ({ ...k, [preview]: (k[preview] || 0) + 1 }))}><RefreshCcw size={14} /></button>}
             {screens.length > 1 && (
               <div className="runner-seg" role="radiogroup" aria-label={L('화면 배치', 'Screen layout')}>
                 {[['single', <SquareIcon size={13} key="i" />, L('하나씩', 'One')], ['tiles', <Columns3 size={13} key="i" />, L('나란히 (폭 조절)', 'Side by side')], ['free', <LayoutGrid size={13} key="i" />, L('자유 배치 (창처럼 이동·크기 조절)', 'Free windows')]].map(([id, icon, label]) => (
@@ -790,7 +814,7 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
                   </>
                 );
               }
-              const stage = <PreviewStage screen={x} frameKey={previewKey} viewport={where === 'free' ? 'stretch' : viewport} active={open && !pickerOpen} z={z} onPopIn={() => api.popout(x.hwnd, false)} />;
+              const stage = <PreviewStage framePool={framePool} screen={x} frameKey={previewKey[x.key] || 0} viewport={where === 'free' ? 'stretch' : viewport} active={open && !pickerOpen} z={z} onPopIn={() => api.popout(x.hwnd, false)} />;
               if (where === 'free') return stage;
               return (
                 <>
@@ -836,7 +860,11 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
                     ))}
                   </nav>
                 )}
-                <PreviewStage key={shown.key} screen={shown} frameKey={previewKey} viewport={viewport} active={open && !pickerOpen} onPopIn={() => api.popout(shown.hwnd, false)} />
+                {(screens.some(x => x.key === shown.key) ? screens : [...screens, shown]).map(x => (
+                  <div key={x.key} className="runner-kept-screen" style={x.key === shown.key ? undefined : { position: 'absolute', visibility: 'hidden', pointerEvents: 'none', inset: 0 }} aria-hidden={x.key !== shown.key}>
+                    <PreviewStage framePool={framePool} screen={x} frameKey={previewKey[x.key] || 0} viewport={viewport} active={open && !pickerOpen && x.key === shown.key} onPopIn={() => api.popout(x.hwnd, false)} />
+                  </div>
+                ))}
                 {tray}
               </>
             );

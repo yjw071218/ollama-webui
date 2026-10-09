@@ -264,7 +264,8 @@ export const PictureGallery = ({ sessions, studioJobs, thumbOf, t, onGoTo, onAtt
                 onOpen={(opened) => (picking ? togglePicked(opened.key) : setViewing(opened.key))}>
                 {item.video
                   ? <video src={item.src} muted playsInline preload="metadata" />
-                  : <img src={item.src} alt={item.prompt} loading="lazy" decoding="async" />}
+                  : <img src={item.src} alt="" aria-label={item.prompt || '이미지'} loading="lazy" decoding="async"
+                      onError={e => { const img = e.currentTarget; if (img.dataset.fallback !== item.full && item.full !== item.src) { img.dataset.fallback = item.full; img.src = item.full; } }} />}
                 <span className="picture-gallery-badge">
                   {item.video ? <Film size={11} /> : item.source === 'studio' ? <Wand2 size={11} /> : <MessageSquare size={11} />}
                 </span>

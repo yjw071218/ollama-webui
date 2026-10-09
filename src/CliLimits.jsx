@@ -1,3 +1,4 @@
+import { settleResets } from './limitResets.js';
 import React, { useEffect, useLayoutEffect, useRef, useState } from 'react';
 import { createPortal } from 'react-dom';
 import { Gauge } from 'lucide-react';
@@ -97,6 +98,7 @@ export const LimitBars = ({ limits, cli = '', now: given }) => {
   // counts down in seconds.
   const [own, setOwn] = useState(Date.now());
   const now = given ?? own;
+  limits = limits ? settleResets(limits, now) : limits;
   const near = given == null && (limits?.windows || []).some(w => Number.isFinite(w?.resetsAt) && w.resetsAt - own < 90_000 && w.resetsAt > own - 5000);
   useEffect(() => {
     if (given != null) return undefined;
@@ -327,12 +329,15 @@ export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
   const fast = soonest - now < 90_000;
   useEffect(() => {
     if (!cli) return undefined;
-    const timer = setInterval(() => { if (!hidden()) setNow(Date.now()); }, fast ? 1000 : 30_000);
-    return () => clearInterval(timer);
+    const tick = () => { if (!hidden()) setNow(Date.now()); };
+    const timer = setInterval(tick, fast ? 1000 : 30_000);
+    document.addEventListener('visibilitychange', tick);
+    window.addEventListener('focus', tick);
+    return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick); window.removeEventListener('focus', tick); };
   }, [cli, fast]);
   if (!cli || !all) return null;
 
-  const limits = cli === 'agy' ? agyQuotaForModel(all[cli], model, now) : all[cli];
+  const limits = cli === 'agy' ? agyQuotaForModel(all[cli], model, now) : settleResets(all[cli], now);
   const windows = (limits?.windows || []).filter(w => Number.isFinite(w.usedPercent));
   const blocked = limits?.status === 'rejected';
   const tightest = pickBadgeWindow(windows, blocked, now);

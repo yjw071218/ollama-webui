@@ -58,7 +58,7 @@ export function openInAppBrowser(url, { parent, background } = {}) {
 function embed(host, background) {
   const colors = chromeColors(background);
   const bar = new WebContentsView({ webPreferences: { preload: path.join(root, 'browser-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
-  const view = new WebContentsView({ webPreferences: { session: siteSession(), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  const view = new WebContentsView({ webPreferences: { session: siteSession(), backgroundThrottling: false, contextIsolation: true, nodeIntegration: false, sandbox: true } });
   bar.setBackgroundColor(colors.bg);
   view.setBackgroundColor(colors.bg);
   host.contentView.addChildView(view);

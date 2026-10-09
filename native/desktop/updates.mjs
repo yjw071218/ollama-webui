@@ -53,8 +53,37 @@ export async function checkUpdate(current, fetcher = fetch, platform = 'windows'
     headers: { Accept: 'application/vnd.github+json', 'User-Agent': 'OllamaWebUI-Client' },
     signal: AbortSignal.timeout(8000), redirect: 'error',
   });
+  if ([403, 429].includes(response.status)) return checkPublicReleases(current, fetcher, platform, response.status);
   if (!response.ok) throw new Error('업데이트 확인 HTTP ' + response.status);
   return selectUpdate(await response.json(), current, platform);
+}
+
+// Public release pages use a separate quota from the unauthenticated REST API.
+async function checkPublicReleases(current, fetcher, platform, status) {
+  const get = async url => {
+    const r = await fetcher(url, { headers: { Accept: 'text/html, application/atom+xml', 'User-Agent': 'OllamaWebUI-Client' }, signal: AbortSignal.timeout(8000), redirect: 'error' });
+    if (!r.ok) throw new Error('업데이트 확인 HTTP ' + status + ' (공개 릴리스 조회 HTTP ' + r.status + ')');
+    return r.text();
+  };
+  const feed = await get('https://github.com/' + repository + '/releases.atom');
+  if (!/<feed[\s>]/.test(feed)) throw new Error('공개 릴리스 응답이 올바르지 않습니다.');
+  const tags = [...new Set(feed.match(/native-v\d+\.\d+\.\d+(?![\w.-])/g) || [])]
+    .filter(tag => newer(tag, current)).sort((a, b) => newer(a, b) ? -1 : 1);
+  const kind = platform === 'android' ? 'android' : platform === 'portable' ? 'portable' : 'setup';
+  for (const tag of tags) {
+    const page = await get(base + 'tag/' + tag);
+    if (/Pre-release<\//i.test(page)) continue;
+    const html = await get(base + 'expanded_assets/' + tag);
+    const assets = [...html.matchAll(/href="([^"<>]+)"/g)].map(m => {
+      const url = new URL(m[1].replace(/&amp;/g, '&'), 'https://github.com');
+      const prefix = '/' + repository + '/releases/download/' + tag + '/';
+      if (url.origin !== 'https://github.com' || !url.pathname.startsWith(prefix)) return null;
+      return { name: decodeURIComponent(url.pathname.slice(prefix.length)), state: 'uploaded', browser_download_url: url.href };
+    }).filter(Boolean);
+    const release = { tag_name: tag, assets };
+    if (assetOf(release, kind)) return selectUpdate([release], current, platform);
+  }
+  return null;
 }
 
 /* The portable build cannot overwrite itself while it runs: a small PowerShell

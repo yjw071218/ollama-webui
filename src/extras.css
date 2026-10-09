@@ -2185,7 +2185,7 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
    under the message instead, in the space between messages. */
 .message-time {
   position: absolute;
-  bottom: -1.15rem;
+  bottom: 0;
   inset-inline-start: calc(28px + 1.25rem);
   font-size: 0.68rem;
   line-height: 1;
@@ -2195,6 +2195,8 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
   pointer-events: none;
 }
 .message-row.user .message-time { inset-inline-start: auto; inset-inline-end: 0; }
+/* Keep the timestamp inside the paint containment used for long histories. */
+.messages-wrapper > .message-row:has(> .message-time) { padding-bottom: 1.4rem; }
 
 /* =========================================================
    System monitor
@@ -3273,8 +3275,7 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
   .message-content { max-width: 100%; min-width: 0; }
   .message-row .message-time { inset-inline-start: calc(0.5rem + 28px + 0.6rem); }
   .message-row.user .message-time { inset-inline-start: auto; inset-inline-end: 0.5rem; }
-  /* The time must not sit under the opened action bar. */
-  .message-row.actions-open .message-time { display: none; }
+  /* Timestamps stay in their reserved row space when actions open. */
   /* The gesture bar sits over the bottom of the screen, so the composer needs
      to be held off it -- except when the keyboard is up, which covers that
      area itself and would otherwise leave a strip of dead space above it. */
@@ -10272,7 +10273,12 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 .live-work-phase { color: var(--text-muted); animation: cli-phase-pulse 1.8s ease-in-out infinite; }
 .live-work-phase.is-running { animation-duration: 1.2s; }
 @keyframes cli-phase-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .5; } }
-@media (prefers-reduced-motion: reduce) { .live-work-phase { animation: none; } }
+/* Status feedback keeps a gentle fade in system mode; explicit full motion
+   must not be overridden by the operating system's preference. */
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .live-work-phase { animation: cli-phase-pulse 2.4s ease-in-out infinite; }
+}
+:root[data-motion="reduced"] .live-work-phase { animation: none; }
 
 /* The catch-up cover can always be dismissed. Shown after a moment, so a quick
    sync never flashes a button. */
@@ -10284,24 +10290,12 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 }
 @keyframes boot-sync-skip-in { to { opacity: 1; } }
 
-/* Long lists: rows off screen are not laid out or painted. The newest few
-   messages (where streaming and entry animations happen) and the current
-   search hit are always rendered in full. `auto` remembers each row's real
-   height once seen, so the scrollbar does not jump. */
-.messages-wrapper > .message-row:not(.search-current):not(.is-entering):not(.actions-open) {
-  content-visibility: auto;
-  contain-intrinsic-size: auto 260px;
-}
-/* `content-visibility: auto` also clips paint to the row, and the hover
-   strip hangs 36px below it -- so on a PC hovering an older message showed
-   nothing at all. The row under the pointer is painted in full.
-   The selector has to outweigh the one above (five classes' worth), or it
-   is silently ignored -- which it was. */
-@media (hover: hover) and (min-width: 641px) {
-  .messages-wrapper > .message-row.message-row:not(.search-current):not(.is-entering):not(.actions-open):is(:hover, :focus-within) {
-    content-visibility: visible;
-    contain: none;
-  }
+/* Message history is already windowed in React. Keep mounted rows painted:
+   content-visibility's paint containment could leave text clipped until the
+   next scroll repainted the row. Sidebar and gallery optimizations stay local. */
+.messages-wrapper > .message-row {
+  content-visibility: visible;
+  contain: none;
 }
 .history-item:not(.active):not(.dragging) {
   content-visibility: auto;
@@ -10358,7 +10352,18 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 }
 .claude-think .think-body > :first-child { margin-top: 0; }
 .claude-think .think-body > :last-child { margin-bottom: 0; }
-@media (prefers-reduced-motion: reduce) { .claude-think .think-label.is-live { animation: none; } }
+@media (prefers-reduced-motion: reduce) {
+  :root:not([data-motion="full"]) .claude-think .think-label.is-live {
+    background: none;
+    -webkit-text-fill-color: currentColor;
+    animation: cli-phase-pulse 2.4s ease-in-out infinite;
+  }
+}
+:root[data-motion="reduced"] .claude-think .think-label.is-live {
+  background: none;
+  -webkit-text-fill-color: currentColor;
+  animation: none;
+}
 
 /* ==== Message actions on a phone: a sheet, not a strip ====
    The toolbar used to sit in 50px of padding added under the tapped message,
@@ -10832,7 +10837,7 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
   .main-header .header-tools { flex: 1 1 auto !important; min-width: 0; justify-content: flex-start !important; overflow: visible !important; }
   .main-header .sys-strip.in-header { flex: 0 1 auto !important; min-width: 0; overflow: hidden; }
   .main-header .header-search,
-  .main-header .header-search:focus-within { display: flex !important; flex: 1 1 260px !important; width: auto !important; min-width: 110px; max-width: 420px; }
+  .main-header .header-search:focus-within { display: flex !important; flex: 1 1 260px !important; width: auto !important; min-width: 110px; max-width: none; }
   .main-header .icon-btn.bordered.header-compact-only { display: none !important; }
   .main-header .header-tools > .model-selector-container:not(.header-secondary) { flex: 0 0 auto !important; min-width: 0; }
   .main-header .header-tools > .model-selector-container .model-name { max-width: 200px; }

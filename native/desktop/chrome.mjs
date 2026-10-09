@@ -13,7 +13,7 @@ export function createClientWindow({ pageBackground, ...options }, actions) {
   const win = new BrowserWindow({ ...options, ...chromeOptions,
     titleBarOverlay: { color: colors.bg, symbolColor: colors.fg, height: 44 }, backgroundColor: colors.bg,
     webPreferences: { preload: path.join(root, 'chrome-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
-  const view = new WebContentsView({webPreferences: { ...options.webPreferences, preload: path.join(root, 'client-preload.cjs') }});
+  const view = new WebContentsView({webPreferences: { ...options.webPreferences, backgroundThrottling: false, preload: path.join(root, 'client-preload.cjs') }});
   /* Until the page paints, the view shows its own background, which is white:
      a dark app flashed white on every launch and reload. The page's own colour
      from last time (main.mjs pageBackground), else the title bar's. */

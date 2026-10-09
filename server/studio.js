@@ -1,3 +1,4 @@
+import { localStudioFile } from './studioFiles.js';
 import { assertMemoryAvailable, commitAvailable, commitShortfall, forgetCommit, isLocalAddress } from './resourceSafety.js';
 import { readRequestBody } from './requestBody.js';
 /**
@@ -2328,8 +2329,17 @@ export const createStudioRoutes = (env = {}, { identify = () => '' } = {}) => {
     const preview = url.searchParams.get('preview') || '';
     if (/^(webp|jpeg);\d{1,3}$/.test(preview)) query.set('preview', preview);
 
+    const local = () => {
+      // A remote engine must never accidentally resolve a same-named local file.
+      if (!isLocalAddress(base)) return false;
+      const found = localStudioFile(query, env);
+      if (!found) return false;
+      serveFile(req, res, found.file, found.mime);
+      return true;
+    };
     try {
       const upstream = await withTimeout(`${base}/view?${query}`, { timeout: 60000, raw: true });
+      if (!upstream.ok && local()) return;
       if (!upstream.ok) return sendJson(res, { success: false, error: `ComfyUI HTTP ${upstream.status}` }, upstream.status);
 
       res.statusCode = 200;
@@ -2352,6 +2362,7 @@ export const createStudioRoutes = (env = {}, { identify = () => '' } = {}) => {
       }
       res.end();
     } catch (e) {
+      if (!res.headersSent && local()) return;
       if (!res.headersSent) sendJson(res, offline(base, e), 502);
       else res.end();
     }
