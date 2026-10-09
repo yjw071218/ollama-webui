@@ -1462,6 +1462,8 @@ const fetchJsonQuietly = (url, init) => fetch(url, init)
   .then(r => r.text())
   .then((text) => { try { return JSON.parse(text); } catch (e) { return null; } });
 
+const EMPTY_RETRIES = 2;
+
 function App() {
     /* Everything Ollama has installed, and the part of it that can be chatted
      with. Embedding models only make vectors -- picking one for a chat is an
@@ -2911,6 +2913,9 @@ function App() {
   /* The answer being written on another device, as far as it has got:
      `{ chat, id, content }`, or null. Filled by `followElsewhere`. */
   const [followed, setFollowed] = useState(null);
+  /* A followed answer the reader deleted: its stream id, so the next look at
+     /api/chat/live does not lay the same words back over the chat. */
+  const dismissedFollowRef = useRef(null);
   const currentSession = sessions.find(s => s.id === currentSessionId) || sessions[0] || { id: nextSessionId(), title: 'New Chat', messages: [], createdAt: Date.now(), updatedAt: Date.now(), lastModel: '' };
   /* An answer another device is writing, shown as it is typed.
    *
@@ -2930,6 +2935,7 @@ function App() {
   const messages = useMemo(() => {
     const stored = currentSession?.messages || [];
     if (!followed || (!followed.content && !followed.live) || followed.chat !== String(currentSessionId)) return stored;
+    if (dismissedFollowRef.current && followed.id === dismissedFollowRef.current) return stored;
     const index = stored.findLastIndex(m => m.role === 'assistant');
     /* The answer to the question just asked, not the one before it: the
        writing device's empty reply may not have synced yet, and the words were
@@ -4970,6 +4976,9 @@ function App() {
   const selfScrollRef = useRef(false);
   const textareaRef = useRef(null);
   const abortControllerRef = useRef(null);
+  // Empty answers asked for again in a row (handleSend), and the most it tries.
+  const emptyRetryRef = useRef(0);
+  const emptyResendRef = useRef(false);
 
   /* Where the composer's caret is right now (or was, when it lost focus --
    * a textarea keeps its selection while unfocused). */
@@ -10260,7 +10269,10 @@ function App() {
     const chosenModel = overrideModel || selectedModel;
     let activeModel = chosenModel;
     e?.preventDefault();
-    if (isGenerating || (!input.trim() && attachments.length === 0 && !customMessages)) return;
+    // An empty answer being asked for again arrives while the turn still reads as generating.
+    const resending = emptyResendRef.current;
+    emptyResendRef.current = false;
+    if ((isGenerating && !resending) || (!input.trim() && attachments.length === 0 && !customMessages)) return;
 
     // A chain is several turns wearing one message, so it leaves here too --
     // and before research, because arming a chain is the more specific act of
@@ -10318,6 +10330,8 @@ function App() {
     rememberGeneration(currentSessionId, turnBegan, chatJobId);
     abortControllerRef.current = new AbortController();
     const signal = abortControllerRef.current.signal;
+    // Set when an empty answer is being asked for again: the turn is not over.
+    let retryingEmpty = false;
 
     // The chat this turn belongs to, for the finally block far below -- by the
     // time it runs, the reader may be looking at a different one.
@@ -12821,6 +12835,38 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         }
       }
 
+      /* An answer that came back empty -- no words, no picture, no song --
+         is not shown as finished. The same request goes out again, quietly,
+         while the turn still reads as generating: a blank bubble that has to
+         be deleted and retried by hand is the model hiccuping, not an answer.
+         Only for a turn's first leg (after a tool result the bubble already
+         holds the earlier legs), never after a stop, and at most
+         EMPTY_RETRIES times in a row so a model that always answers nothing
+         does not loop. */
+      {
+        const visible = String(answerText || '')
+          .replace(/<think>[\s\S]*?(<\/think>|$)/gi, '')
+          .trim();
+        const lastAsked = initialMessages[initialMessages.length - 1];
+        const afterTool = lastAsked?.role === 'user' && String(lastAsked.content || '').trim().startsWith('<TOOL_RESULT>');
+        if (!visible && turnImages.length === 0 && turnSongs.length === 0 && !continuation && !afterTool && !signal.aborted
+            && currentSessionIdRef.current === startedIn
+            && emptyRetryRef.current < EMPTY_RETRIES) {
+          emptyRetryRef.current += 1;
+          addLog(`[chat] empty answer -- asking again (${emptyRetryRef.current}/${EMPTY_RETRIES})`, 'info');
+          retryingEmpty = true;
+          const again = initialMessages;
+          setTimeout(() => {
+            // Stop pressed in the moment between: the turn ends as it is.
+            if (abortControllerRef.current?.signal.aborted) return;
+            emptyResendRef.current = true;
+            handleSendRef.current(null, again, activeModel);
+          }, 150);
+          return;
+        }
+        emptyRetryRef.current = 0;
+      }
+
       // Naming the chat waits until here for two reasons: a turn that called a
       // tool reaches the code above with nothing but the tool tag as its
       // "answer", and the title should describe the reply, not the request.
@@ -12912,6 +12958,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         }
       }
     } finally {
+      if (retryingEmpty) return; // eslint-disable-line no-unsafe-finally
       flushSync(() => {
         markAnswered(startedIn, turnBegan);
         setIsGenerating(false);
@@ -13742,7 +13789,23 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     const chat = sessions.find(s => s.id === sid);
     if (!chat) return;
     const previous = chat.messages;
+    const shown = messages[index];
+    /* What is on screen is `messages`, which can carry an answer followed
+       from another device that is not stored at all (followedOnly) -- often an
+       empty one. Deleting it removed nothing from the chat, so it stayed until
+       a second press. It is dismissed instead, and the same for words laid
+       over the last stored answer, so they do not come back over it. */
+    const dismissFollow = () => {
+      if (followed && followed.chat === String(sid)) { dismissedFollowRef.current = followed.id; setFollowed(null); }
+    };
+    if (shown?.followedOnly) {
+      dismissFollow();
+      toast(t('toast.messageDeleted'), 'info', 3000);
+      return;
+    }
     const victim = previous[index];
+    if (!victim) return;
+    if (victim.role === 'assistant' && index === previous.findLastIndex(m => m.role === 'assistant')) dismissFollow();
     const next = sessions.map(s => (s.id === sid
       ? stamped(s, { ...s, messages: s.messages.filter(m => m !== victim) })
       : s));

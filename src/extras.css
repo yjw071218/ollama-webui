@@ -10292,10 +10292,14 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 }
 /* `content-visibility: auto` also clips paint to the row, and the hover
    strip hangs 36px below it -- so on a PC hovering an older message showed
-   nothing at all. The row under the pointer is painted in full. */
+   nothing at all. The row under the pointer is painted in full.
+   The selector has to outweigh the one above (five classes' worth), or it
+   is silently ignored -- which it was. */
 @media (hover: hover) and (min-width: 641px) {
-  .messages-wrapper > .message-row:hover,
-  .messages-wrapper > .message-row:focus-within { content-visibility: visible; }
+  .messages-wrapper > .message-row.message-row:not(.search-current):not(.is-entering):not(.actions-open):is(:hover, :focus-within) {
+    content-visibility: visible;
+    contain: none;
+  }
 }
 .history-item:not(.active):not(.dragging) {
   content-visibility: auto;

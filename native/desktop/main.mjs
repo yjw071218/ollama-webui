@@ -211,6 +211,9 @@ async function connect(value) {
       webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, allowRunningInsecureContent: false } },
       { server: openSetup, updates: () => notifyUpdate(true), menu: win => Menu.getApplicationMenu()?.popup({window:win}), newChat });
     const win = clientWindow;
+    // An update window already open moves onto the new app window.
+    updater?.attach();
+    win.once('show', () => updater?.attach());
     if (settings.window?.maximized) win.maximize();
     win.setAlwaysOnTop(!!settings.alwaysOnTop);
     win.on('focus', () => win.flashFrame(false));

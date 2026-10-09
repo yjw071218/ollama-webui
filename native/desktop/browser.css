@@ -1,6 +1,7 @@
 :root{--bg:#211f1c;--fg:#ede8df;--muted:#b9ad9b;--line:#3d3932;--hover:#3c372f}
 *{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--fg);font:13px system-ui}
-header{height:44px;display:flex;align-items:center;gap:4px;padding:0 150px 0 8px;border-bottom:1px solid var(--line);app-region:drag}
+header{height:42px;display:flex;align-items:center;gap:4px;padding:0 8px;border-bottom:1px solid var(--line);box-shadow:0 1px 0 color-mix(in srgb,var(--fg) 4%,transparent)}
+button.close{color:var(--muted);margin-inline-end:4px}button.close:hover{color:var(--fg)}
 button{app-region:no-drag;background:transparent;border:0;border-radius:7px;color:inherit;padding:6px 9px;font:inherit;cursor:pointer;white-space:nowrap;min-width:32px}
 button:hover:not(:disabled){background:var(--hover)}button:disabled{opacity:.35;cursor:default}button:focus-visible{outline:2px solid var(--muted)}
 form{flex:1;min-width:0;app-region:no-drag}

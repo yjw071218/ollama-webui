@@ -33,8 +33,20 @@ export function createUpdater({ ownerWindow, beforeInstall = async () => {} }) {
   const valid = (event) => win && !win.isDestroyed() && event.sender === win.webContents
     && event.senderFrame === win.webContents.mainFrame && event.senderFrame.url === pageURL;
 
+  /* Always over the app. Its parent is whatever window is the app *now*: a
+     check at start-up can open it while only the server window exists, and
+     a window owned by that one fell behind the client as soon as it opened.
+     With no app window at all it stays on top on its own. */
+  const attach = () => {
+    if (!win || win.isDestroyed()) return;
+    const owner = ownerWindow();
+    const live = owner && !owner.isDestroyed() ? owner : null;
+    if (win.getParentWindow() !== live) { try { win.setParentWindow(live); } catch { /* closing */ } }
+    win.setAlwaysOnTop(!live);
+    if (live && win.isVisible()) { win.moveTop(); }
+  };
   const open = () => {
-    if (win && !win.isDestroyed()) { win.show(); win.focus(); return; }
+    if (win && !win.isDestroyed()) { attach(); win.show(); win.focus(); return; }
     const owner = ownerWindow();
     win = new BrowserWindow({
       parent: owner && !owner.isDestroyed() ? owner : undefined, modal: false, show: false, frame: false,
@@ -45,7 +57,7 @@ export function createUpdater({ ownerWindow, beforeInstall = async () => {} }) {
     win.setMenu(null);
     win.webContents.on('will-navigate', e => e.preventDefault());
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    win.once('ready-to-show', () => win.show());
+    win.once('ready-to-show', () => { attach(); win.show(); });
     win.on('closed', () => { win = null; });
     win.loadURL(pageURL);
   };
@@ -136,5 +148,5 @@ export function createUpdater({ ownerWindow, beforeInstall = async () => {} }) {
   // A previous run's leftovers.
   rm(dir(), { recursive: true, force: true }).catch(() => {});
 
-  return { check, open, get state() { return state; } };
+  return { check, open, attach, get state() { return state; } };
 }

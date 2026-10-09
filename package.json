@@ -1,7 +1,7 @@
 {
   "name": "ollama-webui",
   "private": true,
-  "version": "1.0.21",
+  "version": "1.0.22",
   "type": "module",
   "scripts": {
     "risu:setup": "node scripts/risu-setup.mjs",

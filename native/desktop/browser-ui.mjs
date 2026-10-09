@@ -16,6 +16,8 @@ window.addEventListener('keydown', (e) => {
   else if (e.key === 'F5') window.appBrowser.action('reload');
   else if (e.ctrlKey && e.key.toLowerCase() === 'l') { e.preventDefault(); address.focus(); }
 });
+window.appBrowser.onFocusAddress(() => address.focus());
+window.addEventListener('keydown', (e) => { if (e.ctrlKey && e.key.toLowerCase() === 'w') { e.preventDefault(); window.appBrowser.action('close'); } });
 window.appBrowser.onState((state) => {
   if (!editing) address.value = state.url || '';
   $('[data-action="back"]').disabled = !state.back;
