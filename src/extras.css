@@ -10880,10 +10880,24 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 
 /* ---- Mermaid diagrams (src/Mermaid.jsx) ---- */
 .mermaid-block { position: relative; margin: 1rem 0; border: 1px solid var(--border-color, #ffffff1a); border-radius: 12px; background: var(--bg-secondary, #0f141b); overflow: hidden; }
-.mermaid-stage { position: relative; overflow: hidden; min-height: 160px; padding: 2.6rem 1rem 1rem; cursor: grab; touch-action: pan-y; user-select: none; }
+.mermaid-stage { position: relative; overflow: hidden; min-height: 120px; max-height: 560px; padding: 2.6rem 1rem 1rem; cursor: grab; touch-action: pan-y; user-select: none; }
 .mermaid-stage:active { cursor: grabbing; }
 .mermaid-canvas { display: flex; justify-content: center; transform-origin: center top; transition: transform .18s ease; }
-.mermaid-block.is-fit .mermaid-canvas svg { max-width: 100% !important; height: auto; }
+.mermaid-block.is-fit .mermaid-canvas svg { max-width: min(100%, 720px) !important; max-height: 480px; width: auto; height: auto; }
+.mermaid-canvas svg { font-size: 14px; }
+.mermaid-canvas svg, .mermaid-canvas svg text, .mermaid-canvas svg foreignObject div, .mermaid-canvas svg span {
+  font-family: "Pretendard Variable", Pretendard, "Noto Sans KR", system-ui, sans-serif !important;
+  letter-spacing: -0.01em; font-feature-settings: "ss06", "tnum"; -webkit-font-smoothing: antialiased; text-rendering: optimizeLegibility;
+}
+.mermaid-canvas .nodeLabel { font-weight: 500; }
+.mermaid-canvas .cluster-label .nodeLabel, .mermaid-canvas .actor, .mermaid-canvas .titleText, .mermaid-canvas .sectionTitle { font-weight: 650; }
+.mermaid-canvas .edgeLabel, .mermaid-canvas .edgeLabel span { font-size: 12.5px; font-weight: 450; opacity: .92; }
+.mermaid-canvas .messageText, .mermaid-canvas .noteText { font-size: 13px; }
+.mermaid-canvas .node rect, .mermaid-canvas .node polygon, .mermaid-canvas .node circle, .mermaid-canvas .node path { stroke-width: 1.2px; filter: none; }
+.mermaid-canvas .nodeLabel, .mermaid-canvas .edgeLabel { line-height: 1.35; }
+.mermaid-zoom { position: absolute; top: .55rem; left: 50%; z-index: 3; transform: translate(-50%, -4px); padding: .15rem .6rem; border-radius: 999px; font-size: .74rem; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-primary); background: color-mix(in srgb, var(--bg-primary, #0d1117) 82%, transparent); border: 1px solid var(--border-color, #ffffff22); backdrop-filter: blur(6px); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; }
+.mermaid-zoom.is-on { opacity: .75; transform: translate(-50%, 0); }
+.mermaid-zoom.is-flash { opacity: 1; }
 .mermaid-block.is-wide .mermaid-stage { overflow: auto; }
 .mermaid-block.is-wide .mermaid-canvas svg { max-width: none !important; }
 .mermaid-tools { position: absolute; top: .5rem; right: .5rem; z-index: 2; display: flex; gap: .3rem; }
@@ -10946,7 +10960,7 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 .quiz-nav:disabled { opacity: .35; cursor: default; }
 .quiz-count { font-size: .82rem; color: var(--text-secondary, #8b949e); }
 .quiz-score { display: inline-flex; gap: .3rem; align-items: center; font-weight: 700; color: #e3b341; animation: quiz-in .3s ease both; }
-:root[data-motion="reduced"] .quiz-card, :root[data-motion="reduced"] .quiz-q, :root[data-motion="reduced"] .quiz-option, :root[data-motion="reduced"] .quiz-feedback, :root[data-motion="reduced"] .mermaid-canvas { animation: none; transition: none; }
+:root[data-motion="reduced"] .quiz-card, :root[data-motion="reduced"] .quiz-q, :root[data-motion="reduced"] .quiz-option, :root[data-motion="reduced"] .quiz-feedback, :root[data-motion="reduced"] .mermaid-canvas, :root[data-motion="reduced"] .mermaid-zoom { animation: none; transition: none; }
 
 /* ---- Artifact version picker (src/ArtifactVersionPicker.jsx) ---- */
 .artifact-version-picker { display: inline-flex; align-items: center; gap: .45rem; flex: 0 1 auto; min-width: 0; max-width: 100%; height: 28px; padding: 0 .55rem 0 .35rem; border-radius: 999px; border: 1px solid var(--border-color); background: color-mix(in srgb, var(--text-primary) 4%, transparent); color: var(--text-primary); font: inherit; font-size: .78rem; cursor: pointer; transition: border-color .15s, background .15s, box-shadow .15s; }

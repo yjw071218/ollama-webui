@@ -19,6 +19,21 @@ import { clampZoom, zoomStep } from './zoom.mjs';
 import { openInAppBrowser, setBrowserModels, restoreInAppBrowser } from './browser.mjs';
 import { createRunner } from './runner.mjs';
 import { localPath } from './localPath.mjs';
+import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
+const codeCli = () => {
+  const local = process.env.LOCALAPPDATA, pf = process.env.ProgramFiles;
+  return [local && path.join(local, 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'), pf && path.join(pf, 'Microsoft VS Code', 'bin', 'code.cmd')].find(f => f && existsSync(f)) || null;
+};
+const openWithCode = (file) => new Promise((resolve) => {
+  const cli = codeCli();
+  if (!cli) { resolve(false); return; }
+  try {
+    const child = spawn(`"${cli}"`, ['--reuse-window', '--goto', `"${file.replace(/"/g, '')}"`], { shell: true, windowsHide: true, detached: true, stdio: 'ignore' });
+    child.once('error', () => resolve(false));
+    child.once('spawn', () => { child.unref(); resolve(true); });
+  } catch { resolve(false); }
+});
 const showError = (title, message) => appDialog(clientWindow && !clientWindow.isDestroyed() ? clientWindow : setupWindow, { title, message });
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -477,8 +492,10 @@ else {
     ipcMain.handle('client:openInEditor', async (event, value) => {
       if (!validClient(event)) throw new Error('Forbidden');
       const file = localPath(value);
-      try { await shell.openExternal('vscode://file/' + file.split(path.sep).join('/')); return true; }
-      catch { /* no VS Code: the file's own program */ }
+      /* VS Code's own CLI, not a vscode:// link: the link made VS Code ask
+         "외부 애플리케이션에서 열려고 합니다" and it had already started by
+         then, so answering 아니요 still left a VS Code window open. */
+      if (await openWithCode(file)) return true;
       const error = await shell.openPath(file);
       if (error) throw new Error(error);
       return true;

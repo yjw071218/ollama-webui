@@ -5017,6 +5017,8 @@ function App() {
         const runnable = isPythonish(block.language);
         if (!previewable && !runnable && lineCount <= 15) return;
         if (!block.content.trim()) return;
+        // Drawn in place (diagram, quiz, chart): not code to open beside the chat.
+        if (/^(mermaid|quiz|chart)$/i.test(String(block.language || '').trim())) return;
         results.push({
           id: `${messageIndex}:${blockIndex}`,
           version: results.length + 1,
@@ -5154,6 +5156,20 @@ function App() {
       setActiveArtifact({ id: '__detached', type, detachedContent: content, detachedLanguage: language || '' });
     }
     setConsoleEntries([]);
+  }, []);
+
+  /* A file change's diff, opened in the code panel (src/FileChanges.jsx);
+     pressing the same one again closes it. */
+  useEffect(() => {
+    const onDiff = (e) => {
+      const { diff = '', file = '' } = e.detail || {};
+      setActiveArtifact(cur => (cur?.id === '__detached' && cur.diffFile === file && cur.detachedContent === diff
+        ? null
+        : { id: '__detached', type: 'code', detachedContent: diff, detachedLanguage: 'diff', diffFile: file }));
+      setConsoleEntries([]);
+    };
+    window.addEventListener('open-file-diff', onDiff);
+    return () => window.removeEventListener('open-file-diff', onDiff);
   }, []);
 
   const activeArtifactData = useMemo(() => {

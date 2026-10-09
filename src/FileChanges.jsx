@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { FilePen, ChevronDown, Undo2, Code2, Check } from 'lucide-react';
+import { FilePen, ChevronDown, Undo2, Code2, Check, PanelRight } from 'lucide-react';
 import { useI18n } from './i18n.jsx';
 import { diffLines } from './fileChanges.js';
 import { confirmDialog } from './ConfirmDialog.jsx';
@@ -90,6 +90,12 @@ const FileChange = ({ change, canUndo }) => {
           <span className="file-change-del">−{change.removed}</span>
         </button>
         <span className="file-change-actions">
+          {change.diff && (
+            <button type="button" className="file-change-action" title="코드 패널에서 보기/닫기" aria-label="코드 패널에서 보기/닫기"
+              onClick={() => window.dispatchEvent(new CustomEvent('open-file-diff', { detail: { file: String(change.file), diff: String(change.diff) } }))}>
+              <PanelRight size={14} />
+            </button>
+          )}
           {isAbsolute(change.file) && (
             <a className="file-change-action" href={vscodeUrl(change.file)} onClick={openEditor(change.file)} title={t('changes.openEditor')} aria-label={t('changes.openEditor')}>
               <Code2 size={14} />
