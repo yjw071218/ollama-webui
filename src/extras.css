@@ -10685,3 +10685,20 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 .message-row.is-streaming .msg-hover-actions,
 .message-row.is-streaming:hover .msg-hover-actions,
 .message-row.is-streaming:focus-within .msg-hover-actions { display: none !important; }
+
+/* ==== Sidebar places: one row, however many there are ====
+   The Windows app has a fifth place (Run), which dropped alone onto a second
+   row. Each place is now an icon over a short label, so five fit in the
+   sidebar's width without shortening. Four when Run is not there. */
+.sidebar-places:not(:has(> :nth-child(5))) { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.sidebar-places { grid-template-columns: repeat(5, minmax(0, 1fr)); }
+.sidebar-places button {
+  flex-direction: column;
+  gap: 0.2rem;
+  padding: 0.45rem 0.15rem 0.4rem;
+  font-size: 0.72rem;
+  line-height: 1.15;
+  transition: background-color 0.15s var(--ease-out, ease), color 0.15s var(--ease-out, ease);
+}
+.sidebar-places button > svg { width: 16px; height: 16px; flex: 0 0 auto; }
+.sidebar-places button > span { max-width: 100%; }

@@ -9,16 +9,37 @@
  * checks every request comes from the server's page. A folder is run in only
  * after the user has said yes to it once, in a dialog the page cannot draw.
  */
-import { ipcMain, dialog, shell } from 'electron';
-import { spawn } from 'node:child_process';
+import { ipcMain, dialog, shell, screen } from 'electron';
+import { spawn, spawnSync } from 'node:child_process';
 import { readFile, readdir, stat } from 'node:fs/promises';
+import { writeFileSync, mkdirSync } from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { tr } from './i18n.mjs';
+import { createWinEmbed } from './winembed.mjs';
 
 const MAX_CHUNK = 64 * 1024;
 const URL_RE = /\bhttps?:\/\/(?:localhost|127\.0\.0\.1|0\.0\.0\.0|\[::1?\]|\d+\.\d+\.\d+\.\d+)(?::\d+)?(?:\/[^\s'"`)\]]*)?/gi;
 // eslint-disable-next-line no-control-regex
 const ANSI = /\u001b\[[0-9;?]*[ -/]*[@-~]|\u001b\][^\u0007]*\u0007/g;
+
+/* What a project opens "in the browser" goes nowhere. BROWSER=none is how
+   Node tools (Vite, CRA) are told, but Python's webbrowser -- ComfyUI's
+   auto-launch -- takes BROWSER as a command, fails to run "none", and falls
+   through to the system browser: Chrome opened on :8188. So on Windows it is
+   a tiny script that only prints the address, which the runner then reads
+   like any other and shows in the preview. Forward slashes, because Python
+   splits the variable with shlex, which eats backslashes. */
+let noBrowser = 'none';
+if (process.platform === 'win32') {
+  try {
+    const dir = path.join(os.tmpdir(), 'ollama-webui-runner');
+    mkdirSync(dir, { recursive: true });
+    const file = path.join(dir, 'no-browser.cmd');
+    writeFileSync(file, '@echo off\r\nif not "%~1"=="" echo [runner] open: %~1\r\nexit /b 0\r\n');
+    if (!/\s/.test(file)) noBrowser = file.replace(/\\/g, '/') + ' %s';
+  } catch { /* stays "none" */ }
+}
 
 const exists = async (p) => { try { await stat(p); return true; } catch { return false; } };
 const readJson = async (p) => { try { return JSON.parse(await readFile(p, 'utf8')); } catch { return null; } };
@@ -67,14 +88,78 @@ export async function inspectProject(dir) {
  */
 export function createRunner({ valid, owner, send, allowed, allow, openBrowser }) {
   const procs = new Map();
+
+  /* Windows the projects open (winembed.mjs). Every running process is looked
+     at once a second; what it shows goes to the page as `runner:windows`, and
+     the page says where each one it previews should sit (`runner:place`). */
+  const win32 = createWinEmbed();
+  const windows = new Map();   // hwnd -> { id, hwnd, title, w, h, embedded, popped }
+  const sig = (list) => list.map(w => `${w.hwnd}:${w.title}:${w.w}x${w.h}:${w.popped}`).join('|');
+  let polling = null, busy = false;
+  const poll = async () => {
+    if (!win32) return;
+    const live = [...procs.values()].filter(p => !p.finished);
+    if (!live.length) { clearInterval(polling); polling = null; return; }
+    for (const p of live) {
+      if (p.shellGone) {
+        if (p.jobReady && (await win32.alive(p.child.pid)) === 0) { p.finish?.(); continue; }
+      } else {
+        for (const pid of await win32.pids(p.child.pid)) p.seen.add(pid);
+      }
+      const keep = [...windows.values()].filter(w => w.id === p.id).map(w => w.hwnd);
+      const found = await win32.scan(p.child.pid, keep);
+      for (const w of found) {
+        const known = windows.get(w.hwnd);
+        // Its own size is remembered from before it was taken in; afterwards the client rect is ours.
+        if (known) { known.title = w.title || known.title; if (!known.embedded) { known.w = w.w; known.h = w.h; } }
+        else { const fresh = { id: p.id, hwnd: w.hwnd, title: w.title, w: w.w, h: w.h, embedded: false, popped: false }; windows.set(w.hwnd, fresh); await takeIn(fresh); }
+      }
+      const alive = new Set(found.map(w => w.hwnd));
+      for (const [h, w] of windows) if (w.id === p.id && !alive.has(h) && !w.popped) windows.delete(h);
+      const list = [...windows.values()].filter(w => w.id === p.id).map(({ hwnd, title, w, h, popped }) => ({ hwnd, title, w, h, popped }));
+      if (sig(list) !== p.windowSig) { p.windowSig = sig(list); send('runner:windows', { id: p.id, windows: list }); }
+    }
+  };
+  const startPolling = () => { if (win32 && !polling) polling = setInterval(() => { if (!busy) { busy = true; poll().finally(() => { busy = false; }); } }, 400); };
+  /* Taken in the moment it is found, and kept out of sight until the page
+     asks for it: a window left on the desktop until its tab was clicked was a
+     pop-up over everything, for every window but the one being previewed. */
+  const takeIn = async (w) => {
+    if (w.embedded || w.popped) return;
+    const host = owner();
+    if (!host || host.isDestroyed()) return;
+    const handle = host.getNativeWindowHandle();
+    const parent = handle.length >= 8 ? handle.readBigUInt64LE(0) : BigInt(handle.readUInt32LE(0));
+    if (await win32.embed(w.hwnd, parent.toString()) !== 'ok') throw new Error('Window embedding failed');
+    w.embedded = true;
+    await win32.hide(w.hwnd);
+  };
+  const forgetWindows = (id) => { for (const [h, w] of windows) if (w.id === id) windows.delete(h); };
   let seq = 0;
 
-  const kill = (p) => {
-    if (!p || p.exited) return;
-    try {
-      if (process.platform === 'win32') spawn('taskkill', ['/pid', String(p.child.pid), '/T', '/F'], { windowsHide: true });
-      else process.kill(-p.child.pid, 'SIGTERM');
-    } catch { try { p.child.kill(); } catch { /* gone */ } }
+  // IPC resolves only after the entire job is empty. Failures stay stoppable.
+  const kill = async (p) => {
+    if (!p || p.finished) return;
+    if (p.stopPromise) return p.stopPromise;
+    p.stopPromise = (async () => {
+      p.stopping = true;
+      try {
+        if (win32) {
+          await p.setup;
+          if (!p.jobReady || !(await win32.kill(p.child.pid))) {
+            throw new Error(tr('백그라운드 프로세스 종료를 확인하지 못했습니다. 다시 중지해 주세요.', 'Could not verify background process termination. Please retry Stop.'));
+          }
+        } else {
+          process.kill(-p.child.pid, 'SIGTERM');
+        }
+        p.code = 1;
+        p.finish();
+      } catch (error) {
+        send('runner:output', { id: p.id, stream: 'stderr', text: `\n${error.message}\n` });
+        throw error;
+      } finally { p.stopping = false; p.stopPromise = null; }
+    })();
+    return p.stopPromise;
   };
 
   const confirmFolder = async (dir) => {
@@ -115,12 +200,15 @@ export function createRunner({ valid, owner, send, allowed, allow, openBrowser }
     if (!cmd || cmd.length > 4000) throw new Error(tr('명령을 입력하세요.', 'Enter a command.'));
     if (!(await confirmFolder(dir))) return null;
     const id = `run-${Date.now().toString(36)}-${++seq}`;
-    const child = spawn(cmd, {
+    /* The command waits at a gate -- one line read from stdin -- until the
+       shell is inside its job, so nothing it starts can be born outside it. */
+    const gated = win32 ? `set /p RUNNER_GATE= & ${cmd}` : cmd;
+    const child = spawn(gated, {
       cwd: dir, shell: process.platform === 'win32' ? (process.env.ComSpec || 'cmd.exe') : true,
       windowsHide: true, detached: process.platform !== 'win32',
-      env: { ...process.env, FORCE_COLOR: '1', CLICOLOR_FORCE: '1', PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8', BROWSER: 'none' },
+      env: { ...process.env, FORCE_COLOR: '1', CLICOLOR_FORCE: '1', PYTHONUNBUFFERED: '1', PYTHONIOENCODING: 'utf-8', BROWSER: noBrowser },
     });
-    const p = { id, child, cwd: dir, command: cmd, startedAt: Date.now(), exited: false, code: null, urls: new Set() };
+    const p = { id, child, cwd: dir, command: cmd, startedAt: Date.now(), exited: false, finished: false, code: null, urls: new Set(), seen: new Set() };
     procs.set(id, p);
     const decoder = new TextDecoder('utf-8');
     const onData = (stream) => (buf) => {
@@ -135,22 +223,112 @@ export function createRunner({ valid, owner, send, allowed, allow, openBrowser }
     child.stdout.on('data', onData('stdout'));
     child.stderr.on('data', onData('stderr'));
     child.on('error', (e) => send('runner:output', { id, stream: 'stderr', text: `\n${e.message}\n` }));
-    child.on('exit', (code, signal) => {
-      p.exited = true; p.code = code ?? (signal ? -1 : 0);
+    const finish = () => {
+      if (p.finished) return;
+      p.finished = true; p.exited = true;
       send('runner:exit', { id, code: p.code });
+      forgetWindows(id); p.windowSig = ''; send('runner:windows', { id, windows: [] });
+    };
+    p.finish = finish;
+    child.on('exit', async (code, signal) => {
+      p.code = code ?? (signal ? -1 : 0);
+      p.shellGone = true;
+      /* The shell is done, but what it started may not be (start.bat that
+         launches pythonw and returns). Still running, then, and still
+         stoppable -- the poll below finishes it when the job is empty. */
+      if (win32 && (!p.jobReady || (await win32.alive(child.pid)) !== 0)) {
+        send('runner:output', { id, stream: 'stdout', text: `\n${tr('[셸은 끝났지만 백그라운드 프로세스가 아직 실행 중입니다. 중지하면 모두 종료됩니다.]', '[The shell is done, but background processes are still running. Stop ends them all.]')}\n` });
+        return;
+      }
+      finish();
     });
+    // Fail closed: an untracked command must never pass the launch gate.
+    p.setup = (async () => {
+      if (win32) {
+        p.jobReady = await win32.job(child.pid);
+        if (!p.jobReady) {
+          child.kill();
+          p.code = -1;
+          finish();
+          throw new Error(tr('프로세스 종료 관리 설정에 실패하여 실행을 취소했습니다.', 'Run cancelled: process supervision could not be initialized.'));
+        }
+        child.stdin.write('ready\n');
+      }
+    })();
+    await p.setup;
+    startPolling();
     return { id, cwd: dir, command: cmd, startedAt: p.startedAt };
   }));
   ipcMain.handle('runner:input', guard(async (id, text) => {
     const p = procs.get(id);
-    if (!p || p.exited || typeof text !== 'string') return false;
+    if (!p || p.exited || p.shellGone || typeof text !== 'string') return false;
     p.child.stdin.write(text);
     return true;
   }));
-  ipcMain.handle('runner:stop', guard(async (id) => { kill(procs.get(id)); return true; }));
-  ipcMain.handle('runner:forget', guard(async (id) => { const p = procs.get(id); if (p) { kill(p); procs.delete(id); } return true; }));
+  ipcMain.handle('runner:stop', guard(async (id) => { await kill(procs.get(id)); return true; }));
+  ipcMain.handle('runner:forget', guard(async (id) => { const p = procs.get(id); if (p) { await kill(p); procs.delete(id); } forgetWindows(id); return true; }));
   ipcMain.handle('runner:openFolder', guard(async (dir) => { await shell.openPath(await folderOf(dir)); return true; }));
+  /* Where the page wants a window: `rect` in the page's CSS pixels, or null
+     to put it away (another screen chosen, the workspace left, a menu over it). */
+  ipcMain.handle('runner:place', guard(async (hwnd, rect) => {
+    const w = windows.get(String(hwnd));
+    if (!win32 || !w || w.popped) return false;
+    const host = owner();
+    if (!host || host.isDestroyed()) return false;
+    if (!rect || !(rect.width > 0) || !(rect.height > 0) || host.isMinimized()) { if (w.embedded) await win32.hide(w.hwnd); return true; }
+    if (!w.embedded) await takeIn(w);
+    const zoom = host.clientContents?.getZoomFactor?.() || 1;
+    const scale = screen.getDisplayMatching(host.getBounds()).scaleFactor || 1;
+    const top = host.isFullScreen() ? 0 : 44;
+    const X = (rect.x * zoom) * scale, Y = (top + rect.y * zoom) * scale;
+    const W = rect.width * zoom * scale, H = rect.height * zoom * scale;
+    /* At its own size, centred, when it fits -- a pygame window draws for the
+       size it asked for and does not stretch. Shrunk, keeping its shape, when
+       it does not; or stretched when the page asks to fill. */
+    let w2 = w.w, h2 = w.h;
+    if (rect.fill || !(w2 > 0 && h2 > 0)) { w2 = W; h2 = H; }
+    else if (w2 > W || h2 > H) { const k = Math.min(W / w2, H / h2); w2 *= k; h2 *= k; }
+    const left = Math.round(X + (W - w2) / 2), upper = Math.round(Y + (H - h2) / 2);
+    const regionRect = b => {
+      if (!b || ![b.x, b.y, b.width, b.height].every(Number.isFinite)) return null;
+      return [Math.round(b.x * zoom * scale - left), Math.round((top + b.y * zoom) * scale - upper),
+        Math.round((b.x + b.width) * zoom * scale - left), Math.round((top + (b.y + b.height) * zoom) * scale - upper)].join(',');
+    };
+    const clip = regionRect(rect.clip) || `0,0,${Math.round(w2)},${Math.round(h2)}`;
+    const cuts = (Array.isArray(rect.cuts) ? rect.cuts.slice(0, 128) : []).map(regionRect).filter(Boolean);
+    await win32.place(w.hwnd, left, upper, Math.max(1, Math.round(w2)), Math.max(1, Math.round(h2)), [clip, ...cuts].join(';'));
+    if (rect.focus) await win32.focus(w.hwnd);
+    return true;
+  }));
+  // Out into a window of its own again, and back in.
+  ipcMain.handle('runner:popout', guard(async (hwnd, out = true) => {
+    const w = windows.get(String(hwnd));
+    if (!win32 || !w) return false;
+    if (out) { if (w.embedded) await win32.release(w.hwnd); w.embedded = false; w.popped = true; }
+    else { w.popped = false; await takeIn(w); }
+    const p = procs.get(w.id);
+    if (p) p.windowSig = '';
+    send('runner:windows', { id: w.id, windows: [...windows.values()].filter(v => v.id === w.id).map(({ hwnd, title, w, h, popped }) => ({ hwnd, title, w, h, popped })) });
+    return true;
+  }));
   ipcMain.handle('runner:browse', guard(async (url) => { openBrowser(String(url || '')); return true; }));
 
-  return { stopAll: () => { for (const p of procs.values()) kill(p); } };
+  /* On quit the whole tree goes, and the app waits for it: taskkill started
+     without waiting was cut off by the app exiting, and a project's server
+     lived on with its port and its GPU memory -- the next run then failed
+     to bind (Luna on :8000). */
+  const stopAllNow = () => {
+    for (const p of procs.values()) {
+      if (p.finished) continue;
+      try {
+        if (process.platform === 'win32') spawnSync('taskkill', ['/pid', String(p.child.pid), '/T', '/F'], { windowsHide: true, timeout: 5000 });
+        else process.kill(-p.child.pid, 'SIGTERM');
+      } catch { /* gone */ }
+    }
+    clearInterval(polling);
+    // Closing the helper closes every job handle, and kill-on-close ends what is left.
+    win32?.close();
+  };
+  void win32?.warm?.();
+  return { stopAll: stopAllNow };
 }

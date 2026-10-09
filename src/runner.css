@@ -4,11 +4,26 @@
 .runner {
   height: 100%;
   display: grid;
-  grid-template-columns: minmax(240px, 300px) minmax(0, 1fr);
+  grid-template-columns: var(--runner-side, 280px) 6px minmax(0, 1fr);
   color: var(--text-primary);
   font-size: 13px;
 }
-.runner.has-preview { grid-template-columns: minmax(240px, 300px) minmax(0, 1fr) minmax(320px, 45%); }
+.runner.has-preview { grid-template-columns: var(--runner-side, 280px) 6px minmax(280px, 1fr) 6px var(--runner-preview, 45%); }
+
+/* The handles between the panels: a hairline that thickens into the accent
+   under the pointer; the whole 6px strip is what is grabbed. */
+.runner-split { position: relative; cursor: col-resize; touch-action: none; outline: none; z-index: 2; }
+.runner-split::after {
+  content: ''; position: absolute; inset-block: 0; left: 50%; width: 1px; transform: translateX(-50%);
+  background: var(--border-color, #ffffff14);
+  transition: width .15s var(--ease-out, ease), background-color .15s var(--ease-out, ease);
+}
+.runner-split:hover::after, .runner-split:focus-visible::after, .runner.is-resizing .runner-split:active::after {
+  width: 3px; background: var(--accent, #d97757);
+}
+/* While dragging, the page in the preview must not swallow the pointer. */
+.runner.is-resizing, .runner.is-resizing * { cursor: col-resize !important; user-select: none; }
+.runner.is-resizing .runner-frame { pointer-events: none; }
 .runner-unavailable, .runner-welcome {
   display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px;
   height: 100%; color: var(--text-secondary); text-align: center; padding: 24px;
@@ -17,7 +32,6 @@
 
 .runner-side {
   display: flex; flex-direction: column; min-height: 0; overflow-y: auto;
-  border-inline-end: 1px solid var(--border-color, #ffffff14);
   background: color-mix(in srgb, var(--text-primary) 2%, transparent);
 }
 .runner-section { padding: 12px; border-bottom: 1px solid var(--border-color, #ffffff10); display: flex; flex-direction: column; gap: 8px; }
@@ -81,7 +95,7 @@
 @media (prefers-reduced-motion: reduce) { .runner-dot.live { animation: none; } }
 
 .runner-main, .runner-preview { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.runner-preview { border-inline-start: 1px solid var(--border-color, #ffffff14); }
+.runner-preview { min-width: 0; }
 .runner-bar {
   display: flex; align-items: center; gap: 6px; height: 40px; padding: 0 8px 0 12px; flex: 0 0 auto;
   border-bottom: 1px solid var(--border-color, #ffffff10); color: var(--text-secondary); overflow-x: auto; scrollbar-width: none;
@@ -113,6 +127,203 @@
 
 @media (max-width: 900px) {
   .runner, .runner.has-preview { grid-template-columns: 1fr; grid-template-rows: auto minmax(0, 1fr) auto; overflow-y: auto; }
+  .runner-split { display: none; }
   .runner-side { max-height: 40vh; border-inline-end: 0; border-bottom: 1px solid var(--border-color, #ffffff14); }
   .runner-preview { min-height: 50vh; border-inline-start: 0; }
 }
+
+/* The preview's stage: a browser tab when it fits, a letterboxed screen when
+   it has a ratio or a resolution of its own (PreviewStage). */
+.runner-stage { position: relative; flex: 1; min-height: 0; display: flex; align-items: center; justify-content: center; overflow: hidden; }
+.runner-stage.is-boxed { background: #070707; }
+.runner-stage .runner-frame { flex: 0 0 auto; transition: width .18s var(--ease-out, ease), height .18s var(--ease-out, ease); }
+.runner-stage.is-fit .runner-frame { flex: 1; }
+.runner-stage.is-boxed .runner-frame { box-shadow: 0 0 0 1px #ffffff14, 0 10px 40px #0008; }
+.runner-stage-note {
+  position: absolute; left: 8px; bottom: 8px; padding: 1px 7px; border-radius: 999px;
+  background: #000a; color: #ddd; font: 11px var(--font-mono, ui-monospace, monospace); pointer-events: none;
+}
+.runner-stage-full { position: absolute; right: 8px; bottom: 8px; background: #000a !important; color: #ddd !important; opacity: 0; transition: opacity .15s; }
+.runner-stage:hover .runner-stage-full, .runner-stage-full:focus-visible { opacity: 1; }
+.runner-viewport {
+  height: 26px; padding: 0 6px; border-radius: 7px; flex: 0 0 auto;
+  border: 1px solid var(--border-color, #ffffff1a); background: var(--bg-main, transparent); color: var(--text-primary);
+  font: 11px var(--font-mono, ui-monospace, monospace); cursor: pointer; outline: none;
+}
+.runner-viewport:focus-visible { border-color: var(--accent, #d97757); }
+.runner-icon.is-on { color: var(--accent, #d97757); }
+
+/* Preview only: the project list and the terminal step aside. */
+.runner.has-preview.preview-wide { grid-template-columns: 0 0 0 0 minmax(0, 1fr); }
+.runner.preview-wide > .runner-side, .runner.preview-wide > .runner-main, .runner.preview-wide > .runner-split { visibility: hidden; overflow: hidden; }
+.runner { transition: grid-template-columns .22s var(--ease-out, ease); }
+.runner.is-resizing { transition: none; }
+@media (prefers-reduced-motion: reduce) { .runner, .runner-stage .runner-frame { transition: none; } }
+
+/* Program windows (NativeSlot): the placeholder the real window is laid over. */
+.runner-native {
+  display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px;
+  color: #8a8478; background: #0b0b0a; font-size: 12px; text-align: center; flex: 0 0 auto;
+}
+.runner-stage .runner-native:not([style*="width: "]) { flex: 1; align-self: stretch; }
+.runner-native.is-out { flex: 1; align-self: stretch; }
+.runner-url-label { display: flex; align-items: center; flex: 1; min-width: 0; padding: 0 10px; color: var(--text-primary); font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runner-chip-text { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* Several screens: tabs under the bar, or all of them as tiles. */
+.runner-tabs {
+  display: flex; gap: 2px; padding: 4px 6px 0; flex: 0 0 auto; overflow-x: auto; scrollbar-width: none;
+  border-bottom: 1px solid var(--border-color, #ffffff10);
+}
+.runner-tab {
+  display: inline-flex; align-items: center; gap: 6px; max-width: 220px; flex: 0 0 auto;
+  padding: 6px 10px; border: 0; border-radius: 8px 8px 0 0; background: transparent;
+  color: var(--text-secondary); font-size: 12px; cursor: pointer; position: relative;
+  transition: background-color .15s var(--ease-out, ease), color .15s var(--ease-out, ease);
+}
+.runner-tab span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runner-tab em { font-style: normal; font-size: 10px; opacity: .7; }
+.runner-tab:hover { color: var(--text-primary); background: var(--hover-bg, #ffffff0d); }
+.runner-tab.is-on { color: var(--text-primary); background: color-mix(in srgb, var(--accent, #d97757) 12%, transparent); }
+.runner-tab.is-on::after { content: ''; position: absolute; left: 8px; right: 8px; bottom: 0; height: 2px; border-radius: 2px; background: var(--accent, #d97757); }
+.runner-tiles {
+  flex: 1; min-height: 0; display: grid; gap: 6px; padding: 6px;
+  grid-template-columns: repeat(var(--tile-cols, 2), minmax(0, 1fr)); grid-auto-rows: minmax(0, 1fr);
+}
+.runner-tile {
+  display: flex; flex-direction: column; min-width: 0; min-height: 0; border-radius: 10px; overflow: hidden;
+  border: 1px solid var(--border-color, #ffffff14); animation: runner-tile-in .2s var(--ease-out, ease);
+}
+.runner-tile.is-on { border-color: color-mix(in srgb, var(--accent, #d97757) 60%, transparent); }
+.runner-tile-head {
+  display: flex; align-items: center; gap: 6px; padding: 5px 9px; border: 0; background: transparent; flex: 0 0 auto;
+  color: var(--text-secondary); font-size: 11px; cursor: pointer; text-align: start; border-bottom: 1px solid var(--border-color, #ffffff10);
+}
+.runner-tile-head span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runner-tile-head:hover { color: var(--text-primary); }
+@keyframes runner-tile-in { from { opacity: 0; transform: scale(.98); } }
+@media (prefers-reduced-motion: reduce) { .runner-tile { animation: none; } }
+
+/* ---- Layout switch and screen picker ---- */
+.runner-seg { display: inline-flex; flex: 0 0 auto; padding: 2px; gap: 1px; border-radius: 8px; background: color-mix(in srgb, var(--text-primary) 6%, transparent); }
+.runner-seg button {
+  display: inline-flex; align-items: center; justify-content: center; width: 26px; height: 22px; border: 0; border-radius: 6px;
+  background: transparent; color: var(--text-secondary); cursor: pointer;
+  transition: background-color .15s var(--ease-out, ease), color .15s var(--ease-out, ease);
+}
+.runner-seg button:hover { color: var(--text-primary); }
+.runner-seg button.is-on { background: var(--bg-main, #1a1917); color: var(--accent, #d97757); box-shadow: 0 1px 3px #0005; }
+.runner-picker { position: relative; flex: 0 0 auto; }
+.runner-picker-btn { width: auto !important; gap: 4px; padding: 0 7px; font: 11px var(--font-mono, ui-monospace, monospace); }
+.runner-picker-scrim { position: fixed; inset: 0; z-index: 30; }
+.runner-picker-menu {
+  position: absolute; right: 0; top: calc(100% + 6px); z-index: 31; min-width: 240px; max-width: 360px; padding: 5px;
+  border-radius: 12px; border: 1px solid var(--border-color, #ffffff1a); background: var(--bg-elevated, #24221f);
+  box-shadow: 0 12px 32px #0007; animation: runner-pop .14s var(--ease-out, ease);
+}
+@keyframes runner-pop { from { opacity: 0; transform: translateY(-4px) scale(.98); } }
+.runner-picker-menu > button {
+  display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 8px; border: 0; border-radius: 8px;
+  background: transparent; color: var(--text-secondary); font-size: 12px; text-align: start; cursor: pointer;
+}
+.runner-picker-menu > button:hover { background: var(--hover-bg, #ffffff10); color: var(--text-primary); }
+.runner-picker-menu > button.is-on { color: var(--text-primary); }
+.runner-picker-menu em { font-style: normal; font-size: 10px; opacity: .6; }
+.runner-picker-label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runner-check {
+  display: inline-flex; align-items: center; justify-content: center; width: 15px; height: 15px; flex: 0 0 auto;
+  border-radius: 4px; border: 1px solid var(--border-color, #ffffff30);
+}
+.runner-picker-menu > button.is-on .runner-check { background: var(--accent, #d97757); border-color: var(--accent, #d97757); color: #fff; }
+.runner-picker-foot { display: flex; justify-content: flex-end; padding: 4px 4px 1px; border-top: 1px solid var(--border-color, #ffffff10); margin-top: 4px; }
+.runner-picker-foot button { border: 0; background: transparent; color: var(--accent, #d97757); font-size: 11px; cursor: pointer; padding: 3px 6px; border-radius: 6px; }
+.runner-picker-foot button:hover { background: var(--hover-bg, #ffffff10); }
+@media (prefers-reduced-motion: reduce) { .runner-picker-menu { animation: none; } }
+
+/* ---- Side by side, widths dragged ---- */
+.runner-tiles-row { flex: 1; min-height: 0; display: flex; padding: 6px; gap: 0; }
+.runner-tiles-row .runner-tile { flex-basis: 0; min-width: 120px; }
+.runner-tile-split { flex: 0 0 8px; }
+.runner-tiles-row.is-resizing, .runner-tiles-row.is-resizing * { cursor: col-resize !important; user-select: none; }
+.runner-tiles-row.is-resizing .runner-frame { pointer-events: none; }
+.runner-tile-head { cursor: default !important; }
+.runner-tile-head .runner-icon, .runner-win-title .runner-icon { width: 22px; height: 22px; }
+
+/* ---- Free windows ---- */
+.runner-desk {
+  position: relative; flex: 1; min-height: 0; overflow: hidden;
+  background:
+    radial-gradient(circle at 1px 1px, color-mix(in srgb, var(--text-primary) 9%, transparent) 1px, transparent 0) 0 0 / 18px 18px,
+    color-mix(in srgb, var(--text-primary) 2%, var(--bg-main, #1a1917));
+}
+.runner-win {
+  position: absolute; display: flex; flex-direction: column; min-width: 0; min-height: 0;
+  border-radius: 10px; overflow: hidden; background: var(--bg-main, #1a1917);
+  border: 1px solid var(--border-color, #ffffff1a); box-shadow: 0 10px 30px #0006;
+  animation: runner-tile-in .18s var(--ease-out, ease);
+  transition: box-shadow .15s var(--ease-out, ease), border-color .15s var(--ease-out, ease);
+}
+.runner-win.is-on { border-color: color-mix(in srgb, var(--accent, #d97757) 55%, transparent); box-shadow: 0 14px 40px #0008; }
+.runner-win.is-max { border-radius: 0; }
+.runner-win-title {
+  display: flex; align-items: center; gap: 6px; height: 30px; padding: 0 4px 0 10px; flex: 0 0 auto;
+  font-size: 11.5px; color: var(--text-secondary); cursor: grab; user-select: none; touch-action: none;
+  border-bottom: 1px solid var(--border-color, #ffffff10);
+  background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-main, #1a1917));
+}
+.runner-win.is-on .runner-win-title { color: var(--text-primary); }
+.runner-win-title > span { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runner-win-body { position: relative; flex: 1; min-height: 0; display: flex; }
+.runner-desk.is-moving, .runner-desk.is-moving * { user-select: none; }
+.runner-desk.is-moving .runner-win-title { cursor: grabbing; }
+.runner-desk.is-moving .runner-frame { pointer-events: none; }
+.runner-win-edge { position: absolute; z-index: 3; touch-action: none; }
+.runner-win-edge.edge-n, .runner-win-edge.edge-s { left: 8px; right: 8px; height: 6px; cursor: ns-resize; }
+.runner-win-edge.edge-n { top: -3px; } .runner-win-edge.edge-s { bottom: -3px; }
+.runner-win-edge.edge-e, .runner-win-edge.edge-w { top: 8px; bottom: 8px; width: 6px; cursor: ew-resize; }
+.runner-win-edge.edge-e { right: -3px; } .runner-win-edge.edge-w { left: -3px; }
+.runner-win-edge.edge-ne, .runner-win-edge.edge-nw, .runner-win-edge.edge-se, .runner-win-edge.edge-sw { width: 12px; height: 12px; }
+.runner-win-edge.edge-ne { top: -3px; right: -3px; cursor: nesw-resize; }
+.runner-win-edge.edge-sw { bottom: -3px; left: -3px; cursor: nesw-resize; }
+.runner-win-edge.edge-nw { top: -3px; left: -3px; cursor: nwse-resize; }
+.runner-win-edge.edge-se { bottom: -3px; right: -3px; cursor: nwse-resize; }
+.runner-desk-arrange { position: absolute; right: 10px; bottom: 10px; z-index: 100000; background: var(--bg-elevated, #24221f) !important; }
+@media (prefers-reduced-motion: reduce) { .runner-win { animation: none; transition: none; } }
+
+/* ---- Free windows: a frame to grab ----
+   A program window is drawn by Windows over the page, so a resize handle
+   inside it was never reached -- only the top and left, which happened to lie
+   over the title bar and the edge. Every window now has a 6px frame of page
+   around its content, and the handles live in that frame. */
+.runner-win { overflow: visible; padding: 0 6px 6px; background: color-mix(in srgb, var(--text-primary) 4%, var(--bg-main, #1a1917)); }
+.runner-win.is-max { padding: 0; }
+.runner-win-title { margin: 0 -6px; border-radius: 10px 10px 0 0; }
+.runner-win.is-max .runner-win-title { margin: 0; border-radius: 0; }
+.runner-win-body { border-radius: 0 0 6px 6px; overflow: hidden; background: var(--bg-main, #1a1917); }
+.runner-win-edge.edge-n { top: 0; height: 5px; }
+.runner-win-edge.edge-s { bottom: 0; height: 6px; }
+.runner-win-edge.edge-e { right: 0; width: 6px; top: 30px; bottom: 10px; }
+.runner-win-edge.edge-w { left: 0; width: 6px; top: 30px; bottom: 10px; }
+.runner-win-edge.edge-ne { top: 0; right: 0; width: 10px; height: 10px; }
+.runner-win-edge.edge-nw { top: 0; left: 0; width: 10px; height: 10px; }
+.runner-win-edge.edge-se { bottom: 0; right: 0; width: 14px; height: 14px; }
+.runner-win-edge.edge-sw { bottom: 0; left: 0; width: 14px; height: 14px; }
+.runner-win-edge { transition: background-color .15s var(--ease-out, ease); }
+.runner-win-edge:hover { background: color-mix(in srgb, var(--accent, #d97757) 45%, transparent); }
+.runner-win-edge.edge-se::after {
+  content: ''; position: absolute; right: 2px; bottom: 2px; width: 7px; height: 7px; opacity: .55;
+  border-right: 2px solid var(--text-secondary); border-bottom: 2px solid var(--text-secondary); border-radius: 0 0 2px 0;
+}
+
+/* ---- Hidden screens wait in a tray ---- */
+.runner-tray {
+  display: flex; align-items: center; gap: 6px; flex: 0 0 auto; padding: 6px 10px; overflow-x: auto; scrollbar-width: none;
+  border-top: 1px solid var(--border-color, #ffffff10); color: var(--text-secondary); font-size: 11px;
+  animation: runner-pop .16s var(--ease-out, ease);
+}
+.runner-tray-label { flex: 0 0 auto; }
+.runner-tray-all { flex: 0 0 auto; margin-left: auto; border: 0; background: transparent; color: var(--accent, #d97757); font-size: 11px; cursor: pointer; padding: 3px 6px; border-radius: 6px; }
+.runner-tray-all:hover { background: var(--hover-bg, #ffffff10); }
+.runner-tab.is-hidden { opacity: .5; }
+.runner-tab.is-hidden span { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-secondary) 60%, transparent); }
+@media (prefers-reduced-motion: reduce) { .runner-tray { animation: none; } }

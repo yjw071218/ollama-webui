@@ -4,7 +4,7 @@ import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, use
 import { jankPhase } from './jankWatch.js';
 import localforage from 'localforage';
 import { ArrowUp, Paperclip, Sparkles, RefreshCcw, Trash2, Copy, Check, Terminal, Settings, Edit, MessageSquare, ChevronDown, Download, Square, X, Play, Mic, MicOff, Volume2, Search, Code, Maximize2, Sun, Moon, Monitor, Pin, PinOff, GitBranch, FileDown, Command, Cpu, Plus, Save, ArrowDown, Zap, Layers, Server, ExternalLink, Star, Info, TriangleAlert, FileText, Minimize2, PanelLeft, ListTree, LogOut, UserPlus, Languages, User, Activity, Globe, Folder, FolderPlus, MoreHorizontal, ChevronLeft, ChevronRight, SlidersHorizontal, CornerDownRight, Archive, WrapText, ListChecks, ChevronUp, Vibrate, Smartphone, FolderInput, StretchHorizontal, TextQuote, Brain, HelpCircle, Baby, Share2, ClipboardPaste, Upload, Users, Telescope, ShieldCheck, Wand2, Clock, Film, Brush, Scissors, Tags, Images, SquareSplitHorizontal, Undo2, Music, FileEdit } from 'lucide-react';
-import ReactMarkdown from 'react-markdown';
+import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import remarkMath from 'remark-math';
 import { useRichRehype, highlightPlugin } from './richMarkdown.js';
@@ -1211,7 +1211,18 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
    chat again with remark/rehype/KaTeX, and remounted each code block because
    `components` was a new object each time. On a phone that was the lag. */
 const ANSWER_REMARK = [remarkGfm, remarkMath];
-const AnswerLink = ({ node, ...props }) => <a {...props} target="_blank" rel="noopener noreferrer" />;
+const isLocalAnswerPath = value => /^(?:[a-z]:[\\/]|file:\/\/)/i.test(value || '');
+const answerUrlTransform = (url, key) => key === 'href' && isLocalAnswerPath(url) ? url : defaultUrlTransform(url);
+const AnswerLink = ({ node, ...props }) => {
+  const [error, setError] = useState('');
+  if (!isLocalAnswerPath(props.href)) return <a {...props} target="_blank" rel="noopener noreferrer" />;
+  return <><a {...props} onClick={async e => {
+    e.preventDefault(); e.stopPropagation(); setError('');
+    if (!window.ollamaNative?.openLocalPath) { setError('로컬 파일 열기는 업데이트된 PC 클라이언트에서 사용할 수 있습니다.'); return; }
+    try { await window.ollamaNative.openLocalPath(props.href); }
+    catch (err) { setError(String(err?.message || err)); }
+  }} />{error && <span role="alert"> {error}</span>}</>;
+};
 const AnswerMarkdown = memo(({ text, basePlugins, citations, onOpenArtifact, ageOf }) => {
   const openRef = useRef(onOpenArtifact);
   openRef.current = onOpenArtifact;
@@ -1227,7 +1238,7 @@ const AnswerMarkdown = memo(({ text, basePlugins, citations, onOpenArtifact, age
     pre: (props) => <MarkdownCodeBlock {...props} onOpenArtifact={open} />,
     a: AnswerLink,
   }), [open]);
-  return <ReactMarkdown remarkPlugins={ANSWER_REMARK} rehypePlugins={plugins} components={components}>{text}</ReactMarkdown>;
+  return <ReactMarkdown urlTransform={answerUrlTransform} remarkPlugins={ANSWER_REMARK} rehypePlugins={plugins} components={components}>{text}</ReactMarkdown>;
 }, (a, b) => a.text === b.text && a.basePlugins === b.basePlugins && a.ageOf === b.ageOf
   && (a.citations?.length || 0) === (b.citations?.length || 0));
 

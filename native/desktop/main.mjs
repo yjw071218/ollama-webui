@@ -18,6 +18,7 @@ import { validColor } from './theme.mjs';
 import { clampZoom, zoomStep } from './zoom.mjs';
 import { openInAppBrowser } from './browser.mjs';
 import { createRunner } from './runner.mjs';
+import { localPath } from './localPath.mjs';
 const showError = (title, message) => appDialog(clientWindow && !clientWindow.isDestroyed() ? clientWindow : setupWindow, { title, message });
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
@@ -465,6 +466,12 @@ else {
       settings.recent = forgetRecent(settings.recent, value); save(); return settings.recent;
     });
     // What the page asks of the app (client-preload.cjs).
+    ipcMain.handle('client:openLocalPath', async (event, value) => {
+      if (!validClient(event)) throw new Error('Forbidden');
+      const error = await shell.openPath(localPath(value));
+      if (error) throw new Error(error);
+      return true;
+    });
     ipcMain.handle('client:changeServer', event => { if (!validClient(event)) throw new Error('Forbidden'); openSetup(); return true; });
     ipcMain.handle('client:checkUpdates', event => { if (!validClient(event)) throw new Error('Forbidden'); notifyUpdate(true); return true; });
     ipcMain.on('client:busy', (event, value) => { if (validClient(event)) setBusy(!!value); });

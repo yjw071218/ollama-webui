@@ -9,6 +9,7 @@ const root = fileURLToPath(new URL('..', import.meta.url));
 const repo = 'yjw071218/ollama-webui';
 const version = JSON.parse(await readFile(path.join(root, 'native/desktop/package.json'), 'utf8')).version;
 const tag = 'native-v' + version;
+const serverVersion = JSON.parse(await readFile(path.join(root, 'package.json'), 'utf8')).version;
 const command = args => execFileSync('git', args, {cwd:root, encoding:'utf8', env:{...process.env, GIT_TERMINAL_PROMPT:'0', GCM_INTERACTIVE:'Never'}}).trim();
 function credential() {
   if (process.env.GH_TOKEN) return process.env.GH_TOKEN;
@@ -52,7 +53,7 @@ if (process.argv.includes('--check')) {
   // window -- long enough to push its buttons off a phone screen.
   const end = rest.findIndex(line => /^#\s/.test(line));
   const noteLines = (end < 0 ? rest : rest.slice(0, end)).join('\n').trim().split('\n');
-  const body = ['## 이번 버전 (' + version + ')', ...noteLines, '', '웹서버: https://github.com/' + repo + '/releases/tag/v1.0.5', 'Google callback: http://127.0.0.1:47615/api/auth/native/google/callback', '실계정 로그인 및 실기기 설치는 미검증입니다.', '소스 커밋: ' + sha].join('\n');
+  const body = ['## 이번 버전 (' + version + ')', ...noteLines, '', '웹서버: https://github.com/' + repo + '/releases/tag/v' + serverVersion, 'Google callback: http://127.0.0.1:47615/api/auth/native/google/callback', '실계정 로그인 및 실기기 설치는 미검증입니다.', '소스 커밋: ' + sha].join('\n');
   const releases = await api('/releases?per_page=100');
   let release = releases.find(r => r.tag_name === tag);
   if (release && !release.draft) throw new Error('이미 공개된 릴리스는 변경하지 않습니다.');

@@ -251,7 +251,7 @@ check('web results continue the document numbering',
 // A link in an answer used to replace the app, and a model is very often
 // still writing when somebody follows a source it just cited.
 check('a link in an answer opens a new tab',
-  /const AnswerLink = \(\{ node, \.\.\.props \}\) => <a \{\.\.\.props\} target="_blank" rel="noopener noreferrer"/.test(app)
+  /const AnswerLink = \(\{ node, \.\.\.props \}\) => \{[\s\S]*?return <a \{\.\.\.props\} target="_blank" rel="noopener noreferrer"/.test(app)
   && /a: AnswerLink/.test(app));
 // `[3]` when two passages came back is the model inventing a source, and
 // dressing that up as a link would be the worst outcome available.
