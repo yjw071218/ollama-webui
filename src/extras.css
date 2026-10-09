@@ -10636,3 +10636,31 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 .device-ask-card { background: var(--surface, var(--bg-main, #1f1e1d)); border: 1px solid var(--hairline, #ffffff1a); border-radius: 20px; padding: 28px 24px 22px; box-shadow: 0 24px 64px #0007; }
 .device-ask-card .server-offline-actions { display: flex; gap: 10px; width: 100%; margin-top: 8px; }
 .device-ask-card .server-offline-actions > button { flex: 1; }
+
+/* ==== The same capsule on a PC, opened by clicking a message (App.jsx) ==== */
+.messages-wrapper > .message-row.click-capsule { content-visibility: visible; contain: none; }
+.message-row.click-capsule .msg-hover-actions,
+.message-row.click-capsule:hover .msg-hover-actions {
+  position: fixed; top: auto; right: 0; left: 0;
+  bottom: var(--msg-actions-bottom, 1.2rem);
+  width: max-content; max-width: calc(100% - 1.5rem); margin-inline: auto;
+  z-index: 80; opacity: 1; pointer-events: auto;
+  display: flex; flex-wrap: nowrap; gap: 2px; padding: 4px;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  background: color-mix(in srgb, var(--bg-secondary, #1c1b1a) 92%, transparent);
+  -webkit-backdrop-filter: blur(12px); backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  transform: none;
+  animation: msg-pill-in 0.18s var(--ease-out, ease);
+}
+.message-row.click-capsule .msg-hover-actions .action-btn { flex: 0 0 auto; width: 36px; height: 36px; padding: 0; border-radius: 999px; }
+.message-row.click-capsule .msg-hover-actions .action-btn svg { width: 17px; height: 17px; }
+form.input-container { transition: opacity 0.16s var(--ease-out, ease), transform 0.16s var(--ease-out, ease); }
+body:has(.message-row.click-capsule) form.input-container { opacity: 0; transform: translateY(6px); pointer-events: none; }
+body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .message-row.click-capsule .msg-hover-actions { animation: none; } }
+
+/* An assistant reply takes its full column from the first word, so code
+   blocks and work steps do not grow and shrink with the text streaming in. */
+.message-row.assistant > .message-content { flex: 1 1 auto; }

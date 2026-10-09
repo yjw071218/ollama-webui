@@ -428,8 +428,8 @@ const studioCss = read('src/studio.css');
     /matchMedia\?\.\('\(hover: none\), \(max-width: 640px\)'\)/.test(app));
   check('  a tap toggles, so a second one puts it away',
     /setOpenActionsIndex\(prev => \(prev === index \? null : index\)\)/.test(app));
-  check('  and the gate is the tap one, not the touch one',
-    /const toggleMessageActions = \(event, index\) => \{\s*if \(!isTapUi\) return;/.test(app));
+  check('  and a PC click opens the same capsule',
+    /onClick=\{e => toggleMessageActions\(e, i\)\}/.test(app) && /click-capsule/.test(extras));
 }
 
 /* ---- the Studio's seed ----

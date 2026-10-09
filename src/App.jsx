@@ -4835,8 +4835,9 @@ ${data.text}` : data.text));
     setOpenActionsIndex(prev => (prev === index ? null : index));
   };
 
+  /* A mouse click opens the same capsule on a PC: hovering shows the small
+     strip, but a click on the message is asking for its actions. */
   const toggleMessageActions = (event, index) => {
-    if (!isTapUi) return;
     if (Date.now() - touchHandledAtRef.current < 800) return;
     if (tapIsOnControl(event.target)) return;
     if ((window.getSelection?.().toString() || '').length > 0) return;
@@ -16031,12 +16032,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 <div
                   key={i}
                   ref={el => { messageRefs.current[i] = el; }}
-                  className={`message-row ${msg.role} ${i >= entersFrom ? 'is-entering' : ''} ${msg.starred ? 'starred' : ''} ${searchHits[searchHitIndex] === i ? 'search-current' : ''} ${openActionsIndex === i ? 'actions-open' : ''} ${navIndex === i ? 'nav-focus' : ''}`}
+                  className={`message-row ${msg.role} ${i >= entersFrom ? 'is-entering' : ''} ${msg.starred ? 'starred' : ''} ${searchHits[searchHitIndex] === i ? 'search-current' : ''} ${openActionsIndex === i ? `actions-open${isTapUi ? '' : ' click-capsule'}` : ''} ${navIndex === i ? 'nav-focus' : ''}`}
                   // How the keyboard finds a row to scroll to. An index rather
                   // than a ref array: rows come and go as the transcript grows
                   // and a ref array would have to be kept in step with it.
                   data-message-index={i}
-                  onClick={isTapUi ? (e => toggleMessageActions(e, i)) : undefined}
+                  onClick={e => toggleMessageActions(e, i)}
                   onPointerDown={isTapUi ? (e => pressMessage(e, i)) : undefined}
                   onPointerUp={isTapUi ? (e => releaseMessage(e, i)) : undefined}
                 >
