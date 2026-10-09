@@ -327,3 +327,24 @@
 .runner-tab.is-hidden { opacity: .5; }
 .runner-tab.is-hidden span { text-decoration: line-through; text-decoration-color: color-mix(in srgb, var(--text-secondary) 60%, transparent); }
 @media (prefers-reduced-motion: reduce) { .runner-tray { animation: none; } }
+
+/* ---- Port already taken by another process ---- */
+.runner-conflict {
+  display: flex; align-items: flex-start; gap: 12px; flex-wrap: wrap; padding: 10px 12px; flex: 0 0 auto;
+  border-bottom: 1px solid color-mix(in srgb, #f0a050 40%, transparent);
+  background: color-mix(in srgb, #f0a050 12%, transparent); animation: runner-pop .16s var(--ease-out, ease);
+}
+.runner-conflict-text { flex: 1 1 260px; min-width: 0; display: flex; flex-direction: column; gap: 3px; font-size: 12px; }
+.runner-conflict-text strong { color: #f5b46a; font-size: 13px; }
+.runner-conflict-text span, .runner-conflict-text em { color: var(--text-secondary); font-style: normal; }
+.runner-conflict-text code { font-size: 11px; color: var(--text-secondary); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.runner-conflict-actions { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.runner-conflict-actions button {
+  border: 1px solid var(--border-color, #ffffff1a); background: transparent; color: var(--text-primary);
+  border-radius: 8px; padding: 5px 10px; font-size: 12px; cursor: pointer; transition: background-color .15s;
+}
+.runner-conflict-actions button:hover:not(:disabled) { background: var(--hover-bg, #ffffff10); }
+.runner-conflict-actions button:disabled { opacity: .5; cursor: default; }
+.runner-conflict-actions .runner-conflict-primary { background: #e0884a; border-color: #e0884a; color: #fff; }
+.runner-conflict-actions .runner-conflict-primary:hover:not(:disabled) { background: #cc7638; }
+@media (prefers-reduced-motion: reduce) { .runner-conflict { animation: none; } }

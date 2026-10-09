@@ -1484,7 +1484,14 @@ export const allLimits = (env = {}) => {
   const fromLogs = codexLimitsFromLogs({ env });
   if (fromLogs && !(store.codex?.updatedAt >= fromLogs.updatedAt)) store.codex = { ...store.codex, ...fromLogs };
   const fromAgy = agyLimitsFromStatusline();
-  if (fromAgy && !(store.agy?.updatedAt >= fromAgy.updatedAt)) store.agy = { ...store.agy, ...fromAgy };
+  /* A refusal heard later than the status line ("quota reached", which has
+     no figures) used to win outright, and the badge showed "limit reached"
+     with no windows at all. The status line's windows are the only figures
+     agy gives, so they are kept whenever the stored entry has none; the
+     refusal stays in poolErrors and still marks its pool exhausted. */
+  if (fromAgy && (!(store.agy?.updatedAt >= fromAgy.updatedAt) || store.agy?.source === 'error' || !(store.agy?.windows || []).length)) {
+    store.agy = { ...store.agy, ...fromAgy, ...(store.agy?.poolErrors ? { poolErrors: store.agy.poolErrors } : {}) };
+  }
   /* Nothing from agy's status line in the last hour: counted from the ledger
      instead, when there is a capacity to count against. A refusal still wins. */
   if (!(fromAgy?.updatedAt > Date.now() - 3600 * 1000) && store.agy?.status !== 'rejected'

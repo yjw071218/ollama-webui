@@ -472,6 +472,15 @@ else {
       if (error) throw new Error(error);
       return true;
     });
+    ipcMain.handle('client:openInEditor', async (event, value) => {
+      if (!validClient(event)) throw new Error('Forbidden');
+      const file = localPath(value);
+      try { await shell.openExternal('vscode://file/' + file.split(path.sep).join('/')); return true; }
+      catch { /* no VS Code: the file's own program */ }
+      const error = await shell.openPath(file);
+      if (error) throw new Error(error);
+      return true;
+    });
     ipcMain.handle('client:changeServer', event => { if (!validClient(event)) throw new Error('Forbidden'); openSetup(); return true; });
     ipcMain.handle('client:checkUpdates', event => { if (!validClient(event)) throw new Error('Forbidden'); notifyUpdate(true); return true; });
     ipcMain.on('client:busy', (event, value) => { if (validClient(event)) setBusy(!!value); });

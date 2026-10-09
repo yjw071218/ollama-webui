@@ -1,7 +1,10 @@
 // agy has independent quota pools. Unknown/legacy provider-wide errors must
 // not turn a different model family into an exhausted one.
 export const agyQuotaGroup = name => /gemini/i.test(String(name)) ? 'gemini'
-  : /claude|gpt|anthropic/i.test(String(name)) ? 'claude-gpt' : null;
+  : /claude|gpt|anthropic|^3p(?:[-_]|$)|third.?party/i.test(String(name)) ? 'claude-gpt' : null;
+// agy names its Claude/GPT windows "3p-5h", "3p-weekly" (third-party); the
+// model picker matched only "claude|gpt" and dropped them, so the badge read
+// "—" while Settings, which shows every window, had them.
 export function agyQuotaForModel(entry, model, now = Date.now()) {
   if (!entry) return entry;
   const group = agyQuotaGroup(model);

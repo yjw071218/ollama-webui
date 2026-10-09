@@ -18,6 +18,16 @@ import { confirmDialog } from './ConfirmDialog.jsx';
  */
 const isAbsolute = (file) => /^([a-zA-Z]:[\\/]|\/)/.test(String(file || ''));
 const vscodeUrl = (file) => `vscode://file/${String(file).replace(/\\/g, '/').replace(/^\/+/, '')}`;
+/* The PC app does not follow vscode:// links from the page (only web links
+   pass), so there the app opens the file itself: VS Code if it is installed,
+   otherwise the file's default program. */
+const openEditor = (file) => (e) => {
+  const native = typeof window !== 'undefined' && (window.ollamaNative?.openInEditor || window.ollamaNative?.openLocalPath); // an older app has only the second: the file opens in its own program
+  if (!native) return;
+  e.preventDefault();
+  native(String(file)).catch(err => alert(String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')));
+};
+
 
 export const FileChanges = ({ changes = [], inline = false }) => {
   const { t } = useI18n();
@@ -81,7 +91,7 @@ const FileChange = ({ change, canUndo }) => {
         </button>
         <span className="file-change-actions">
           {isAbsolute(change.file) && (
-            <a className="file-change-action" href={vscodeUrl(change.file)} title={t('changes.openEditor')} aria-label={t('changes.openEditor')}>
+            <a className="file-change-action" href={vscodeUrl(change.file)} onClick={openEditor(change.file)} title={t('changes.openEditor')} aria-label={t('changes.openEditor')}>
               <Code2 size={14} />
             </a>
           )}

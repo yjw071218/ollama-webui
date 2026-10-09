@@ -9947,7 +9947,9 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 .live-work-status > * { white-space: nowrap; }
 .live-work-spark { color: var(--btn-active); animation: live-work-spin 2.4s linear infinite; display: inline-block; }
 @keyframes live-work-spin { to { transform: rotate(360deg); } }
-@media (prefers-reduced-motion: reduce) { .live-work-spark { animation: none; } }
+/* Only the in-app "reduced motion" choice stops it: Windows' "animation effects off" made
+   the OS report reduced motion, and the spark stood still as if nothing ran. */
+:root[data-motion="reduced"] .live-work-spark { animation: none; }
 /* Nothing has arrived for a while: the spark slows and the note takes the
    warning colour, so a stall does not read as work. */
 .live-work-status.is-stalled .live-work-spark { animation-duration: 7s; opacity: 0.6; }
@@ -10702,3 +10704,171 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 }
 .sidebar-places button > svg { width: 16px; height: 16px; flex: 0 0 auto; }
 .sidebar-places button > span { max-width: 100%; }
+
+/* ==== Header, tidied (PC) ====
+   Every piece had its own height (26-36px), border and radius, and each icon
+   was a separate outlined box, so the row read as a dozen unrelated chips.
+   Now: one height (34px), one radius, icons borderless inside one shared
+   tray, and the meters, search, model and quota as quiet filled pills. */
+@container mainpane (min-width: 1181px) {
+  .main-header .header-tools { gap: 6px; align-items: center; }
+  .main-header .header-tools > * { flex-shrink: 0; }
+
+  /* Shared surface */
+  .main-header .sys-strip.in-header,
+  .main-header .header-search,
+  .main-header .header-tools > .model-selector-container > .dropdown-trigger,
+  .main-header .cli-limit-badge > .dropdown-trigger {
+    height: 34px; box-sizing: border-box; border-radius: 10px;
+    border: 1px solid transparent !important;
+    background: color-mix(in srgb, var(--text-primary) 5%, transparent) !important;
+    transition: background-color .15s var(--ease-out, ease), border-color .15s var(--ease-out, ease);
+  }
+  .main-header .sys-strip.in-header:hover,
+  .main-header .header-tools > .model-selector-container > .dropdown-trigger:hover,
+  .main-header .cli-limit-badge > .dropdown-trigger:hover {
+    background: color-mix(in srgb, var(--text-primary) 9%, transparent) !important;
+  }
+  .main-header .header-search:focus-within { border-color: color-mix(in srgb, var(--accent, #d97757) 55%, transparent) !important; }
+
+  .main-header .sys-strip.in-header { padding: 0 12px; display: inline-flex; align-items: center; gap: 12px; }
+  .main-header .header-search { width: clamp(150px, 22cqw, 300px); display: flex; align-items: center; }
+  .main-header .header-search input { padding: 0 .5rem !important; height: 100%; }
+  .main-header .header-tools > .model-selector-container > .dropdown-trigger,
+  .main-header .cli-limit-badge > .dropdown-trigger { padding: 0 12px; display: inline-flex; align-items: center; gap: 6px; }
+  .main-header .header-tools > .model-selector-container .model-name { max-width: 180px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+  /* Icon buttons: borderless, one size, hover fill */
+  .main-header .icon-btn.bordered {
+    width: 34px; height: 34px; padding: 0; border-radius: 10px;
+    border: 0 !important; background: transparent !important;
+    display: inline-flex; align-items: center; justify-content: center;
+    color: var(--text-secondary);
+    transition: background-color .15s var(--ease-out, ease), color .15s var(--ease-out, ease);
+  }
+  .main-header .icon-btn.bordered:hover:not(:disabled) { background: color-mix(in srgb, var(--text-primary) 8%, transparent) !important; color: var(--text-primary); }
+  .main-header .icon-btn.bordered.toggled { background: color-mix(in srgb, var(--accent, #d97757) 16%, transparent) !important; color: var(--accent, #d97757); }
+  .main-header .icon-btn.bordered:disabled { opacity: .35; }
+  .main-header .icon-btn.bordered svg { width: 17px; height: 17px; }
+  .main-header .outline-wrap { display: inline-flex; }
+
+  /* A hairline between the groups: meters+search | tools | model+quota */
+  .main-header .header-search { margin-right: 4px; }
+  .main-header .header-tools > .model-selector-container:not(.header-secondary) {
+    margin-left: 4px; padding-left: 10px; position: relative;
+  }
+  .main-header .header-tools > .model-selector-container:not(.header-secondary)::before {
+    content: ''; position: absolute; left: 0; top: 7px; bottom: 7px; width: 1px;
+    background: var(--border-color, #ffffff1a);
+  }
+}
+
+/* ==== Header: nothing changes width on its own ====
+   The meter values were proportional digits with no fixed width, so 7% -> 12%
+   pushed everything after them. And an older rule set the search to 260px on
+   focus (more specific than the clamp above), so clicking it shrank the box. */
+@container mainpane (min-width: 1181px) {
+  .main-header .sys-strip.in-header .sys-chip-value {
+    font-variant-numeric: tabular-nums;
+    display: inline-block; min-width: 3.4ch; text-align: right;
+  }
+  .main-header .header-search,
+  .main-header .header-search:focus-within { width: clamp(150px, 22cqw, 300px); }
+}
+
+/* The search toggle is for narrow windows only (<=860px, where the box
+   collapses). The tidy-up above gave every header icon display:inline-flex,
+   which brought it back beside the full search box. */
+@container mainpane (min-width: 1181px) {
+  .main-header .icon-btn.bordered.header-compact-only { display: none; }
+}
+
+/* ==== Header: the model name gives way, not the edge ====
+   The tidy-up set flex-shrink:0 on every header item, which undid the older
+   rule that lets the model name ellipsise -- so with the code panel open the
+   model selector and quota badge were pushed off the right. The model
+   selector may shrink again, the search gives way first below 1180px, and
+   the meters drop their bars when space is short. */
+@container mainpane (min-width: 1181px) {
+  .main-header .header-tools { min-width: 0; flex: 1 1 auto; justify-content: flex-end; }
+  .main-header .header-tools > .model-selector-container { flex-shrink: 1; min-width: 72px; }
+  .main-header .header-tools > .model-selector-container > .dropdown-trigger { max-width: 100%; min-width: 0; }
+  .main-header .header-tools > .model-selector-container .model-name { min-width: 0; }
+}
+@container mainpane (min-width: 99999px) {
+  .main-header .header-search,
+  .main-header .header-search:focus-within { width: 150px; }
+  .main-header .sys-strip.in-header { gap: 8px; padding: 0 8px; }
+  .main-header .header-tools { gap: 2px; }
+  .main-header .icon-btn.bordered { width: 30px; }
+}
+
+/* ==== Header below 1180px: the compact layout, without wrapping ====
+   Squeezing the full row in pushed it off one edge or the other. Below
+   1180px of chat area the secondary icons go to the command palette and
+   the search folds into its button, as already happens below 860px, and the
+   model picker keeps a readable width. */
+@container mainpane (min-width: 861px) and (max-width: 1180px) {
+  .main-header .header-secondary { display: none !important; }
+  .main-header .header-compact-only { display: inline-flex !important; }
+  .main-header .header-search { display: none; }
+  .main-header .header-search.is-open { display: flex; width: 220px; }
+  .main-header .header-tools { flex: 1 1 auto; min-width: 0; gap: 6px; justify-content: flex-end; overflow: hidden; }
+  .main-header .header-tools > * { flex-shrink: 0; }
+  .main-header .header-tools > .model-selector-container:not(.header-secondary) { flex: 0 1 auto; min-width: 140px; }
+  .main-header .model-selector-container .dropdown-trigger { min-width: 0; max-width: 100%; height: 34px; border-radius: 10px; padding: 0 12px; }
+  .main-header .model-name { min-width: 0; max-width: 220px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .main-header .sys-strip.in-header { height: 34px; padding: 0 10px; border-radius: 10px; flex-shrink: 1; min-width: 0; overflow: hidden; }
+  .main-header .icon-btn.bordered { width: 34px; height: 34px; border: 0 !important; background: transparent !important; }
+}
+
+/* ==== Header: filled from the left, never past either edge ====
+   Right-aligning the tools pushed the overflow out to the left (over the
+   sidebar), and in the compact layout left a gap in the middle. Now the row
+   starts at the left, the search box is the part that stretches into the
+   free room (and shrinks first), the meters shrink after it, and nothing
+   right-aligns. Dropdowns are not clipped (no overflow:hidden on the row). */
+@container mainpane (min-width: 861px) {
+  .main-header .header-tools { flex: 1 1 auto !important; min-width: 0; justify-content: flex-start !important; overflow: visible !important; }
+  .main-header .sys-strip.in-header { flex: 0 1 auto !important; min-width: 0; overflow: hidden; }
+  .main-header .header-search,
+  .main-header .header-search:focus-within { display: flex !important; flex: 1 1 260px !important; width: auto !important; min-width: 110px; max-width: 420px; }
+  .main-header .icon-btn.bordered.header-compact-only { display: none !important; }
+  .main-header .header-tools > .model-selector-container:not(.header-secondary) { flex: 0 0 auto !important; min-width: 0; }
+  .main-header .header-tools > .model-selector-container .model-name { max-width: 200px; }
+}
+@container mainpane (min-width: 861px) and (max-width: 1180px) {
+  .main-header .header-tools > .model-selector-container .model-name { max-width: 150px; }
+}
+
+/* ==== System monitor: whole meters or none ====
+   Letting the strip shrink squeezed its bars and cut values in half. It keeps
+   its natural width now; when room runs out the search box gives way, and
+   the existing breakpoints drop whole meters (VRAM, RAM, GPU...). */
+@container mainpane (min-width: 861px) {
+  .main-header .sys-strip.in-header { flex: 0 0 auto !important; overflow: visible !important; }
+  .main-header .sys-strip.in-header > * { flex-shrink: 0; }
+}
+
+/* ==== Right edge: whole buttons drop out, nothing is cut ====
+   The tools after the model picker (layers, palette, export, theme) ran
+   under the code panel when the chat area was mid-width. They are all in the
+   command palette (⌘K), so they go first, before anything is clipped. */
+@container mainpane (max-width: 1400px) {
+  .main-header .header-tools > .model-selector-container:not(.header-secondary) ~ .header-secondary:not(.cli-limit-badge) { display: none !important; }
+}
+@container mainpane (max-width: 1280px) {
+  .main-header .header-tools .header-secondary:not(.cli-limit-badge) { display: none !important; }
+}
+.main-header .header-search { min-width: 90px; }
+
+/* ==== Narrow header stays centred ====
+   Below 860px the header switches to a wrapping layout that aligns to the
+   top with its own padding, so with the code panel at full width the row
+   sat a few pixels higher than everywhere else. One row is centred like the
+   wide header; only an opened search drops onto a second line. */
+@container mainpane (max-width: 860px) {
+  .main-header { align-items: center; padding-block: 0; min-height: 56px; }
+  .main-header .header-tools { align-items: center; align-self: center; }
+  .main-header:has(.header-search.is-open) { align-items: flex-start; padding-block: .4rem; }
+}

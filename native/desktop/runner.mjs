@@ -41,6 +41,42 @@ if (process.platform === 'win32') {
   } catch { /* stays "none" */ }
 }
 
+/* "That port is taken", as the usual servers say it: Python (Errno 10048 /
+   98, ComfyUI's own line), Node (EADDRINUSE), uvicorn, Vite, Flask... */
+const PORT_BUSY = [
+  /port\s+(\d{2,5})\s+is\s+(?:already\s+)?in\s+use/i,
+  /EADDRINUSE[^\n]*?:(\d{2,5})\b/i,
+  /bind on address \(['"][^'"]+['"],\s*(\d{2,5})\)/i,
+  /(?:Errno\s*(?:10048|98|48)|address already in use)[^\n]*?[(:,'"\s](\d{2,5})\b/i,
+];
+export const busyPort = (line) => {
+  for (const re of PORT_BUSY) { const m = re.exec(line); if (m) { const n = Number(m[1]); if (n > 0 && n < 65536) return n; } }
+  return 0;
+};
+
+/* Who is listening on `port`: pid, name, command line and start time. */
+async function portOwner(port) {
+  if (process.platform !== 'win32') return null;
+  const ns = spawnSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+  let pid = 0;
+  for (const line of String(ns.stdout || '').split(/\r?\n/)) {
+    const c = line.trim().split(/\s+/);
+    // The state is localized ("수신 대기"); a listener is the line whose remote end is :0.
+    if (c[0] !== 'TCP' || !c[1].endsWith(':' + port)) continue;
+    const n = Number(c[c.length - 1]);
+    if (!n) continue;
+    if (/:0$/.test(c[2])) { pid = n; break; }
+    // No listener row shown (filtered views): the side accepting on that port is the owner.
+    if (!pid && /ESTAB/i.test(line)) pid = n;
+  }
+  if (!pid) return null;
+  const script = `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { @{ name=$p.Name; cmd=$p.CommandLine; started=$p.CreationDate.ToString('o') } | ConvertTo-Json -Compress }`;
+  const ps = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 8000 });
+  let info = {};
+  try { info = JSON.parse(String(ps.stdout || '').trim() || '{}'); } catch { /* name unknown */ }
+  return { pid, port, name: info.name || '', command: info.cmd || '', startedAt: info.started ? Date.parse(info.started) : null };
+}
+
 const exists = async (p) => { try { await stat(p); return true; } catch { return false; } };
 const readJson = async (p) => { try { return JSON.parse(await readFile(p, 'utf8')); } catch { return null; } };
 
@@ -219,6 +255,19 @@ export function createRunner({ valid, owner, send, allowed, allow, openBrowser }
         const url = m[0].replace(/0\.0\.0\.0|\[::1?\]/, 'localhost').replace(/[.,;:]+$/, '');
         if (!p.urls.has(url)) { p.urls.add(url); send('runner:url', { id, url }); }
       }
+      /* The port this run wanted is someone else's. Say who, once per port,
+         and whether it is one of ours or something started outside the
+         Run tab (an old ComfyUI left from before, for instance). */
+      for (const line of text.replace(ANSI, '').split(/\r?\n/)) {
+        const port = busyPort(line);
+        if (!port || p.conflicts?.has(port)) continue;
+        (p.conflicts ||= new Set()).add(port);
+        void portOwner(port).then((holder) => {
+          if (!holder) return;
+          const mine = [...procs.values()].find(o => o.id !== id && !o.finished && (o.seen?.has(String(holder.pid)) || o.child.pid === holder.pid));
+          send('runner:conflict', { id, ...holder, ownerRun: mine ? { id: mine.id, command: mine.command } : null });
+        }).catch(() => {});
+      }
     };
     child.stdout.on('data', onData('stdout'));
     child.stderr.on('data', onData('stderr'));
@@ -310,6 +359,28 @@ export function createRunner({ valid, owner, send, allowed, allow, openBrowser }
     if (p) p.windowSig = '';
     send('runner:windows', { id: w.id, windows: [...windows.values()].filter(v => v.id === w.id).map(({ hwnd, title, w, h, popped }) => ({ hwnd, title, w, h, popped })) });
     return true;
+  }));
+  /* Ends whatever holds `port`, after the user says so in a dialog the page
+     cannot draw -- and only if it still holds it, so a pid reused in the
+     meantime is never touched. */
+  ipcMain.handle('runner:freePort', guard(async (port, pid) => {
+    port = Number(port); pid = Number(pid);
+    if (!(port > 0 && port < 65536) || !(pid > 4)) throw new Error('Invalid port');
+    const holder = await portOwner(port);
+    if (!holder) return true; // already free
+    if (holder.pid !== pid) throw new Error(tr('그 사이 다른 프로세스가 포트를 잡았습니다. 다시 실행해 확인해 주세요.', 'Another process took the port meanwhile. Run again to check.'));
+    if (holder.pid === process.pid) throw new Error(tr('앱 자신은 종료할 수 없습니다.', 'The app cannot end itself.'));
+    const r = await dialog.showMessageBox(owner(), {
+      type: 'warning',
+      title: tr('포트를 쓰는 프로세스 종료', 'End the process using the port'),
+      message: tr(`${port}번 포트를 쓰는 프로세스를 종료할까요?`, `End the process using port ${port}?`),
+      detail: `${holder.name || 'PID'} (PID ${holder.pid})\n${holder.command || ''}\n\n` + tr('하위 프로세스도 함께 종료됩니다. 진행 중인 작업은 중단됩니다.', 'Its child processes end too. Work in progress is lost.'),
+      buttons: [tr('취소', 'Cancel'), tr('종료', 'End it')], defaultId: 0, cancelId: 0, noLink: true,
+    });
+    if (r.response !== 1) return false;
+    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, timeout: 8000 });
+    for (let i = 0; i < 40; i++) { if (!(await portOwner(port))) return true; await new Promise(res => setTimeout(res, 250)); }
+    throw new Error(tr('프로세스를 종료했지만 포트가 아직 사용 중입니다.', 'The process was ended but the port is still in use.'));
   }));
   ipcMain.handle('runner:browse', guard(async (url) => { openBrowser(String(url || '')); return true; }));
 

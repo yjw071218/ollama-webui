@@ -354,6 +354,8 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
   const [folder, setFolder] = useState(() => initialFolder || loadRecent()[0] || '');
   const [project, setProject] = useState(null);
   const [error, setError] = useState('');
+  const [conflicts, setConflicts] = useState({}); // run id -> who holds the port it wanted
+  const [freeing, setFreeing] = useState(false);
   const [recent, setRecent] = useState(loadRecent);
   const [custom, setCustom] = useState('');
   const [procs, setProcs] = useState([]);          // [{ id, cwd, command, startedAt, exited, code, urls }]
@@ -443,10 +445,15 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
         setProcs(prev => prev.map(p => (p.id === id ? { ...p, exited: true, code } : p)));
         queueOutput(id, `\n\u001b[${code === 0 ? '32' : '31'}m[${L('종료', 'exited')}: ${code}]\u001b[0m\n`);
       }),
+      api.on('conflict', (c) => setConflicts(prev => ({ ...prev, [c.id]: c }))),
       api.on('url', ({ id, url }) => {
-        setProcs(prev => prev.map(p => (p.id === id ? { ...p, urls: sortUrls(new Set([...(p.urls || []), url])) } : p)));
-        // The app's own root replaces a plugin's sub-page shown on its own.
-        setPreview(cur => (!cur || (!chosePreview.current && sameOrigin(cur, url) && urlRank(url) < urlRank(cur)) ? url : cur));
+        /* A plugin often prints its sub-page (ComfyUI's /mtb) long before the
+           server prints its own address, or the server never prints it at
+           all. The origin's root goes in beside it and is what is previewed. */
+        let root = url;
+        try { root = `${new URL(url).origin}/`; } catch { /* keep as is */ }
+        setProcs(prev => prev.map(p => (p.id === id ? { ...p, urls: sortUrls(new Set([...(p.urls || []), root, url])) } : p)));
+        setPreview(cur => (!cur || (!chosePreview.current && sameOrigin(cur, root) && urlRank(root) < urlRank(cur)) ? root : cur));
       }),
       api.on('windows', ({ id, windows }) => {
         setProcs(prev => prev.map(p => (p.id === id ? { ...p, windows: windows || [] } : p)));
@@ -528,6 +535,25 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
     || (key && !key.startsWith('win:') ? { key, kind: 'web', url: key, label: key.replace(/^https?:\/\//, '') } : null);
   const shown = screenOf(preview);
   const running = procs.filter(p => !p.exited).length;
+  /* The address is often printed before the server answers (ComfyUI loads
+     its nodes for a minute first), and the frame then shows an error page
+     forever. Until it answers it is asked once a second, and the frame is
+     reloaded the moment it does. */
+  useEffect(() => {
+    if (!preview || preview.startsWith('win:') || !/^https?:\/\//i.test(preview)) return undefined;
+    let stop = false, failed = false, timer = 0;
+    const probe = async () => {
+      if (stop) return;
+      try {
+        await fetch(preview, { mode: 'no-cors', cache: 'no-store' });
+        if (failed && !stop) setPreviewKey(k => k + 1);
+        return;
+      } catch { failed = true; }
+      timer = setTimeout(probe, 1000);
+    };
+    probe();
+    return () => { stop = true; clearTimeout(timer); };
+  }, [preview]);
   useEffect(() => {
     if (preview && preview.startsWith('win:') && !screens.some(x => x.key === preview)) {
       chosePreview.current = false;
@@ -622,6 +648,40 @@ export default function RunnerWorkspace({ open, initialFolder = '' }) {
         onPointerDown={startDrag('side')} onKeyDown={handleKeys('side')} onDoubleClick={() => resetSize('side')} />
 
       <section className="runner-main">
+        {current && conflicts[current.id] && (() => {
+          const c = conflicts[current.id];
+          const dismiss = () => setConflicts(prev => { const n = { ...prev }; delete n[current.id]; return n; });
+          const free = async (andRestart) => {
+            setFreeing(true); setError('');
+            try {
+              if (c.ownerRun) await api.stop(c.ownerRun.id);
+              else if (!(await api.freePort(c.port, c.pid))) return;
+              dismiss();
+              if (andRestart) await restart(current);
+            } catch (e) { setError(String(e?.message || e).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')); }
+            finally { setFreeing(false); }
+          };
+          const when = c.startedAt ? new Date(c.startedAt).toLocaleTimeString() : '';
+          return (
+            <div className="runner-conflict" role="alert">
+              <div className="runner-conflict-text">
+                <strong>{L(`${c.port}번 포트를 이미 다른 프로세스가 쓰고 있어요`, `Port ${c.port} is already in use`)}</strong>
+                <span>
+                  {c.name || 'PID'} · PID {c.pid}{when && ` · ${L('시작', 'started')} ${when}`} · {c.ownerRun
+                    ? L(`실행 탭의 "${c.ownerRun.command}"`, `"${c.ownerRun.command}" in the Run tab`)
+                    : L('실행 탭 밖에서 실행됨', 'started outside the Run tab')}
+                </span>
+                {c.command && <code title={c.command}>{c.command}</code>}
+                <em>{L('미리보기에 보이는 화면은 이 프로세스의 것일 수 있어요.', 'The preview may be showing this process, not your run.')}</em>
+              </div>
+              <div className="runner-conflict-actions">
+                <button type="button" className="runner-conflict-primary" disabled={freeing} onClick={() => free(true)}>{L('종료하고 다시 실행', 'End it and run again')}</button>
+                <button type="button" disabled={freeing} onClick={() => free(false)}>{L('종료만', 'End it only')}</button>
+                <button type="button" disabled={freeing} onClick={dismiss}>{L('무시', 'Ignore')}</button>
+              </div>
+            </div>
+          );
+        })()}
         <header className="runner-bar">
           <Terminal size={14} />
           <code className="runner-title">{current ? current.command : L('터미널', 'Terminal')}</code>

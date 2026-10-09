@@ -15,6 +15,7 @@ const { contextBridge, ipcRenderer } = require('electron');
 
 contextBridge.exposeInMainWorld('ollamaNative', {
   platform: 'desktop',
+  openInEditor: value => ipcRenderer.invoke('client:openInEditor', value),
   openLocalPath: value => ipcRenderer.invoke('client:openLocalPath', value),
   changeServer: () => ipcRenderer.invoke('client:changeServer'),
   checkUpdates: () => ipcRenderer.invoke('client:checkUpdates'),
@@ -33,8 +34,9 @@ contextBridge.exposeInMainWorld('ollamaNative', {
     browse: (url) => ipcRenderer.invoke('runner:browse', url),
     place: (hwnd, rect) => ipcRenderer.invoke('runner:place', String(hwnd), rect ? { x: +rect.x, y: +rect.y, width: +rect.width, height: +rect.height, fill: !!rect.fill, focus: !!rect.focus, clip: rect.clip, cuts: rect.cuts } : null),
     popout: (hwnd, out = true) => ipcRenderer.invoke('runner:popout', String(hwnd), !!out),
+    freePort: (port, pid) => ipcRenderer.invoke('runner:freePort', Number(port), Number(pid)),
     on: (event, callback) => {
-      if (!['output', 'exit', 'url', 'windows'].includes(event) || typeof callback !== 'function') return () => {};
+      if (!['output', 'exit', 'url', 'windows', 'conflict'].includes(event) || typeof callback !== 'function') return () => {};
       const handler = (_e, payload) => { try { callback(payload); } catch { /* the page's own */ } };
       ipcRenderer.on('runner:' + event, handler);
       return () => ipcRenderer.removeListener('runner:' + event, handler);

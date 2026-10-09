@@ -14,9 +14,33 @@ import React, { Suspense } from 'react';
  * and the rest of the app keeps rendering while the chunk arrives. `preload`
  * starts the download early (on hover, or once the app is idle).
  */
+/* A chunk is named by its hash, so a page opened before the server was
+   rebuilt asks for a file that no longer exists ("Failed to fetch
+   dynamically imported module") and React used to crash. The fetch is
+   retried once (a dropped connection), and if the file is really gone the
+   page reloads once to pick up the new build. A failure is not cached. */
+const RELOAD_KEY = 'lazy-chunk-reload';
+const isChunkError = (e) => /dynamically imported module|Importing a module script failed|error loading dynamically imported|Failed to fetch/i.test(String(e?.message || e));
+const loadChunk = async (load) => {
+  try { return await load(); } catch (first) {
+    if (!isChunkError(first)) throw first;
+    await new Promise(r => setTimeout(r, 600));
+    try { return await load(); } catch (second) {
+      let last = 0;
+      try { last = Number(sessionStorage.getItem(RELOAD_KEY)) || 0; } catch { /* storage off */ }
+      if (Date.now() - last > 30000) {
+        try { sessionStorage.setItem(RELOAD_KEY, String(Date.now())); } catch { /* storage off */ }
+        window.location.reload();
+        return new Promise(() => {}); // the reload replaces the page
+      }
+      throw second;
+    }
+  }
+};
+
 export const lazyPanel = (load, name = 'default') => {
   let pending = null;
-  const preload = () => (pending ||= load());
+  const preload = () => (pending ||= loadChunk(load).catch(e => { pending = null; throw e; }));
   const Inner = React.lazy(() => preload().then(m => ({ default: m[name] })));
   const Panel = (props) => (
     <Suspense fallback={<div className="lazy-panel-loading" aria-busy="true" />}>

@@ -9,6 +9,16 @@ import { confirmDialog } from './ConfirmDialog.jsx';
  * it back -- without hunting for the chat the change was made in.
  */
 const vscodeUrl = (file) => `vscode://file/${String(file).replace(/\\/g, '/').replace(/^\/+/, '')}`;
+/* The PC app does not follow vscode:// links from the page (only web links
+   pass), so there the app opens the file itself: VS Code if it is installed,
+   otherwise the file's default program. */
+const openEditor = (file) => (e) => {
+  const native = typeof window !== 'undefined' && (window.ollamaNative?.openInEditor || window.ollamaNative?.openLocalPath); // an older app has only the second: the file opens in its own program
+  if (!native) return;
+  e.preventDefault();
+  native(String(file)).catch(err => alert(String(err?.message || err).replace(/^Error invoking remote method '[^']+': (Error: )?/, '')));
+};
+
 
 const ago = (at, t) => {
   const s = Math.max(0, Math.round((Date.now() - at) / 1000));
@@ -72,7 +82,7 @@ export const ChangeHistory = () => {
                 <div className="chg-path" title={item.file}>{parts.join('\\')}</div>
               </div>
               <span className="chg-when">{item.restored ? t('changes.undone') : ago(item.at, t)}</span>
-              <a className="btn-ghost chg-btn" href={vscodeUrl(item.file)} title={t('changes.openEditor')} aria-label={t('changes.openEditor')}><Code2 size={14} /></a>
+              <a className="btn-ghost chg-btn" href={vscodeUrl(item.file)} onClick={openEditor(item.file)} title={t('changes.openEditor')} aria-label={t('changes.openEditor')}><Code2 size={14} /></a>
               {item.restored
                 ? <span className="chg-done"><Check size={14} /></span>
                 : (
