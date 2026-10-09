@@ -158,8 +158,13 @@ function setZoom(next) {
   if (!win || win.clientContents.isDestroyed()) return;
   const factor = clampZoom(next);
   win.clientContents.setZoomFactor(factor);
+  showZoom(win, factor);
   settings.zoom = { ...(settings.zoom || {}), [zoomKey()]: factor };
   save();
+}
+/* The current ratio next to "새 대화" in the title bar; hidden at 100%. */
+function showZoom(win, factor) {
+  try { if (win && !win.webContents.isDestroyed()) win.webContents.send('chrome:zoom', factor); } catch {}
 }
 const zoomBy = direction => {
   const win = liveClient();
@@ -225,7 +230,7 @@ async function connect(value) {
     ses.on('will-download', (_event, item) => item.setSaveDialogOptions({ title: tr('파일 저장', 'Save file') }));
     clientWindow = createClientWindow({ icon: path.join(directory, 'icons/app.png'), show: !smoke, ...savedBounds(), pageBackground: settings.pageBackground, minWidth: 420, minHeight: 500, title: 'Ollama WebUI Client',
       webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, allowRunningInsecureContent: false } },
-      { server: openSetup, updates: () => notifyUpdate(true), menu: win => Menu.getApplicationMenu()?.popup({window:win}), newChat });
+      { server: openSetup, updates: () => notifyUpdate(true), menu: win => Menu.getApplicationMenu()?.popup({window:win}), newChat, zoomReset: () => setZoom(1) });
     const win = clientWindow;
     // An update window already open moves onto the new app window.
     updater?.attach();
@@ -254,6 +259,7 @@ async function connect(value) {
       if (!smoke) restoreInAppBrowser(win, { background: settings.pageBackground });
       const factor = settings.zoom?.[key];
       if (Number.isFinite(factor)) win.clientContents.setZoomFactor(clampZoom(factor));
+      showZoom(win, win.clientContents.getZoomFactor());
     });
     win.clientContents.on('zoom-changed', (_event, direction) => zoomBy(direction === 'in' ? 1 : -1));
     /* Google's account chooser in the browser, answered on 127.0.0.1:47615

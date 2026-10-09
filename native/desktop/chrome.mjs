@@ -49,6 +49,7 @@ export function createClientWindow({ pageBackground, ...options }, actions) {
     else if (action === 'updates') actions.updates();
     else if (action === 'menu') actions.menu(win);
     else if (action === 'newChat') actions.newChat?.(win);
+    else if (action === 'zoomReset') actions.zoomReset?.(win);
   };
   const ready = event => { if (fromShell(event)) event.sender.send('chrome:colors', colors); };
   ipcMain.on('chrome:action',command);

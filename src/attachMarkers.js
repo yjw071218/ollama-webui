@@ -144,3 +144,28 @@ export const extractAttachments = (content) => {
 /** The same blocks removed, for a preview line, an export or a spoken reading. */
 export const stripAttachments = (content, replacement = '') =>
   ALL.reduce((text, pattern) => text.replace(pattern, replacement), String(content || ''));
+
+/**
+ * A sent message taken apart for editing: the words the reader typed, and the
+ * attachment blocks as they were sent, so the edit box can show them as chips
+ * (removable) instead of pasting whole files into the textarea. `joinEdited`
+ * puts them back together, in the same order handleSend writes them.
+ */
+export const splitForEdit = (content) => {
+  const text = String(content || '');
+  const blocks = [];
+  const take = (pattern, kind, nameOf) => {
+    for (const m of text.matchAll(new RegExp(pattern.source, pattern.flags))) {
+      blocks.push({ at: m.index, kind, name: nameOf(m), raw: m[0].startsWith('\n') ? m[0] : `\n\n${m[0]}` });
+    }
+  };
+  take(FILE, 'file', m => m[1]);
+  take(INDEXED, 'indexed', m => m[1]);
+  take(WEBPAGE, 'webpage', m => `🌐 ${m[1]}`);
+  take(WEBPAGE_AGAIN, 'webpage', m => `🌐 ${m[1]}`);
+  take(PATH, 'path', m => (/\[Attached file path: (.*?) -> /.exec(m[0]) || [])[1] || 'path');
+  blocks.sort((a, b) => a.at - b.at);
+  return { text: stripAttachments(text).trim(), blocks: blocks.map(({ at, ...b }, i) => ({ ...b, id: `${i}:${at}` })) };
+};
+
+export const joinEdited = (text, blocks = []) => String(text || '') + blocks.map(b => b.raw).join('');

@@ -66,6 +66,7 @@ import { commitStats } from './resourceSafety.js';
 import { vramGuard } from './vram.js';
 import { listSchedules, createSchedule, setScheduleEnabled, deleteSchedule } from './serverSchedules.js';
 import { enginesFor, ENGINE_SPECS } from './engines.js';
+import { createAttachUploadRoute } from './attachUpload.js';
 import { createMusicRoutes } from './music.js';
 import { createMcpRoutes } from './mcp.js';
 import { createCliRoutes } from './cliModels.js';
@@ -486,6 +487,9 @@ export const createApiRoutes = (env = {}, options = {}) => {
   const { allowLocalFs = true } = options;
   const routes = [...createRisuRoutes({ env })];
   const route = (routePath, handler) => routes.push({ path: routePath, handler });
+
+  // Binary files attached by path (server/attachUpload.js).
+  route('/api/attach-file', createAttachUploadRoute(env));
 
   route('/api/chat/replay', (req, res) => {
     const id = new URL(req.url, 'http://localhost').searchParams.get('id');

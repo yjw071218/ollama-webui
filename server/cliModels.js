@@ -919,7 +919,7 @@ export const buildInvocation = (provider, model, { system, prompt, images = [] }
               : '',
           ].join(''),
         },
-        turn: { input, ...(effort ? { effort } : {}) },
+        turn: { input, ...(effort ? { effort } : {}), summary: wantThinking ? reasoningSummaryOf(env) || 'none' : 'none' },
         resume,
       }),
     };
@@ -1094,7 +1094,7 @@ const buildProjectInvocation = (provider, model, { system, prompt, images = [] }
           // Codex's own instructions and AGENTS.md stay; the chat's are added.
           ...(system ? { developerInstructions: system } : {}),
         },
-        turn: { input, ...(effort ? { effort } : {}) },
+        turn: { input, ...(effort ? { effort } : {}), summary: wantThinking ? reasoningSummaryOf(env) || 'none' : 'none' },
         resume,
       }),
     };
@@ -1896,6 +1896,9 @@ export class CodexSession {
         return null;
       case 'item/started': {
         const item = p.item || {};
+        // Open the live thinking fold even before the first summary token.
+        // Do not mark a text source as seen: completion remains a fallback.
+        if (item.type === 'reasoning') return { started: true, thinking: '\u200b', reasoning: true };
         if (item.type === 'mcpToolCall') {
           const input = item.arguments && typeof item.arguments === 'object' ? item.arguments : {};
           const what = toolTarget(input);
@@ -1978,8 +1981,8 @@ export class CodexSession {
         const kind = m.method.endsWith('summaryTextDelta') ? 'summary' : 'raw';
         const seen = this.reasoning.get(p.itemId);
         if (seen && seen !== kind) return null;
-        this.reasoning.set(p.itemId, kind);
         if (!p.delta) return null;
+        this.reasoning.set(p.itemId, kind);
         // A new thought (another reasoning item) starts a new paragraph.
         const lead = this.lastReasoning && this.lastReasoning !== p.itemId ? '\n\n' : '';
         this.lastReasoning = p.itemId;
@@ -2057,20 +2060,32 @@ export class AgyReader {
            answer from the start. A response after thinking is held as a
            possible replay until it either diverges or runs past what was sent. */
         if (this.sawText) this.replay = '';
-        return { ...started, thinking: String(step.thinking_delta), reasoning: true };
+        Object.assign(started, { thinking: String(step.thinking_delta), reasoning: true });
       }
       if (step.step_type === 'agent_response' && step.text_delta) {
-        this.sawText = true;
         const delta = String(step.text_delta);
         const sent = this.text || '';
+        /* The same restart without any thinking in between: a new response
+           step, or a piece that begins the answer over again. Without this the
+           whole answer came out a second time after the part already shown. */
+        const stepKey = step.step_index ?? step.stepIndex ?? step.step_id ?? step.id;
+        if (this.replay == null && this.sawText && sent) {
+          const newStep = stepKey != null && this.stepKey != null && stepKey !== this.stepKey;
+          const head = sent.slice(0, Math.min(sent.length, 24));
+          const restarts = sent.length > delta.length && head.length >= 8
+            && (delta.startsWith(head) || (delta.length >= 8 && sent.startsWith(delta)));
+          if (newStep || restarts) this.replay = '';
+        }
+        if (stepKey != null) this.stepKey = stepKey;
+        this.sawText = true;
         if (this.replay != null) {
           const replay = this.replay + delta;
-          if (sent.startsWith(replay)) { this.replay = replay; return started.started ? started : null; }
+          if (sent.startsWith(replay)) { this.replay = replay; return started.started || started.thinking ? started : null; }
           this.replay = null;
           if (replay.startsWith(sent)) {
             this.text = replay;
             const fresh = replay.slice(sent.length);
-            return fresh ? { ...started, content: fresh } : (started.started ? started : null);
+            return fresh ? { ...started, content: fresh } : (started.started || started.thinking ? started : null);
           }
           // Not a replay after all: what was held is new text.
           this.text = sent + replay;
@@ -2079,7 +2094,7 @@ export class AgyReader {
         this.text = sent + delta;
         return { ...started, content: delta };
       }
-      return started.started ? started : null;
+      return started.started || started.thinking ? started : null;
     }
     if (line.event === 'result') {
       const result = line.result || {};
@@ -2268,7 +2283,7 @@ export class AgyTranscriptState {
 /* Finds the transcript of the run that began at `startedAt` -- its own
    conversation when agy has said which, else the sole changed transcript --
    and hands each new step's notes to `emit`. `finish()` reads what is left. */
-export const watchAgyTranscript = ({ env = {}, startedAt = Date.now(), conversation = () => '', streamedThinking = () => false, emit,
+export const watchAgyTranscript = ({ env = {}, startedAt = Date.now(), conversation = () => '', streamedThinking = () => false, emit, emitReasoning,
   cwd = '', paths = [], activity, onActivity }) => {
   const brain = agyBrainDir(env);
   const state = new AgyTranscriptState({ cwd, paths, activity, onActivity });
@@ -2285,6 +2300,7 @@ export const watchAgyTranscript = ({ env = {}, startedAt = Date.now(), conversat
     }
   } catch { /* first run */ }
   const seen = new Set();
+  const thoughts = new Map();
   const since = startedAt - 5000;   // created_at has whole seconds
 
   const locate = () => {
@@ -2335,10 +2351,23 @@ export const watchAgyTranscript = ({ env = {}, startedAt = Date.now(), conversat
       // A resumed conversation's earlier turns are not this run's work.
       const at = Date.parse(s.created_at || '');
       if (Number.isFinite(at) && at < since) continue;
+      // Planner snapshots can grow without changing status or tool count.
+      if (!streamedThinking() && s.type === 'PLANNER_RESPONSE' && typeof s.thinking === 'string') {
+        const previous = thoughts.get(s.step_index) || '';
+        const next = s.thinking;
+        if (next !== previous) {
+          const lead = !previous && thoughts.size ? '\n\n' : '';
+          const fresh = lead + (next.startsWith(previous) ? next.slice(previous.length) : `\n\n${next}`);
+          // Keep reasoning distinct from tool notes so thinking=off is honored.
+          if (emitReasoning) { try { emitReasoning(fresh); } catch { /* closed stream */ } }
+          else notes += fresh;
+          thoughts.set(s.step_index, next);
+        }
+      }
       const key = `${s.step_index}:${s.status}:${(s.tool_calls || []).length}`;
       if (seen.has(key)) continue;
       seen.add(key);
-      notes += agyStepNotes(s, { withThinking: !streamedThinking() });
+      notes += agyStepNotes(s, { withThinking: false });
       /* agy's file edits, and any workbench diff a step returns, go into the
          answer as the same file card Claude Code and Codex get. */
       cards += state.accept(s);
@@ -2585,6 +2614,7 @@ const runCliOnce = ({
     : provider.id === 'agy' ? watchAgyTranscript({
       env, startedAt: Date.now(), conversation: () => reader.sessionId || resume || '',
       streamedThinking: () => !!reader.sawThinking,
+      emitReasoning: thinking => { try { onStart?.(); onDelta?.({ content: '', thinking, reasoning: true }); } catch { /* closed */ } },
       cwd: invocation.cwd || workDir(), paths: [...pathsIn(request.prompt), ...pathsIn(request.system)],
       activity, onActivity: reportActivity,
       emit: (thinking, content = '') => { try { onDelta?.({ content, thinking }); } catch { /* closed */ } },

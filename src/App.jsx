@@ -201,7 +201,7 @@ import { applyLiveSettings } from './liveSettings.js';
 import { NewbieGuide, guideSeen } from './NewbieGuide.jsx';
 import { stamped, conversationTime } from './sessionEdit.js';
 import { writeJournal, takeJournal, withJournal } from './unloadJournal.js';
-import { fileMarker, indexedMarker, pathMarker, webpageMarker, webpageAgainMarker, pageAlreadySent, extractAttachments, stripAttachments } from './attachMarkers.js';
+import { fileMarker, indexedMarker, pathMarker, webpageMarker, webpageAgainMarker, pageAlreadySent, extractAttachments, stripAttachments, splitForEdit, joinEdited } from './attachMarkers.js';
 import { forHistory, isToolResult, turnStart, wireText } from './wireHistory.js';
 import { isDraft, newDraft, promoted, withoutStaleDrafts, persistable, nextSessionId } from './draftChat.js';
 import { Logo } from './Logo.jsx';
@@ -4604,6 +4604,13 @@ function App() {
   // Edit State
   const [editingMessageIndex, setEditingMessageIndex] = useState(null);
   const [editInput, setEditInput] = useState('');
+  /* What a message being edited already carries: the attachment blocks it was
+     sent with (shown as removable chips, not pasted into the textarea) and its
+     pictures. Files added during the edit go to `attachments`, the composer's
+     own list, which is set aside for the edit and given back after. */
+  const [editBlocks, setEditBlocks] = useState([]);
+  const [editImages, setEditImages] = useState([]);
+  const editStashRef = useRef(null);
 
   // Attachments & MCP
   const [attachments, setAttachments] = useState([]);
@@ -9420,7 +9427,8 @@ function App() {
           : (pages[0]?.text || '');
       } catch (err) {
         if (err.code === 'binary') {
-          toast(t('attach.unsupported', { name: file.name }), 'error', 8000);
+          // Nothing here can read it, but a tool can: attached by path instead.
+          if (!await attachByPath(file)) toast(t('attach.unsupported', { name: file.name }), 'error', 8000);
         } else {
           toast(t('attach.failed', { name: file.name, error: err.message || String(err) }), 'error', 8000);
         }
@@ -9494,6 +9502,43 @@ function App() {
    * mattered would be the indexing, since a transcript of a long meeting is
    * exactly the case where retrieving the relevant two minutes beats sending
    * all ninety. */
+  /* A file with no text to extract (.hwp, .exe, an unknown binary), attached
+   * by its path rather than refused. The bytes go to the server, which saves
+   * them under its data directory (server/attachUpload.js); the message then
+   * carries the absolute path, which a CLI agent or an MCP file tool can open
+   * on that machine. Resolves true if it was attached. */
+  const attachByPath = async (file) => {
+    const toastId = toast(t('attach.uploadingPath', { name: file.name }), 'info', 600000);
+    try {
+      const res = await fetch('/api/attach-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name || 'file') },
+        body: file,
+      });
+      const answer = await res.json().catch(() => null);
+      if (!res.ok || !answer?.success || !answer.path) throw new Error(answer?.error || `HTTP ${res.status}`);
+      const kb = Math.max(1, Math.round((answer.size ?? file.size) / 1024));
+      const ext = (/\.([^.]+)$/.exec(file.name || '') || [])[1] || '';
+      const note = [
+        `[Attached by path — binary file, contents not inlined]`,
+        `Name: ${file.name}`,
+        `Path: ${answer.path}`,
+        `Size: ${kb.toLocaleString()} KB${ext ? ` · type .${ext.toLowerCase()}` : ''}`,
+        '',
+        'This file could not be converted to text in the browser. If the task needs its contents, open it from the path above with the tools available (file read, shell, a converter such as hwp5txt / LibreOffice for .hwp), or tell the user it cannot be read here.',
+      ].join('\n');
+      setAttachments(prev => [...prev, { name: file.name, type: 'text', data: note, truncated: false, path: answer.path }]);
+      dismissToast?.(toastId);
+      toast(t('attach.byPath', { name: file.name }), 'success', 6000);
+      addLog(`[attach] ${file.name} saved for path attachment at ${answer.path}`, 'success');
+      return true;
+    } catch (err) {
+      dismissToast?.(toastId);
+      addLog(`[attach] path upload failed for ${file.name}: ${err.message}`, 'error');
+      return false;
+    }
+  };
+
   const attachExtractedText = async (file, text) => {
       /* Whole whenever the context window can hold it, rather than past a fixed
          30,000 characters: a CLI model or a large num_ctx reads all of a
@@ -13940,23 +13985,52 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
   };
 
   const startEdit = (index, content) => {
+    const { text, blocks } = splitForEdit(content);
+    // The composer's own draft attachments wait while the edit borrows the list.
+    if (editStashRef.current === null) editStashRef.current = attachments;
+    setAttachments([]);
+    setEditBlocks(blocks);
+    setEditImages(Array.isArray(messages[index]?.images) && !messages[index]?.hiddenImages ? messages[index].images : []);
     setEditingMessageIndex(index);
-    setEditInput(content);
+    setEditInput(text);
   };
 
-  const cancelEdit = () => {
+  const endEdit = () => {
     setEditingMessageIndex(null);
     setEditInput('');
+    setEditBlocks([]);
+    setEditImages([]);
+    setAttachments(editStashRef.current || []);
+    editStashRef.current = null;
   };
+  const cancelEdit = endEdit;
 
   const saveEdit = (index) => {
-    if (!editInput.trim()) return;
+    const added = attachments;
+    if (!editInput.trim() && editBlocks.length === 0 && added.length === 0 && editImages.length === 0) return;
+    // The new files, written the way handleSend writes them.
+    let extra = '';
+    const addedImages = [];
+    for (const att of added) {
+      const where = att.path || (att.type !== 'pasted' && attachPaths.current.get(att.name));
+      if (where) extra += pathMarker(att.name, where);
+      if (att.type === 'text' || att.type === 'pasted') extra += fileMarker(att.name, att.data);
+      else if (att.type === 'webpage') extra += webpageMarker({ title: att.title, url: att.url, text: att.data, images: att.images?.length || 0 });
+      else if (att.type === 'image') addedImages.push(att.data);
+      else if (att.type === 'indexed') extra += indexedMarker(att);
+    }
+    const original = messages[index] || {};
+    const hidden = original.hiddenImages ? (original.images || []) : [];
+    const images = [...hidden, ...editImages, ...addedImages];
     // slice() is shallow, so assigning into [index] used to mutate the
     // message object that is still referenced by the stored session.
-    const newMessages = messages.slice(0, index + 1).map((m, i) => (
-      i === index ? { ...m, content: editInput } : m
-    ));
-    setEditingMessageIndex(null);
+    const newMessages = messages.slice(0, index + 1).map((m, i) => {
+      if (i !== index) return m;
+      const next = { ...m, content: joinEdited(editInput, editBlocks) + extra };
+      if (images.length) next.images = images; else delete next.images;
+      return next;
+    });
+    endEdit();
     handleSend(null, newMessages);
   };
 
@@ -16329,10 +16403,19 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                           const isThinkingOnly = streamingNow && group[group.length - 1].content === '' && !isFetching
                             && internalBlocks.some(b => b.type === 'think');
                           const isThinkingIncomplete = streamingNow && internalBlocks.some(b => b.type === 'think' && !b.isComplete);
-                          const shouldOpenDropdown = isFetching || isThinkingOnly || isThinkingIncomplete;
+                          /* A CLI run with thinking on that has not sent its reasoning yet.
+                             Some models (and CLIs) hold the reasoning back until the step ends,
+                             so the row showed only dots and "Starting…" while the model was in
+                             fact thinking. It says "사고 중" from the start; the fold fills when
+                             the reasoning arrives and disappears if none ever does. */
+                          const awaitingThought = streamingNow && thinkMode !== 'off' && !!(msg.cliStarted || group[group.length - 1].cliStarted)
+                            && textBlocks.length === 0 && internalBlocks.length === 0 && !isFetching
+                            && !msg.research && !msg.chainRun;
+                          const liveCliThought = streamingNow && !!group[group.length - 1].cliStarted && internalBlocks.some(b => b.type === 'think');
+                          const shouldOpenDropdown = isFetching || isThinkingOnly || isThinkingIncomplete || awaitingThought;
                           // Auto-open while the model is still thinking, but an
                           // explicit click always wins from then on.
-                          const thinkIsOpen = thinkOverrides[i] !== undefined ? thinkOverrides[i] : shouldOpenDropdown;
+                          const thinkIsOpen = thinkOverrides[i] !== undefined ? thinkOverrides[i] : (shouldOpenDropdown || liveCliThought);
                           const isStreamingRow = streamingNow;
                           /* What the tools changed on disk, out from under the
                              folded tool steps. See src/FileChanges.jsx. */
@@ -16358,13 +16441,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                               {msg.research && <ResearchTrace research={msg.research} />}
                               {msg.chainRun && <ChainTrace run={msg.chainRun} />}
 
-                              {isStreamingRow && !drawing && textBlocks.length === 0 && internalBlocks.length === 0 && !isFetching && !isThinkingOnly && !msg.research && !msg.chainRun && (
+                              {isStreamingRow && !drawing && textBlocks.length === 0 && internalBlocks.length === 0 && !isFetching && !isThinkingOnly && !awaitingThought && !msg.research && !msg.chainRun && (
                                 <div className="stream-dots" aria-label={t('msg.thinking')}>
                                   <span /><span /><span />
                                 </div>
                               )}
 
-                              {(internalBlocks.length > 0 || isFetching || isThinkingOnly) && (
+                              {(internalBlocks.length > 0 || isFetching || isThinkingOnly || (awaitingThought && !drawing)) && (
                                 <div className={`claude-think ${thinkIsOpen ? 'is-open' : ''}`}>
                                   <button
                                     type="button"
@@ -17040,9 +17123,37 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                               else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit(i); }
                             }}
                           />
+                          {(editBlocks.length > 0 || editImages.length > 0 || attachments.length > 0) && (
+                            <div className="edit-attachments">
+                              {editImages.map((img, k) => (
+                                <span key={`img${k}`} className="edit-attachment is-image">
+                                  <img src={String(img).startsWith('data:') || String(img).startsWith('http') || String(img).startsWith('/') ? img : `data:image/png;base64,${img}`} alt="" />
+                                  <button type="button" title={t('common.remove') || '삭제'} onClick={() => setEditImages(prev => prev.filter((_, j) => j !== k))}><X size={12} /></button>
+                                </span>
+                              ))}
+                              {editBlocks.map(b => (
+                                <span key={b.id} className="edit-attachment" title={b.name}>
+                                  <FileText size={12} /> <span className="edit-attachment-name">{b.name}</span>
+                                  <button type="button" title={t('common.remove') || '삭제'} onClick={() => setEditBlocks(prev => prev.filter(x => x.id !== b.id))}><X size={12} /></button>
+                                </span>
+                              ))}
+                              {attachments.map((att, k) => (
+                                <span key={`new${k}`} className={`edit-attachment is-new${att.type === 'image' ? ' is-image' : ''}`} title={att.name}>
+                                  {att.type === 'image'
+                                    ? <img src={att.preview || `data:image/png;base64,${att.data}`} alt="" />
+                                    : <><FileText size={12} /> <span className="edit-attachment-name">{att.name}{att.type === 'indexing' ? ' …' : ''}</span></>}
+                                  <button type="button" title={t('common.remove') || '삭제'} onClick={() => setAttachments(prev => prev.filter((_, j) => j !== k))}><X size={12} /></button>
+                                </span>
+                              ))}
+                            </div>
+                          )}
                           <div className="edit-actions">
+                            <button type="button" className="edit-btn edit-attach-btn" onClick={() => fileInputRef.current?.click()} title={t('msg.editAddFile')}>
+                              <Paperclip size={14} /> {t('msg.editAddFile')}
+                            </button>
+                            <span style={{ flex: 1 }} />
                             <button type="button" className="edit-btn" onClick={cancelEdit}>{t('common.cancel')}</button>
-                            <button type="button" className="edit-btn is-primary" onClick={() => saveEdit(i)} disabled={!editInput.trim()}>{t('msg.saveSubmit')}</button>
+                            <button type="button" className="edit-btn is-primary" onClick={() => saveEdit(i)} disabled={(!editInput.trim() && editBlocks.length === 0 && editImages.length === 0 && attachments.length === 0) || attachments.some(a => a.type === 'indexing')}>{t('msg.saveSubmit')}</button>
                           </div>
                         </div>
                       ) : (
@@ -17306,7 +17417,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               shifts sideways depending on whether its neighbour happens to be
               there is a button that moves under the finger reaching for it. */}
           {/* The chat's, so not over the Studio or the gallery laid on top of it. */}
-          {(showTopBtn || showScrollBtn) && (
+          {/* A new chat with nothing in it has nowhere to jump to: the flags
+              are left over from the chat read before, since no scroll event
+              comes to clear them. */}
+          {messages.length > 0 && (showTopBtn || showScrollBtn) && (
             <div className="scroll-nudges" hidden={sidebarPlace !== 'home'}>
               {showTopBtn && (
                 <button className="scroll-nudge" title={t('composer.jumpTop')} onClick={scrollToTop}>
@@ -17387,8 +17501,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               </div>
             )}
 
-            {/* Attachments Preview */}
-            {attachments.length > 0 && (
+            {/* Attachments Preview -- the edit box shows them while a message is being edited. */}
+            {attachments.length > 0 && editingMessageIndex === null && (
               <div className="attachments-preview">
                 {attachments.map((att, i) => (
                   <div key={i} className="attachment-item">

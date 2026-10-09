@@ -10620,6 +10620,32 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 }
 .edit-btn.is-primary:hover { opacity: .88; background: var(--text-primary); color: var(--bg-primary); }
 .edit-btn:disabled { opacity: .4; cursor: default; }
+.edit-attach-btn { display: inline-flex; align-items: center; gap: 0.35rem; }
+.edit-attachments {
+  display: flex; flex-wrap: wrap; gap: 0.4rem;
+  padding: 0.2rem 0.7rem 0.3rem;
+}
+.edit-attachment {
+  display: inline-flex; align-items: center; gap: 0.3rem;
+  max-width: 260px;
+  padding: 0.25rem 0.3rem 0.25rem 0.6rem;
+  border-radius: 10px;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 14%, transparent);
+  background: color-mix(in srgb, var(--text-primary) 5%, transparent);
+  color: var(--text-secondary);
+  font-size: 0.8rem;
+}
+.edit-attachment.is-new { border-color: color-mix(in srgb, var(--accent, #d97757) 55%, transparent); }
+.edit-attachment.is-image { padding: 0.2rem; position: relative; }
+.edit-attachment.is-image img { width: 56px; height: 56px; object-fit: cover; border-radius: 7px; display: block; }
+.edit-attachment.is-image button { position: absolute; top: 2px; right: 2px; background: rgba(0,0,0,.6); color: #fff; }
+.edit-attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.edit-attachment button {
+  display: inline-flex; align-items: center; justify-content: center;
+  width: 20px; height: 20px; border-radius: 50%;
+  border: none; background: transparent; color: inherit; cursor: pointer; flex: none;
+}
+.edit-attachment button:hover { background: color-mix(in srgb, var(--text-primary) 12%, transparent); }
 @keyframes edit-box-in { from { opacity: 0; transform: translateY(4px); } to { opacity: 1; transform: none; } }
 @media (prefers-reduced-motion: reduce) { .edit-message-box { animation: none; } }
 @media (hover: none), (max-width: 640px) {
@@ -10893,7 +10919,6 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 .mermaid-canvas .cluster-label .nodeLabel, .mermaid-canvas .actor, .mermaid-canvas .titleText, .mermaid-canvas .sectionTitle { font-weight: 650; }
 .mermaid-canvas .edgeLabel, .mermaid-canvas .edgeLabel span { font-size: 12.5px; font-weight: 450; opacity: .92; }
 .mermaid-canvas .messageText, .mermaid-canvas .noteText { font-size: 13px; }
-.mermaid-canvas .node rect, .mermaid-canvas .node polygon, .mermaid-canvas .node circle, .mermaid-canvas .node path { stroke-width: 1.2px; filter: none; }
 .mermaid-canvas .nodeLabel, .mermaid-canvas .edgeLabel { line-height: 1.35; }
 .mermaid-zoom { position: absolute; top: .55rem; left: 50%; z-index: 3; transform: translate(-50%, -4px); padding: .15rem .6rem; border-radius: 999px; font-size: .74rem; font-weight: 600; font-variant-numeric: tabular-nums; color: var(--text-primary); background: color-mix(in srgb, var(--bg-primary, #0d1117) 82%, transparent); border: 1px solid var(--border-color, #ffffff22); backdrop-filter: blur(6px); opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; }
 .mermaid-zoom.is-on { opacity: .75; transform: translate(-50%, 0); }
@@ -10903,6 +10928,22 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 .mermaid-tools { position: absolute; top: .5rem; right: .5rem; z-index: 2; display: flex; gap: .3rem; }
 .mermaid-pad { position: absolute; right: .5rem; bottom: .5rem; z-index: 2; display: grid; grid-template-columns: repeat(3, 30px); gap: 4px; opacity: .55; transition: opacity .2s; }
 .mermaid-block:hover .mermaid-pad, .mermaid-pad:focus-within { opacity: 1; }
+/* ---- sized diagrams: drawn at a readable scale (Mermaid.jsx), prettier nodes ---- */
+.mermaid-block.is-sized .mermaid-canvas svg,
+.mermaid-block.is-sized.is-fit .mermaid-canvas svg { width: var(--mmd-w) !important; height: var(--mmd-h) !important; max-width: none !important; max-height: none; flex: none; }
+.mermaid-block.is-sized .mermaid-stage { max-height: 720px; padding: 2.8rem 1.25rem 1.5rem; }
+.mermaid-block.is-overflow .mermaid-stage { overflow-x: auto; overflow-y: hidden; touch-action: pan-x pan-y; }
+.mermaid-block.is-overflow .mermaid-canvas { justify-content: flex-start; width: max-content; }
+.mermaid-block.is-sized { background: radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--text-primary, #fff) 4%, transparent), transparent 70%), var(--bg-secondary, #0f141b); }
+.mermaid-hint { position: absolute; left: 1rem; top: .85rem; z-index: 2; font-size: .72rem; color: var(--text-tertiary, #8b949e); pointer-events: none; }
+.mermaid-canvas .node rect, .mermaid-canvas .cluster rect { rx: 10px; ry: 10px; }
+.mermaid-canvas .node rect, .mermaid-canvas .node polygon, .mermaid-canvas .node circle, .mermaid-canvas .node path.label-container { filter: drop-shadow(0 1px 2px rgba(0,0,0,.28)); stroke-width: 1.4px; }
+.mermaid-canvas .flowchart-link, .mermaid-canvas .edgePath .path { stroke-width: 1.6px; }
+.mermaid-canvas .nodeLabel { font-weight: 550; letter-spacing: -0.01em; }
+.mermaid-canvas .cluster-label .nodeLabel { font-weight: 700; }
+.mermaid-pad { opacity: 0; }
+.mermaid-block:hover .mermaid-pad { opacity: .92; }
+@media (pointer: coarse) { .mermaid-block.is-sized .mermaid-pad { opacity: .75; } }
 .mermaid-btn { width: 30px; height: 30px; display: grid; place-items: center; border-radius: 8px; border: 1px solid var(--border-color, #ffffff22); background: var(--bg-tertiary, #1b222c); color: var(--text-secondary, #c9d1d9); cursor: pointer; transition: background .15s, transform .15s; }
 .mermaid-btn:hover { background: var(--bg-hover, #262f3b); transform: translateY(-1px); }
 .mermaid-btn[aria-pressed="true"] { color: var(--accent-color, #7aa2ff); }

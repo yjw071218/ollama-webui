@@ -120,6 +120,7 @@ test('another client follows status-only frames and uses the original elapsed ti
   const shown = vm.runInNewContext(overlay + '\nmessages;', {
     currentSession: { messages: [{ role: 'user', content: '작업해 줘' }] },
     currentSessionId: 'c', followed: updates[0], useMemo: run => run(), askedCount: () => 1,
+    dismissedFollowRef: { current: null },
   });
   assert.equal(shown.length, 2);
   assert.equal(shown[1].cliActivity.phase, 'thinking');

@@ -16,6 +16,52 @@
 // does not, and — this is the part the old code skipped — report whether it
 // actually worked, so a caller can say so instead of showing a tick that lies.
 
+import { decodeByteFallback } from './byteFallback.js';
+
+/**
+ * Text as it should land on the clipboard.
+ *
+ * What is on screen and what was copied disagreed in ways that pasted as
+ * broken letters: Korean a CLI wrote decomposed (NFD jamo -- drawn joined by
+ * the browser, pasted as separate ㅈㅓㅇ in many apps), byte-fallback tokens
+ * (<0xED>…) the renderer decodes but the raw content did not, and lone
+ * surrogates / zero-width markers from a stream cut mid-character.
+ */
+export const cleanCopiedText = (text) => {
+  let value = decodeByteFallback(String(text ?? ''));
+  try { value = value.normalize('NFC'); } catch { /* old engine */ }
+  if (typeof value.toWellFormed === 'function') value = value.toWellFormed();
+  // ZWSP / BOM / replacement char. ZWJ (U+200D) stays: emoji need it.
+  return value.replace(/[​﻿�]/g, '');
+};
+
+/**
+ * Ctrl+C on a selection gets the same cleaning. The plain text is rewritten;
+ * the HTML copy is kept (normalized) so rich pastes keep their formatting.
+ */
+export const installCopyCleanup = () => {
+  if (typeof document === 'undefined' || installCopyCleanup.done) return;
+  installCopyCleanup.done = true;
+  document.addEventListener('copy', (e) => {
+    const target = e.target;
+    // Inputs and editors copy what they hold, untouched.
+    if (target instanceof Element && target.closest('input, textarea, [contenteditable="true"], .cm-editor, .monaco-editor')) return;
+    const selection = document.getSelection?.();
+    if (!selection || selection.isCollapsed || !e.clipboardData) return;
+    const plain = cleanCopiedText(selection.toString());
+    if (!plain) return;
+    let html = '';
+    try {
+      const box = document.createElement('div');
+      for (let i = 0; i < selection.rangeCount; i++) box.appendChild(selection.getRangeAt(i).cloneContents());
+      html = box.innerHTML.normalize('NFC').replace(/[​﻿]/g, '');
+    } catch { /* plain is enough */ }
+    e.preventDefault();
+    e.clipboardData.setData('text/plain', plain);
+    if (html) e.clipboardData.setData('text/html', `<meta charset="utf-8">${html}`);
+  });
+};
+
 /**
  * Put `text` on the clipboard. Resolves true if it got there.
  *
@@ -23,7 +69,7 @@
  * false, because the caller is in an event handler and has nowhere to put it.
  */
 export const copyText = async (text) => {
-  const value = String(text ?? '');
+  const value = cleanCopiedText(text);
   if (!value) return false;
 
   // The modern path. Also rejects when the document is not focused, or when

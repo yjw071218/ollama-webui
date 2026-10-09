@@ -40,7 +40,8 @@ button.close{color:var(--muted);margin-inline-end:4px}button.close:hover{color:v
 .ai-badge{flex:none;font-weight:800;font-size:11px;letter-spacing:.04em;padding:3px 7px;border-radius:6px;color:var(--bg);background:linear-gradient(135deg,var(--accent),color-mix(in srgb,var(--accent) 50%,#8a7cff))}
 #ask{flex:1;min-width:120px;position:relative;display:flex;align-items:center}
 #question{border-color:color-mix(in srgb,var(--accent) 45%,var(--line))}
-#askmode{position:absolute;right:6px;font-size:11px;padding:2px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 25%,transparent)}
+#askmode{position:absolute;right:6px;font-size:11px;padding:2px 8px;border-radius:999px;background:color-mix(in srgb,var(--accent) 25%,transparent);cursor:pointer;user-select:none;pointer-events:auto;-webkit-app-region:no-drag}
+#askmode:hover{background:color-mix(in srgb,var(--accent) 45%,transparent);text-decoration:line-through}
 #airow [data-quick]{border:1px solid var(--line);border-radius:999px;padding:3px 10px;font-size:12px}
 #airow [data-quick]:hover:not(:disabled){border-color:var(--accent)}
 body.asking .ai-badge{animation:pulse 1.2s ease-in-out infinite}

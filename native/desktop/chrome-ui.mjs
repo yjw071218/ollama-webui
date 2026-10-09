@@ -6,3 +6,11 @@ window.appChrome.onColors(colors=>{
   const style=document.documentElement.style;
   for (const name of ['bg','fg','muted','line','hover']) if (/^#[0-9a-f]{6}$/i.test(colors?.[name]||'')) style.setProperty('--'+name, colors[name]);
 });
+// Ctrl+wheel zoom ratio, shown beside the new-chat button.
+const zoomLabel=document.getElementById('zoom');
+window.appChrome.onZoom?.(factor=>{
+  const pct=Math.round(Number(factor)*100);
+  if (!Number.isFinite(pct)) return;
+  zoomLabel.textContent=pct+'%';
+  zoomLabel.hidden=pct===100;
+});

@@ -12,6 +12,8 @@ import './print.css'
 import './polish.css'
 import { RefreshCcw } from 'lucide-react'
 import App from './App.jsx'
+import { installCopyCleanup } from './clipboard.js'
+installCopyCleanup()
 import { SessionProvider, useSession } from './session.jsx'
 import { deriveScope } from './profileScope.js'
 import { setActiveScope } from './settingsStore.js'

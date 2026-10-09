@@ -1,6 +1,6 @@
 {
   "name": "ollama-webui-client",
-  "version": "1.0.27",
+  "version": "1.0.28",
   "description": "Ollama WebUI server-connected desktop app",
   "author": "Ollama WebUI contributors",
   "license": "MIT",

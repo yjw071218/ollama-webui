@@ -29,6 +29,10 @@ $('#ask').addEventListener('submit', (e) => {
   setMode(null);
   question.blur();
 });
+// Clicking the chip again cancels the selection/image mode.
+askmode.title = tr('다시 클릭하면 선택 취소', 'Click again to cancel');
+askmode.addEventListener('mousedown', (e) => e.preventDefault());
+askmode.addEventListener('click', (e) => { e.preventDefault(); e.stopPropagation(); setMode(null); question.focus(); });
 question.addEventListener('keydown', (e) => { if (e.key === 'Escape') { setMode(null); question.blur(); } });
 document.querySelectorAll('[data-quick]').forEach((b) => b.addEventListener('click', () => { if (!state.asking) api.action('quick', b.dataset.quick); }));
 
