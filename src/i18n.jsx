@@ -1270,6 +1270,7 @@ const en = {
   'msg.copy': 'Copy message text', 'msg.branch': 'Branch a new chat from here', 'msg.star': 'Star this message',
   'msg.unstar': 'Remove star', 'msg.delete': 'Delete message', 'msg.retry': 'Retry response', 'msg.cutOff': 'This answer stopped partway through.',
   'msg.regenerateWith': 'Regenerate with another model', 'msg.edit': 'Edit message',
+  'chat.busyElsewhere': 'Another device is answering in this chat. Wait for it to finish (or stop it) and ask again. CLI models can run in parallel.',
   'msg.editAddFile': 'Add file', 'msg.saveSubmit': 'Save & submit', 'msg.deleted': 'Message deleted.',
 
   'settings.title': 'Settings', 'settings.general': 'General', 'settings.showGuide': 'Show the beginner guide', 'settings.generation': 'Generation',
@@ -3012,6 +3013,7 @@ const ko = {
   'msg.copy': '메시지 복사', 'msg.branch': '여기서 새 대화 분기', 'msg.star': '별표 추가',
   'msg.unstar': '별표 제거', 'msg.delete': '메시지 삭제', 'msg.retry': '답변 다시 생성', 'msg.cutOff': '답변이 중간에 끊겼습니다.',
   'msg.regenerateWith': '다른 모델로 다시 생성', 'msg.edit': '메시지 편집',
+  'chat.busyElsewhere': '다른 기기에서 이 대화에 답변을 작성하고 있습니다. 끝나거나 중지한 뒤 다시 보내 주세요. CLI 모델은 병렬로 실행할 수 있습니다.',
   'msg.editAddFile': '파일 추가', 'msg.saveSubmit': '저장 후 전송', 'msg.deleted': '메시지를 삭제했습니다.',
 
   'settings.title': '설정', 'settings.general': '일반', 'settings.showGuide': '초보자 가이드 다시 보기', 'settings.generation': '생성',

@@ -17,6 +17,8 @@ contextBridge.exposeInMainWorld('ollamaNative', {
   platform: 'desktop',
   openInEditor: value => ipcRenderer.invoke('client:openInEditor', value),
   openLocalPath: value => ipcRenderer.invoke('client:openLocalPath', value),
+  // Full paths of files/folders copied in Explorer (Ctrl+C), for pasting a folder as its path.
+  clipboardPaths: () => ipcRenderer.invoke('client:clipboardPaths'),
   changeServer: () => ipcRenderer.invoke('client:changeServer'),
   checkUpdates: () => ipcRenderer.invoke('client:checkUpdates'),
   openBrowser: (url) => ipcRenderer.invoke('client:openBrowser', typeof url === 'string' ? url : ''),

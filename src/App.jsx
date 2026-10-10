@@ -9748,13 +9748,75 @@ function App() {
     }
   };
 
-  const handlePaste = (e) => {
+  /* Text put into the message being edited, at its caret -- the edit box's
+     counterpart of insertAtCaret. */
+  const editTextareaRef = useRef(null);
+  const insertIntoEdit = (text, caret) => {
+    if (!text) return;
+    let caretAfter = null;
+    setEditInput(prev => {
+      const cur = prev || '';
+      const start = caret ? Math.min(caret.start, cur.length) : cur.length;
+      const end = caret ? Math.min(Math.max(caret.end, start), cur.length) : start;
+      const before = cur.slice(0, start), after = cur.slice(end);
+      const piece = (before && !/\s$/.test(before) ? ' ' : '') + text + (after && !/^\s/.test(after) ? ' ' : '');
+      caretAfter = before.length + piece.length;
+      return before + piece + after;
+    });
+    requestAnimationFrame(() => {
+      const el = editTextareaRef.current;
+      if (!el) return;
+      el.focus?.();
+      if (caretAfter != null) { try { el.setSelectionRange(caretAfter, caretAfter); } catch { /* not a text field */ } }
+    });
+  };
+
+  /* Ctrl+V, in the composer or in a message being edited (`target`).
+   * Files attach (with their real path when this PC can tell it); a folder
+   * copied in Explorer goes in as its path, the way a dropped one does. */
+  const handlePaste = (e, target = 'composer') => {
     const items = Array.from(e.clipboardData?.items || []);
-    const files = items.filter(it => it.kind === 'file').map(it => it.getAsFile()).filter(Boolean);
-    if (files.length > 0) {
+    const fileItems = items.filter(it => it.kind === 'file');
+    if (fileItems.length > 0) {
       e.preventDefault();
-      addFiles(files);
-      addLog(`Attached ${files.length} file(s) from clipboard.`, 'success');
+      const field = target === 'edit' ? editTextareaRef.current : textareaRef.current;
+      const caret = field && typeof field.selectionStart === 'number'
+        ? { start: field.selectionStart, end: field.selectionEnd ?? field.selectionStart } : null;
+      // Read synchronously: clipboard items are gone once the event returns.
+      const pairs = fileItems.map(it => ({ file: it.getAsFile(), entry: it.webkitGetAsEntry?.() || null }));
+      (async () => {
+        let nativePaths = [];
+        try { nativePaths = (await window.ollamaNative?.clipboardPaths?.()) || []; } catch { nativePaths = []; }
+        const baseName = p => String(p).split(/[\/]/).filter(Boolean).pop() || '';
+        const looksFolder = ({ file, entry }) => entry?.isDirectory
+          || (!!file && file.size === 0 && !file.type && nativePaths.some(p => baseName(p) === file.name && !/\.[^.\/]+$/.test(file.name)));
+        const folders = pairs.filter(looksFolder);
+        const files = pairs.filter(x => !looksFolder(x) && x.file).map(x => x.file);
+        if (files.length > 0) {
+          addFiles(files);
+          rememberPaths(files);
+          addLog(`Attached ${files.length} file(s) from clipboard.`, 'success');
+        }
+        if (folders.length > 0) {
+          const names = folders.map(x => x.entry?.name || x.file?.name || '');
+          const fromNative = names.map(n => nativePaths.find(p => baseName(p) === n) || null);
+          const missing = names.map((n, i) => (fromNative[i] ? null : i)).filter(i => i !== null);
+          if (missing.length) {
+            const wanted = await Promise.all(missing.map(async i => ({
+              kind: 'folder', name: names[i], children: folders[i].entry ? await folderChildren(folders[i].entry) : [],
+            })));
+            const found = await locatePaths(wanted);
+            missing.forEach((i, k) => { fromNative[i] = found[k] || null; });
+          }
+          const text = names.map((n, i) => {
+            const p = fromNative[i] || n;
+            return /\s/.test(p) ? `"${p}"` : p;
+          }).join(' ');
+          if (target === 'edit') insertIntoEdit(text, caret);
+          else insertAtCaret(text, { sep: ' ', caret });
+          addLog(`Inserted ${folders.length} folder path(s).`, 'success');
+        }
+      })();
       return;
     }
 
@@ -9890,7 +9952,7 @@ function App() {
   // (Windows) while an answer is being written.
   useEffect(() => { tellNativeBusy(isGenerating); }, [isGenerating]);
 
-  const handleDrop = async (e) => {
+  const handleDrop = async (e, target = 'composer') => {
     e.preventDefault();
     setIsDragging(false);
     const items = Array.from(e.dataTransfer?.items || []);
@@ -9911,14 +9973,18 @@ function App() {
     if (folders.length > 0) {
       // Where the caret was when the folder was dropped: the path goes there,
       // not at the end. Read before the await, while it is still that spot.
-      const caret = composerCaret();
+      const editField = target === 'edit' ? editTextareaRef.current : null;
+      const caret = editField
+        ? { start: editField.selectionStart ?? editField.value.length, end: editField.selectionEnd ?? editField.value.length }
+        : composerCaret();
       const wanted = await Promise.all(folders.map(async f => ({ kind: 'folder', name: f.name, children: await folderChildren(f) })));
       const paths = await locatePaths(wanted);
       const text = folders.map((f, i) => {
         const p = paths[i] || f.name;
         return /\s/.test(p) ? `"${p}"` : p;
       }).join(' ');
-      insertAtCaret(text, { sep: ' ', caret });
+      if (target === 'edit') insertIntoEdit(text, caret);
+      else insertAtCaret(text, { sep: ' ', caret });
       addLog(`Inserted ${folders.length} folder path(s).`, 'success');
     }
   };
@@ -10452,6 +10518,19 @@ function App() {
     const resending = emptyResendRef.current;
     emptyResendRef.current = false;
     if ((isGenerating && !resending) || (!input.trim() && attachments.length === 0 && !customMessages)) return;
+
+    /* One conversation, one writer, for a local model (server/chatJobs.js).
+       Another of this reader's devices is writing an answer here right now:
+       a second question would race it into the same transcript. Refused
+       here, before anything is written, rather than rolled back after. A
+       CLI model runs in parallel and is let through; the server still turns
+       it away while a local answer is in progress. */
+    if (followed?.live && String(followed.chat) === String(currentSessionId) && !cliOf(chosenModel) && !isGenerating) {
+      toast(t('chat.busyElsewhere'), 'info', 7000);
+      return;
+    }
+    // The conversation as it was before this turn: what a refused turn rolls back to.
+    const messagesBeforeTurn = messages;
 
     // A chain is several turns wearing one message, so it leaves here too --
     // and before research, because arming a chain is the more specific act of
@@ -11715,6 +11794,11 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
       if (!res.ok) {
         const detail = await res.text().catch(() => '');
+        let code = '';
+        try { code = JSON.parse(detail)?.code || ''; } catch { code = ''; }
+        if (res.status === 409 && code === 'CHAT_BUSY') {
+          throw Object.assign(new Error(t('chat.busyElsewhere')), { chatBusy: true });
+        }
         throw new Error(`Ollama returned HTTP ${res.status}${detail ? `: ${detail.slice(0, 200)}` : ''}`);
       }
 
@@ -13148,6 +13232,19 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           msgs[msgs.length - 1] = { ...last, content: `${last.content}\n</think>\n\n`, isMcpFetching: false };
           return { ...s, messages: msgs };
         });
+      } else if (err.chatBusy) {
+        /* Refused because another device is answering in this chat. The turn
+           never happened, so it is undone whole -- the question and the empty
+           answer both -- the way a transaction that could not take its lock
+           rolls back rather than leaving half a row. The question goes back in
+           the composer, nothing is lost. */
+        addLog('[chat] another device is answering in this conversation; this turn was rolled back', 'info');
+        reviseSession(startedIn, session => ({ ...session, messages: messagesBeforeTurn }));
+        if (!isAutoTool) {
+          setInput(prev => prev || originalInput);
+          setAttachments(prev => (prev.length ? prev : currentAttachments));
+        }
+        toast(t('chat.busyElsewhere'), 'info', 8000);
       } else if (isRetryable(err) && !isAutoTool && originalInput.trim()) {
         /* The wifi dropped, or Ollama was still loading, or the laptop was
            asleep. All three are ordinary and all three used to lose the
@@ -14061,7 +14158,29 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     });
   };
 
+  /* Only the last thing the reader asked can be edited. Editing an earlier
+     question rewrote history under every answer after it -- and on a second
+     device mid-sync, merged into a conversation that no longer matched
+     either copy (server/chatMerge.js). Branch from it instead. */
+  const lastUserIndex = (() => {
+    for (let k = messages.length - 1; k >= 0; k--) {
+      const m = messages[k];
+      if (m?.role === 'user' && !m.continuation && !String(m.content || '').startsWith('<TOOL_RESULT>')) return k;
+    }
+    return -1;
+  })();
+  /* Which chat a picture card belongs to. A card restored after a reload
+     used to be checked against the chat on screen only when it was another
+     device's, so this device's own picture -- still drawing -- went up under
+     the last message of whatever conversation was opened next. */
+  const drawingBelongsHere = !!drawing
+    && String(drawing.sessionId ?? generatingSessionId ?? currentSessionId) === String(currentSessionId);
+  /* A picture still being drawn for the last answer here: its tag is not a
+     failure yet, whatever the reload that interrupted the turn left behind. */
+  const drawingOnLastHere = (i, len) => drawingBelongsHere && !drawing.watched
+    && i + len - 1 >= messages.length - 1;
   const startEdit = (index, content) => {
+    if (index !== lastUserIndex || isGenerating) return;
     const { text, blocks } = splitForEdit(content);
     // The composer's own draft attachments wait while the edit borrows the list.
     if (editStashRef.current === null) editStashRef.current = attachments;
@@ -14083,6 +14202,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
   const cancelEdit = endEdit;
 
   const saveEdit = (index) => {
+    if (index !== lastUserIndex || isGenerating) { endEdit(); return; }
     const added = attachments;
     if (!editInput.trim() && editBlocks.length === 0 && added.length === 0 && editImages.length === 0) return;
     // The new files, written the way handleSend writes them.
@@ -14103,7 +14223,9 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     // message object that is still referenced by the stored session.
     const newMessages = messages.slice(0, index + 1).map((m, i) => {
       if (i !== index) return m;
-      const next = { ...m, content: joinEdited(editInput, editBlocks) + extra };
+      // `editedAt`: the rewrite says when, so a merge with another device's
+      // older copy keeps this one (server/chatMerge.js).
+      const next = { ...m, content: joinEdited(editInput, editBlocks) + extra, editedAt: Date.now() };
       if (images.length) next.images = images; else delete next.images;
       return next;
     });
@@ -16741,7 +16863,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                   )}
                                 </>
                               )}
-                              {emptyAfterText(-1).map(({ block, ordinal }) => (
+                              {(drawingOnLastHere(i, group.length) ? [] : emptyAfterText(-1)).map(({ block, ordinal }) => (
                                 <div className="draw-failed" key={`empty-${ordinal}`}>
                                   <TriangleAlert size={13} aria-hidden="true" />
                                   <span className="draw-failed-what" title={block.content}>
@@ -16804,7 +16926,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                     Beside where it would have been, because
                                     that is where the reader is looking for
                                     it. */}
-                                {emptyAfterText(idx).map(({ block, ordinal }) => (
+                                {(drawingOnLastHere(i, group.length) ? [] : emptyAfterText(idx)).map(({ block, ordinal }) => (
                                   <div className="draw-failed" key={`empty-${ordinal}`}>
                                     <TriangleAlert size={13} aria-hidden="true" />
                                     <span className="draw-failed-what" title={block.content}>
@@ -16830,7 +16952,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                    conversation it is being made for -- this one
                                    is not written down anywhere, so nothing else
                                    ties it to a chat. */
-                                && (!drawing.watched || String(drawing.sessionId) === String(currentSessionId)) && (
+                                && drawingBelongsHere && (
                                 <JobProgress
                                   // A card per job, so a batch's next picture
                                   // starts with its own clock and frame.
@@ -16862,7 +16984,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                               {/* A long clip's storyboard while it is drawn: the
                                   segments not yet started can still be rewritten. */}
                               {(isStreamingRow || (drawing?.restored && i + group.length - 1 >= messages.length - 1)) && drawing
-                                && /^long-/.test(String(drawing.id || '')) && !drawing.watched && (
+                                && drawingBelongsHere && /^long-/.test(String(drawing.id || '')) && !drawing.watched && (
                                 <LongStoryboard longId={drawing.id} t={t} />
                               )}
 
@@ -17192,12 +17314,21 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                             autoFocus
                             rows={3}
                             ref={el => {
+                              editTextareaRef.current = el;
                               if (!el) return;
                               // Grows with the text, up to most of the screen.
                               el.style.height = 'auto';
                               el.style.height = `${Math.min(el.scrollHeight, window.innerHeight * 0.55)}px`;
                             }}
                             onChange={e => setEditInput(e.target.value)}
+                            onPaste={e => handlePaste(e, 'edit')}
+                            onDrop={e => {
+                              // A drop on the edit box attaches to the edit, as a paste does.
+                              if (![...(e.dataTransfer?.types || [])].includes('Files')) return;
+                              e.stopPropagation();
+                              fileDragDepth.current = 0;
+                              handleDrop(e, 'edit');
+                            }}
                             onKeyDown={e => {
                               if (e.key === 'Escape') { e.preventDefault(); cancelEdit(); }
                               else if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); saveEdit(i); }
@@ -17380,9 +17511,11 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                     <div className="msg-hover-actions">
                       {msg.role === 'user' ? (
                         <>
-                          <button className="action-btn" onClick={() => startEdit(i, msg.content)} title={t('msg.edit')}>
-                            <Edit size={14} />
-                          </button>
+                          {i === lastUserIndex && !isGenerating && (
+                            <button className="action-btn" onClick={() => startEdit(i, msg.content)} title={t('msg.edit')}>
+                              <Edit size={14} />
+                            </button>
+                          )}
                           <button className="action-btn" onClick={() => copyToClipboard(asWritten(msg.content), i)} title={t('msg.copy')}>
                             {copiedIndex === i ? <Check size={14} /> : <Copy size={14} />}
                           </button>
@@ -17680,7 +17813,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               value={input}
               onChange={handleInputResize}
               onKeyDown={handleKeyDown}
-              onPaste={handlePaste}
+              onPaste={e => handlePaste(e)}
               onFocus={handleComposerFocus}
               rows="1"
             />

@@ -55,6 +55,65 @@ const a = (content, at) => ({ role: 'assistant', content, at });
   check('a star on a message the server has is news', mergeChats(server, starred)?.messages[1].starred === true);
 }
 
+{
+  // The bug in the screenshot: an edited question came back twice.
+  const base = { title: 'T', messages: [u('q1', 1), a('r1', 2)] };
+  const server = { title: 'T', messages: [u('q1', 1), a('r1 and more', 2)] };
+  const mine = { title: 'T', messages: [{ ...u('q1 edited', 1), editedAt: 50 }, a('new answer', 60)] };
+  const merged = mergeChats(server, mine, base);
+  check('an edited question is one message, not two', texts(merged).join() === 'q1 edited,new answer', texts(merged).join());
+  const noBase = mergeChats(server, mine);
+  check('  even without the base copy, its key is not repeated',
+    noBase.messages.filter(x => x.role === 'user' && x.at === 1).length === 1, texts(noBase).join());
+  check('  and the edit wins over the old words', noBase.messages[0].content === 'q1 edited');
+}
+{
+  const base = { title: 'T', messages: [u('q1', 1), a('old answer', 2)] };
+  const server = { title: 'T', messages: [u('q1', 1), a('old answer', 2)], model: 'x' };
+  const mine = { title: 'T', messages: [u('q1', 1), a('regenerated', 9)] };
+  check('a regenerated answer replaces the old one instead of sitting beside it',
+    texts(mergeChats(server, mine, base)).join() === 'q1,regenerated');
+}
+{
+  const base = { title: 'T', messages: [u('q1', 1), a('r1', 2), u('q2', 3), a('r2', 4)] };
+  const server = { title: 'T', messages: [u('q1', 1), a('r1', 2)] };
+  const mine = { title: 'T', model: 'm', messages: [u('q1', 1), a('r1', 2), u('q2', 3), a('r2', 4)] };
+  check('a turn deleted on another device is not resurrected by a stale copy',
+    texts(mergeChats(server, mine, base)).join() === 'q1,r1');
+}
+{
+  const list = [u('q', 1), a('r', 2), a('r longer', 2)];
+  const { uniqueMessages } = await import('../server/chatMerge.js');
+  const out = uniqueMessages(list);
+  check('no key appears twice', out.length === 2 && out[1].content === 'r longer');
+}
+
+/* ------------------------------------------------------ one writer per chat */
+{
+  const { createChatJobStore } = await import('../server/chatJobs.js');
+  const store = createChatJobStore();
+  store.begin('pc', { owner: 'u', chat: 'c1' });
+  let refused = null;
+  try { store.begin('phone', { owner: 'u', chat: 'c1' }); } catch (e) { refused = e; }
+  check('a second local answer in one chat is refused', refused?.statusCode === 409 && refused?.code === 'CHAT_BUSY');
+  check('  the same job id begun again is not a conflict', !!store.begin('pc', { owner: 'u', chat: 'c1' }));
+  check('  another chat is free', !!store.begin('other', { owner: 'u', chat: 'c2' }));
+  check('  another account is free', !!store.begin('theirs', { owner: 'v', chat: 'c1' }));
+  let cliRefused = null;
+  try { store.begin('cli-1', { owner: 'u', chat: 'c1', kind: 'cli' }); } catch (e) { cliRefused = e; }
+  check('  a CLI answer waits for a local one in progress', cliRefused?.statusCode === 409);
+  store.appendChunk('pc', '{"message":{"content":"x"},"done":true}\n');
+  check('  a local answer that said done frees the chat', !!store.begin('phone', { owner: 'u', chat: 'c1' }));
+  store.finish('phone');
+  store.begin('cli-a', { owner: 'u', chat: 'c3', kind: 'cli' });
+  check('CLI answers run in parallel in one chat', !!store.begin('cli-b', { owner: 'u', chat: 'c3', kind: 'cli' }));
+  let localAfterCli = null;
+  try { store.begin('local', { owner: 'u', chat: 'c3' }); } catch (e) { localAfterCli = e; }
+  check('  but a local one does not join them', localAfterCli?.statusCode === 409);
+  store.stop('cli-a'); store.stop('cli-b');
+  check('  stopped answers free the chat', !!store.begin('local', { owner: 'u', chat: 'c3' }));
+}
+
 /* ------------------------------------------------------- through the server */
 
 const db = database();

@@ -506,6 +506,26 @@ else {
       if (error) throw new Error(error);
       return true;
     });
+    /* What Explorer put on the clipboard with Ctrl+C: CF_HDROP, a DROPFILES
+       header (offset at byte 0, wide flag at 16) then NUL-separated UTF-16
+       paths ending in a double NUL. A pasted folder reaches the page as an
+       unnamed zero-byte entry at best, so the page asks here for the path. */
+    ipcMain.handle('client:clipboardPaths', event => {
+      if (!validClient(event)) throw new Error('Forbidden');
+      if (process.platform !== 'win32') return [];
+      try {
+        const buf = clipboard.readBuffer('CF_HDROP');
+        if (buf && buf.length > 20) {
+          const offset = buf.readUInt32LE(0);
+          const wide = buf.readUInt32LE(16) !== 0;
+          const text = wide ? buf.subarray(offset).toString('utf16le') : buf.subarray(offset).toString('latin1');
+          const list = text.split('\0').filter(Boolean);
+          if (list.length) return list.slice(0, 50);
+        }
+        const one = clipboard.readBuffer('FileNameW').toString('utf16le').replace(/\0+$/, '');
+        return one ? [one] : [];
+      } catch { return []; }
+    });
     ipcMain.handle('client:changeServer', event => { if (!validClient(event)) throw new Error('Forbidden'); openSetup(); return true; });
     ipcMain.handle('client:checkUpdates', event => { if (!validClient(event)) throw new Error('Forbidden'); notifyUpdate(true); return true; });
     ipcMain.handle('client:openBrowser', (event, url) => { if (!validClient(event)) throw new Error('Forbidden'); showInAppBrowser({ parent: liveClient(), background: settings.pageBackground, url: /^https?:\/\//i.test(String(url || '')) ? String(url) : '' }); return true; });

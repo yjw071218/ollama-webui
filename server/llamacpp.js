@@ -566,7 +566,7 @@ const sendJson = (res, payload, status = 200) => {
   res.end(JSON.stringify(payload));
 };
 
-const fail = (res, error, status = 502) => sendJson(res, { error: String(error?.message || error) }, status);
+const fail = (res, error, status = 502) => sendJson(res, { error: String(error?.message || error), ...(error?.code ? { code: error.code, busyJob: error.busyJob } : {}) }, status);
 
 /** Start an NDJSON response: one JSON object per line, which is Ollama's shape. */
 const openNdjson = (res) => {
@@ -693,7 +693,7 @@ export const createLlamaRoutes = (env = {}) => {
         });
         if (job.finished || job.controller) return fail(res, new Error('Chat job already exists'), 409);
         attachChatController(jobId, controller);
-      } catch (e) { return fail(res, e, 503); }
+      } catch (e) { return fail(res, e, e.statusCode || 503); }
     }
 
     let upstream;

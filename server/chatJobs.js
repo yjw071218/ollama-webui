@@ -75,11 +75,42 @@ export const createChatJobStore = ({ limits = {}, now = Date.now, onFinished = n
       if (meta?.chat) held.chat = String(meta.chat);
       return held;
     }
+    /* One conversation, one writer -- for the local models.
+     *
+     * A local model is one graphics card, and a conversation is one ordered
+     * list: two answers streaming into it at once (the PC mid-answer, the
+     * phone asking again) interleaved their frames, finished in the wrong
+     * order and left the transcript holding text that belonged to the other
+     * turn. Like a row lock taken before the write, the second writer is
+     * refused rather than allowed to race -- the first is the one on screen
+     * and the other device follows it (`/api/chat/live`).
+     *
+     * CLI models run elsewhere and in parallel by design, so they may share a
+     * chat with each other; they still wait for a local answer in progress,
+     * which is the one that cannot be interleaved with. */
+    const kind = meta?.kind === 'cli' ? 'cli' : 'local';
+    const chatKey = String(meta?.chat || '');
+    if (chatKey) {
+      const ownerKey = String(meta?.owner || '');
+      /* A streamed answer whose last line already says done is over, even if
+         the upstream socket has not closed yet: the client sends the next
+         leg of a tool loop the moment it reads that line. */
+      const saidDone = other => {
+        const tail = other.frames[other.frames.length - 1];
+        return typeof tail === 'string' && /"done"\s*:\s*true/.test(tail.slice(-400));
+      };
+      const busy = [...jobs.values()].find(other => !other.finished && !saidDone(other) && other.chat === chatKey
+        && other.owner === ownerKey && (kind === 'local' || other.kind === 'local'));
+      if (busy) {
+        throw Object.assign(new Error('This conversation is already being answered on another device. Wait for it to finish or stop it first.'),
+          { statusCode: 409, code: 'CHAT_BUSY', busyJob: busy.id });
+      }
+    }
     evictFinished(0, true);
     if (jobs.size >= cap.maxJobs) throw new Error('Too many retained chat jobs');
     const job = {
       id, frames: [], bytes: 0, finished: false, startedAt: now(), updatedAt: now(), format: 'string',
-      owner: String(meta?.owner || ''), chat: String(meta?.chat || ''),
+      owner: String(meta?.owner || ''), chat: chatKey, kind,
     };
     jobs.set(id, job);
     return job;
@@ -131,7 +162,7 @@ export const createChatJobStore = ({ limits = {}, now = Date.now, onFinished = n
         .filter(job => !job.finished && job.chat && job.chat === String(chat || '')
           && job.owner === String(owner || ''))
         .sort((a, b) => b.startedAt - a.startedAt)
-        .map(job => ({ id: job.id, chat: job.chat, startedAt: job.startedAt, bytes: job.bytes }));
+        .map(job => ({ id: job.id, chat: job.chat, kind: job.kind, startedAt: job.startedAt, bytes: job.bytes }));
     },
     stats: () => ({ jobs: jobs.size, bytes }),
   };

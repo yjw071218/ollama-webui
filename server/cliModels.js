@@ -3022,10 +3022,10 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
   const jobId = generate ? '' : String(req.headers['x-chat-job-id'] || '').trim();
   if (jobId) {
     try {
-      const job = beginChatJob(jobId, { owner, chat });
+      const job = beginChatJob(jobId, { owner, chat, kind: 'cli' });
       if (job.finished || job.controller) return sendJson(res, { error: 'Chat job already exists' }, 409);
       attachChatController(jobId, controller);
-    } catch (e) { return sendJson(res, { error: String(e.message || e) }, 503); }
+    } catch (e) { return sendJson(res, { error: String(e.message || e), code: e.code, busyJob: e.busyJob }, e.statusCode || 503); }
   }
 
   const started = Date.now();

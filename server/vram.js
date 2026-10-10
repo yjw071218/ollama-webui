@@ -633,13 +633,20 @@ export const inferenceHook = (env = {}, options) => {
       await memory.makeRoom(model);
       if (res.destroyed) { release(); return; }
       const unhold = memory.hold(model);
-      forward(ollama, req, res, body, vram.track, () => { unhold(); release(); }, idleMs,
-        memory.enabled ? () => memory.makeRoom(model, { all: true }) : null);
+      try {
+        forward(ollama, req, res, body, vram.track, () => { unhold(); release(); }, idleMs,
+          memory.enabled ? () => memory.makeRoom(model, { all: true }) : null);
+      } catch (e) {
+        // Refused before it started (a conversation already being answered):
+        // the model hold must not outlive a request that never ran.
+        unhold();
+        throw e;
+      }
     } catch (e) {
       release();
       if (res.destroyed || res.writableEnded) return;
       if (!res.headersSent) res.writeHead(e.statusCode || 502, { 'Content-Type': 'application/json' });
-      res.end(JSON.stringify({ error: e.message }));
+      res.end(JSON.stringify({ error: e.message, ...(e.code ? { code: e.code, busyJob: e.busyJob } : {}) }));
     }
   };
 };

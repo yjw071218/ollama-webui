@@ -24,7 +24,7 @@
 // for a week downloads exactly what changed and nothing else.
 
 import { database, transaction } from './db.js';
-import { packPayload } from './recordHistory.js';
+import { packPayload, unpackPayload } from './recordHistory.js';
 import { mergeChats } from './chatMerge.js';
 
 /** The kinds a client may sync. Anything else is refused rather than stored. */
@@ -221,6 +221,11 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
       const existing = handle.prepare(
         'SELECT rev, updated_at, deleted, payload FROM records WHERE user_id = ? AND kind = ? AND id = ?'
       );
+      const baseOf = handle.prepare(`
+        SELECT payload FROM record_history
+         WHERE user_id = ? AND kind = ? AND id = ? AND updated_at = ? AND deleted = 0
+         ORDER BY rev DESC LIMIT 1
+      `);
       const history = handle.prepare(`
         INSERT OR IGNORE INTO record_history
           (user_id, kind, id, rev, updated_at, deleted, payload)
@@ -256,8 +261,16 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
            device that sent this, like any record that lost. */
         if (record.kind === 'chat' && !record.deleted && record.base !== null && current && !current.deleted
             && current.updated_at > record.base && current.updated_at !== record.updatedAt) {
+          /* The copy this device started from, for a three-way merge: what it
+             removed on purpose stays removed. Missing (pruned history) is a
+             two-way merge, which only ever keeps too much. */
+          let basePayload = null;
+          try {
+            const row = baseOf.get(userId, record.kind, record.id, record.base);
+            if (row?.payload) basePayload = JSON.parse(unpackPayload(handle, row.payload));
+          } catch { basePayload = null; }
           let merged = null;
-          try { merged = mergeChats(JSON.parse(current.payload), JSON.parse(record.payload)); } catch { merged = undefined; }
+          try { merged = mergeChats(JSON.parse(current.payload), JSON.parse(record.payload), basePayload); } catch { merged = undefined; }
           if (merged === null) { rejected++; lost.push(record); continue; }
           if (merged !== undefined) {
             const updatedAt = Math.max(current.updated_at, record.updatedAt) + 1;

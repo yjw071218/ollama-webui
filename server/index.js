@@ -237,7 +237,11 @@ const proxyChat = (target, req, res) => {
   const meta = { owner: ownerOfRequest(req), chat: String(req.headers['x-chat-conversation'] || '').trim() };
   const chunks = [];
   const send = () => {
-    beginChatJob(id, meta);
+    try { beginChatJob(id, meta); } catch (e) {
+      res.writeHead(e.statusCode || 503, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ error: e.message, code: e.code, busyJob: e.busyJob }));
+      return;
+    }
     const body = req.rawBody || Buffer.concat(chunks);
     const decoder = new StringDecoder('utf8');
     const upstream = new URL(target);
