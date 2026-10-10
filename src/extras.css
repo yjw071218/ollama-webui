@@ -11469,7 +11469,7 @@ body:has(.msg-actions-portal) .scroll-nudge { opacity: 0; pointer-events: none; 
    (`.main-header .header-tools ... :nth-child(n)`, !important) are one class
    more specific than a plain `.main-header` rule and kept CPU showing. The
    width matches the tier that used to show CPU and GPU together. */
-@container mainpane (max-width: 759px) {
+@container mainpane (max-width: 600px) {
   body .main-header .header-tools .sys-strip.in-header .sys-chip:not(.sys-chip--gpu) { display: none !important; }
   body .main-header .header-tools .sys-strip.in-header .sys-chip.sys-chip--gpu { display: inline-flex !important; }
 }
