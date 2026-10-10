@@ -11473,3 +11473,33 @@ body:has(.msg-actions-portal) .scroll-nudge { opacity: 0; pointer-events: none; 
   body .main-header .header-tools .sys-strip.in-header .sys-chip:not(.sys-chip--gpu) { display: none !important; }
   body .main-header .header-tools .sys-strip.in-header .sys-chip.sys-chip--gpu { display: inline-flex !important; }
 }
+
+/* ==== Header model picker: as wide as its name, not as wide as the gap ====
+   The tier rules let the picker grow into all the free room of the row while
+   the name inside was capped at 120px, so a wide header showed
+   "gemma4:26b-a4b-..." followed by a long empty box. The picker now takes the
+   width of its name (up to 260px, cut with "…" past that), and the free room
+   stays between it and the buttons on the right. */
+body .main-header .header-tools > .model-selector-container:not(.header-secondary) {
+  flex: 0 1 auto !important;
+  width: auto !important;
+  max-width: 320px !important;
+  min-width: 0 !important;
+}
+body .main-header .header-tools > .model-selector-container:not(.header-secondary) > .dropdown-trigger {
+  width: auto !important;
+  max-width: 100% !important;
+  min-width: 0 !important;
+}
+body .main-header .header-tools > .model-selector-container:not(.header-secondary) .model-name {
+  max-width: 260px !important;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+@container mainpane (max-width: 600px) {
+  body .main-header .header-tools > .model-selector-container:not(.header-secondary) .model-name { max-width: 180px !important; }
+}
+/* What comes after the picker (command palette, theme) stays at the right edge. */
+body .main-header .header-tools > .model-selector-container:not(.header-secondary) { margin-inline-end: auto !important; }
