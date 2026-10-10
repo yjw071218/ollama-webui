@@ -15546,8 +15546,9 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 }}
                 style={{ background: 'transparent', border: 'none', color: 'var(--text-primary)', outline: 'none', padding: '0.5rem', width: '100%', fontSize: '0.85rem' }}
               />
-              {chatSearchQuery && (
+              {(chatSearchQuery || searchOpen) && (
                 <div className="search-nav">
+                  {chatSearchQuery && <>
                   <span>{searchHits.length ? `${searchHitIndex + 1}/${searchHits.length}` : '0/0'}</span>
                   <button title={t('header.prevMatch')} disabled={searchHits.length === 0} onClick={() => jumpToHit(searchHitIndex - 1)}>
                     <ChevronDown size={13} style={{ transform: 'rotate(180deg)' }} />
@@ -15555,6 +15556,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   <button title={t('header.nextMatch')} disabled={searchHits.length === 0} onClick={() => jumpToHit(searchHitIndex + 1)}>
                     <ChevronDown size={13} />
                   </button>
+                  </>}
                   <button title={t('header.clearSearch')} onClick={() => { setChatSearchQuery(''); setSearchOpen(false); }}>
                     <X size={14} />
                   </button>
@@ -15624,7 +15626,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             {/* Running and trying a project on this PC (Windows app only). */}
             {runnerAvailable() && !browserDocked && (
               <button
-                className={`icon-btn bordered ${sidebarPlace === 'runner' ? 'toggled' : ''}`}
+                className={`icon-btn bordered header-run ${sidebarPlace === 'runner' ? 'toggled' : ''}`}
                 title={t('runner.place')}
                 onClick={() => {
                   if (sidebarPlace !== 'runner') setRunnerOpened(true);
@@ -15733,6 +15735,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             <button
               className="icon-btn bordered header-theme"
               title={`${t('header.theme')}: ${theme}`}
+              aria-label={`${t('header.theme')}: ${theme}`}
               onClick={() => setTheme(theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system')}
             >
               {theme === 'light' ? <Sun size={16} /> : theme === 'dark' ? <Moon size={16} /> : <Monitor size={16} />}

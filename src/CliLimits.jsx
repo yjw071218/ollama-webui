@@ -177,13 +177,25 @@ const POLL_MS = 30_000;
 const limitsHub = { data: { limits: null, budget: null }, subs: new Set(), timer: null, inflight: null, at: 0 };
 const loadLimits = (force = false) => {
   if (limitsHub.inflight) return limitsHub.inflight;
-  limitsHub.inflight = fetch(force ? '/cli/limits?force=1' : '/cli/limits')
+  const publish = (d) => {
+    if (!d.success) return;
+    limitsHub.data = { limits: d.limits || {}, budget: d.budget || null };
+    limitsHub.at = Date.now();
+    limitsHub.subs.forEach(fn => fn(limitsHub.data));
+  };
+  limitsHub.inflight = (async () => {
+    // Show stored figures before waiting for external providers on first load.
+    if (!limitsHub.data.limits) {
+      try {
+        const r = await fetch('/cli/limits?cached=1', { signal: AbortSignal.timeout(8000) });
+        if (r.ok) publish(await r.json());
+      } catch { /* The live request below can still recover. */ }
+    }
+    return fetch(force ? '/cli/limits?force=1' : '/cli/limits', { signal: AbortSignal.timeout(12000) });
+  })()
     .then(r => r.json())
     .then((d) => {
-      if (!d.success) return;
-      limitsHub.data = { limits: d.limits || {}, budget: d.budget || null };
-      limitsHub.at = Date.now();
-      limitsHub.subs.forEach(fn => fn(limitsHub.data));
+      publish(d);
     })
     .catch(() => { /* no server: nothing shown */ })
     .finally(() => { limitsHub.inflight = null; });
@@ -335,9 +347,9 @@ export const CliLimitBadge = ({ model, refreshKey, notifyBack = false }) => {
     window.addEventListener('focus', tick);
     return () => { clearInterval(timer); document.removeEventListener('visibilitychange', tick); window.removeEventListener('focus', tick); };
   }, [cli, fast]);
-  if (!cli || !all) return null;
+  if (!cli) return null;
 
-  const limits = cli === 'agy' ? agyQuotaForModel(all[cli], model, now) : settleResets(all[cli], now);
+  const limits = cli === 'agy' ? agyQuotaForModel(all?.[cli], model, now) : settleResets(all?.[cli], now);
   const windows = (limits?.windows || []).filter(w => Number.isFinite(w.usedPercent));
   const blocked = limits?.status === 'rejected';
   const tightest = pickBadgeWindow(windows, blocked, now);

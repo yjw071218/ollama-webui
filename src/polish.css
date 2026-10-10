@@ -31,7 +31,7 @@
   :root { --warning: #F59E0B; --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35); --shadow-lg: 0 12px 44px rgba(0, 0, 0, 0.5); }
 }
 :root[data-theme='dark'] { --warning: #F59E0B; --shadow: 0 1px 2px rgba(0, 0, 0, 0.3), 0 8px 24px rgba(0, 0, 0, 0.35); --shadow-lg: 0 12px 44px rgba(0, 0, 0, 0.5); }
-:root[data-theme='light'] { --warning: var(--warning, #D97706); --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 6px 20px rgba(0, 0, 0, 0.08); --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.18); }
+:root[data-theme='light'] { --warning: #D97706; --shadow: 0 1px 2px rgba(0, 0, 0, 0.06), 0 6px 20px rgba(0, 0, 0, 0.08); --shadow-lg: 0 10px 40px rgba(0, 0, 0, 0.18); }
 
 /* ---- 2. focus, selection, hover ---- */
 ::selection { background: color-mix(in srgb, var(--accent) 28%, transparent); }
@@ -236,4 +236,140 @@ html { scrollbar-width: thin; scrollbar-color: var(--border-color) transparent; 
 :is(.studio-form .settings-input, .settings-modal input, .settings-modal textarea,
     .studio-prompt-tag-input, .rename-input):focus-visible {
   box-shadow: var(--focus-ring);
+}
+
+/* Shared workspace finish. Screen-only so exported conversations keep their
+   print layout. Motion uses the existing preference-aware travel tokens. */
+@media screen {
+  :root {
+    --workspace-tint: color-mix(in srgb, var(--accent) 7%, var(--bg-main));
+    --workspace-edge: color-mix(in srgb, var(--accent) 28%, var(--border-color));
+    --workspace-shadow: 0 2px 8px rgb(0 0 0 / 4%), 0 12px 32px rgb(0 0 0 / 5%);
+  }
+
+  .claude-sidebar .sidebar-header { padding-bottom: 0.75rem; }
+  .claude-sidebar .new-chat-btn {
+    border: 1px solid var(--workspace-edge);
+    border-radius: var(--radius-md);
+    background: var(--workspace-tint);
+    min-height: 44px;
+    box-shadow: 0 2px 6px rgb(0 0 0 / 3%);
+  }
+  .claude-sidebar .history-item {
+    border: 1px solid transparent;
+    border-radius: var(--radius-md);
+    min-height: 38px;
+    margin-bottom: 3px;
+    transition: background-color var(--dur-fast) var(--ease-out),
+      border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .claude-sidebar .history-item.active {
+    background: var(--workspace-tint);
+    border-color: var(--workspace-edge);
+    box-shadow: inset 3px 0 var(--accent);
+  }
+  .history-item:focus-within .history-delete { opacity: 1; }
+  .claude-sidebar .settings-toggle { border-radius: var(--radius-md); min-height: 44px; }
+  .main-header { border-bottom: 1px solid color-mix(in srgb, var(--border-color) 60%, transparent); }
+
+  .empty-state h1 { letter-spacing: -0.035em; text-wrap: balance; line-height: 1.25; }
+  .empty-state p { max-width: 42ch; text-wrap: pretty; line-height: 1.65; }
+  .starter-grid .starter-card {
+    border: 1px solid var(--border-color);
+    border-radius: var(--radius-md);
+    background: var(--bg-main);
+    min-height: 44px;
+    transition: border-color var(--dur-fast) var(--ease-out),
+      background-color var(--dur-fast) var(--ease-out),
+      transform var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+    animation: workspace-arrive var(--dur-slow) var(--ease-out) backwards;
+  }
+  .starter-grid .starter-card:nth-child(2) { animation-delay: 35ms; }
+  .starter-grid .starter-card:nth-child(3) { animation-delay: 70ms; }
+  .starter-grid .starter-card:nth-child(4) { animation-delay: 105ms; }
+  .starter-grid .starter-card > svg { color: var(--accent); flex-shrink: 0; }
+
+  .input-area-wrapper .input-container {
+    border-color: var(--workspace-edge);
+    box-shadow: var(--workspace-shadow);
+    transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .input-area-wrapper .input-container:focus-within {
+    border-color: var(--accent);
+    box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent) 12%, transparent), var(--workspace-shadow);
+  }
+  .composer-stack .chat-input { line-height: 1.65; }
+  .composer-row { gap: 0.4rem; }
+  .composer-menu .composer-menu-item { min-height: 40px; border-radius: var(--radius-sm); }
+  .composer-menu .composer-menu-item.is-on { background: var(--workspace-tint); }
+  .message-row .user-text { border: 1px solid color-mix(in srgb, var(--border-color) 65%, transparent); }
+  .message-row:focus-within .copy-btn { opacity: 1; }
+
+  .settings-modal .settings-tabs { gap: 0.35rem; }
+  .settings-modal .settings-tab { border-radius: var(--radius-sm); min-height: 40px; }
+  .settings-modal .settings-tab.active {
+    background: var(--workspace-tint);
+    box-shadow: inset 0 -2px var(--accent);
+    color: var(--text-primary);
+  }
+  .settings-modal :is(.settings-input, .settings-textarea) {
+    border-radius: var(--radius-sm);
+    transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .settings-modal :is(.settings-input, .settings-textarea):focus-visible {
+    border-color: var(--accent);
+    box-shadow: var(--focus-ring);
+  }
+  .subtabs .subtab { min-height: 36px; }
+
+  .runner .runner-command, .runner .runner-proc { border-radius: var(--radius-sm); }
+  .runner .runner-proc.is-on { background: var(--workspace-tint); box-shadow: inset 3px 0 var(--accent); }
+  .runner .runner-section { gap: 10px; }
+  .runner .runner-bar { background: color-mix(in srgb, var(--bg-primary) 65%, var(--bg-main)); }
+  .runner-welcome, .runner-unavailable, .studio-empty { animation: workspace-arrive var(--dur-slow) var(--ease-out) both; }
+  .studio-place .studio-sheet {
+    border-radius: var(--radius-md);
+    transition: border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out);
+  }
+  .studio-place .studio-sheet:focus-within { border-color: var(--accent); box-shadow: var(--focus-ring); }
+  .studio-place .studio-model.is-on { box-shadow: inset 0 -2px var(--accent); }
+  .studio-place .studio-group > summary { min-height: 44px; }
+  .studio-place .studio-group[open] > .studio-group-body {
+    animation: workspace-arrive var(--dur) var(--ease-out) both;
+  }
+
+  /* Transform only small controls; never the scrolling conversation, live
+     output, sticky headers or mounted workspace roots. */
+  @media (hover: hover) and (pointer: fine) {
+    .starter-grid .starter-card:hover {
+      background: var(--workspace-tint);
+      border-color: var(--workspace-edge);
+      box-shadow: var(--workspace-shadow);
+      transform: translateY(calc(var(--motion-shift, 10px) * -0.2));
+    }
+    .claude-sidebar .new-chat-btn:hover { border-color: var(--accent); }
+    .runner .runner-command:hover { background: var(--workspace-tint); }
+    .studio-place .studio-group > summary:hover { background: var(--workspace-tint); }
+  }
+  @media (pointer: coarse) {
+    .history-item .history-delete { opacity: 1; }
+    .claude-sidebar .history-item { min-height: 44px; }
+    .composer-menu .composer-menu-item,
+    .settings-modal .settings-tab,
+    .subtabs .subtab { min-height: 44px; }
+    .runner .runner-icon { min-width: 40px; min-height: 40px; }
+  }
+  @media (max-width: 600px) {
+    .empty-state h1 { font-size: clamp(1.3rem, 6vw, 1.75rem); }
+    .empty-state p { font-size: 0.9rem; }
+    .starter-grid .starter-card { padding: 0.65rem 0.75rem; }
+    /* Avoid iOS focus zoom without changing desktop form density. */
+    .settings-modal :is(.settings-input, .settings-textarea),
+    .composer-stack .chat-input { font-size: max(16px, 1em); }
+  }
+}
+
+@keyframes workspace-arrive {
+  from { opacity: 0; transform: translateY(calc(var(--motion-shift, 10px) * 0.4)); }
+  to { opacity: 1; transform: none; }
 }

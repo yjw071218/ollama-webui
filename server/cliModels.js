@@ -3758,7 +3758,9 @@ export const createCliRoutes = (env = {}) => [
         /* Fresh figures from the providers when the last ask is a minute old;
            waited for briefly, and otherwise shown on the next read. */
         const force = /[?&]force=1/.test(req.url || '');
-        await Promise.race([refreshLiveLimits(env, { force }), new Promise(r => setTimeout(r, 6000))]);
+        if (!/[?&]cached=1/.test(req.url || '')) {
+          await Promise.race([refreshLiveLimits(env, { force }), new Promise(r => setTimeout(r, 6000))]);
+        }
         sendJson(res, { success: true, limits: withForecasts(allLimits(env)), budget, now: Date.now() });
       } catch (e) { sendJson(res, { success: false, error: String(e.message || e) }, 500); }
     },

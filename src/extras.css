@@ -11115,3 +11115,229 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 .mermaid-error { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .7rem 1rem 0; font-size: .82rem; color: var(--text-secondary); }
 .mermaid-retry { border: 1px solid var(--border-color); background: transparent; color: var(--text-primary); border-radius: 8px; padding: .2rem .6rem; font: inherit; cursor: pointer; }
 .mermaid-retry:hover { border-color: var(--primary); }
+
+/* ==== Narrow chat column (right panel open on PC) ====
+   The meters, model picker and limit badge would not shrink, so the search
+   was squeezed to a sliver and the right end was cut off. Now the search keeps
+   a usable width, the picker and badge give way first, and nothing overflows. */
+@container mainpane (max-width: 1250px) {
+  .main-header { min-width: 0; overflow: hidden; }
+  .main-header > * { min-width: 0; }
+  .main-header .header-search,
+  .main-header .header-search:focus-within { flex: 1 1 150px !important; min-width: 130px !important; }
+  .main-header .model-selector-container { flex: 0 1 auto !important; min-width: 0 !important; }
+  .main-header .model-selector-container .model-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .main-header .cli-limit-badge { flex: 0 1 auto; min-width: 0; overflow: hidden; }
+  .main-header .cli-limit-window { display: none; }
+  .main-header .sys-strip.in-header { gap: 6px; padding: 0 7px; }
+  .main-header .sys-strip.in-header .sys-chip-track { width: 16px; }
+}
+@container mainpane (max-width: 1050px) {
+  /* Compact meters keep their labels and bars; numeric values stay in tooltips. */
+  .main-header .sys-strip.in-header .sys-chip-track { display: block !important; }
+  .main-header .sys-strip.in-header .sys-chip-value { display: none !important; }
+  .main-header .model-selector-container .model-name { max-width: 110px; }
+  .main-header .cli-limit-text { max-width: 70px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+@container mainpane (max-width: 940px) {
+  /* the limit badge always stays (see end of file) */
+}
+
+/* ==== Run button only while the header has room; meters fill the gap ====
+   The sidebar has its own 실행 button, so the header copy goes as soon as
+   the column narrows (code panel open). In the compact header the free space
+   on the right is used by the meters (bars only) instead of left empty. */
+@container mainpane (max-width: 1180px) {
+  .main-header .header-run { display: none !important; }
+}
+@container mainpane (min-width: 600px) and (max-width: 860px) {
+  .main-header .sys-strip.in-header { display: inline-flex !important; align-items: center; height: 34px; gap: 6px; padding: 0 8px; flex: 0 1 auto; min-width: 0; overflow: hidden; border-radius: 10px; }
+  .main-header .sys-strip.in-header .sys-chip { display: inline-flex !important; }
+  .main-header .sys-strip.in-header .sys-chip-track { display: block !important; }
+  .main-header .sys-strip.in-header .sys-chip-value { display: none !important; }
+}
+@container mainpane (max-width: 860px) {
+  .main-header { min-height: 52px; padding-block: 0; align-items: center; }
+}
+
+/* ==== Compact header without the empty right side ====
+   600–860px of column: the search box itself (not its folded button) takes
+   the free room, so the row is filled edge to edge. The run button goes
+   whenever a side panel narrows the column (≤1400px). */
+@container mainpane (min-width: 600px) and (max-width: 860px) {
+  .main-header .header-tools { flex: 1 1 auto !important; min-width: 0; flex-wrap: nowrap !important; justify-content: flex-start !important; }
+  .main-header .icon-btn.bordered.header-compact-only { display: none !important; }
+  .main-header .header-search,
+  .main-header .header-search.is-open,
+  .main-header .header-search:focus-within { display: flex !important; flex: 1 1 120px !important; width: auto !important; min-width: 90px !important; max-width: none !important; height: 34px; }
+  .main-header .model-selector-container { flex: 0 1 auto !important; min-width: 0 !important; }
+  .main-header .model-selector-container .model-name { max-width: 120px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+@container mainpane (max-width: 1400px) {
+  .main-header .header-run { display: none !important; }
+}
+
+/* The usage limit is never hidden: other items give way before it. */
+.main-header .cli-limit-badge { display: inline-flex !important; flex-shrink: 0 !important; overflow: visible !important; }
+
+/* Narrower still (under 600px, e.g. a small window with a panel open): the
+   search box keeps filling the row instead of folding into an icon and
+   leaving a gap. Only real phone widths (<380px) keep the folded button. */
+@container mainpane (min-width: 380px) and (max-width: 599px) {
+  .main-header .header-tools { flex: 1 1 auto !important; min-width: 0; flex-wrap: nowrap !important; justify-content: flex-start !important; }
+  .main-header .icon-btn.bordered.header-compact-only { display: none !important; }
+  .main-header .header-search,
+  .main-header .header-search.is-open,
+  .main-header .header-search:focus-within { display: flex !important; flex: 1 1 80px !important; width: auto !important; min-width: 44px !important; max-width: none !important; height: 34px; }
+  .main-header .header-search input::placeholder { opacity: .7; }
+  .main-header .model-selector-container { flex: 0 1 auto !important; min-width: 0 !important; }
+  .main-header .model-selector-container .model-name { max-width: 100px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+}
+
+/* ==== Header: always one row, no gap, nothing vanishing (final) ====
+   Below 860px of viewport the phone rules let the header wrap; with the row
+   clipped (overflow:hidden) the wrapped tools disappeared and the drawer
+   toggle, aligned to the top, rose above the line. From 380px of column the
+   header is now a single centred row whose search box fills the free room. */
+@container mainpane (min-width: 380px) {
+  .main-header { flex-wrap: nowrap !important; align-items: center !important; height: 52px !important; min-height: 52px !important; padding-block: 0 !important; }
+  .main-header > .toggle-sidebar { align-self: center !important; min-height: 0 !important; }
+  .main-header .header-tools { display: flex !important; flex: 1 1 auto !important; min-width: 0 !important; flex-wrap: nowrap !important; align-items: center !important; justify-content: flex-start !important; align-self: center !important; }
+  .main-header .header-tools .header-compact-only { display: none !important; }
+  .main-header .header-tools .header-search,
+  .main-header .header-tools .header-search.is-open,
+  .main-header .header-tools .header-search:focus-within { display: flex !important; order: 0 !important; flex: 1 1 80px !important; width: auto !important; min-width: 44px !important; max-width: none !important; height: 34px !important; }
+  .main-header .header-tools > .model-selector-container { flex: 0 1 auto !important; min-width: 0 !important; max-width: 45%; }
+}
+
+/* ==== Small window: search folds into the magnifier ====
+   Under 560px of column a typed query (with its 0/0 and arrows) broke the
+   row. Only the 🔍 button shows; pressed, the field takes the row in place
+   of the model picker until it is closed again. */
+@container mainpane (min-width: 380px) and (max-width: 559px) {
+  .main-header .header-tools .header-compact-only { display: inline-flex !important; flex: none !important; }
+  .main-header .header-tools .header-search:not(.is-open) { display: none !important; }
+  .main-header .header-tools .header-search.is-open { flex: 1 1 auto !important; min-width: 0 !important; }
+}
+
+/* Small window, fixed: the magnifier lost to an older, more specific
+   `display:none !important`, and the picker's 45% cap left the right side
+   empty. Higher specificity here, and the picker takes the free room. */
+@container mainpane (min-width: 380px) and (max-width: 559px) {
+  .main-header .header-tools > .icon-btn.bordered.header-compact-only { display: inline-flex !important; flex: none !important; order: 0 !important; }
+  .main-header .header-tools > .model-selector-container:not(.header-secondary) { flex: 1 1 auto !important; max-width: none !important; }
+  .main-header .header-tools > .model-selector-container > .dropdown-trigger { width: 100% !important; max-width: none !important; justify-content: space-between; }
+  .main-header .header-tools > .model-selector-container .model-name { max-width: none !important; }
+}
+
+/* Small window: the open field always has its ✕, and the counter yields
+   before the close button does. */
+@container mainpane (max-width: 559px) {
+  .main-header .header-search .search-nav { display: inline-flex !important; flex: none; align-items: center; }
+  .main-header .header-search .search-nav > span { font-size: .72rem; }
+  .main-header .header-search input { min-width: 0; }
+}
+
+/* ==== Small window: the search drops down under the header bar ====
+   Instead of taking the header row (and hiding the model picker), the open
+   field hangs just below the bar, full width, sliding down into place. */
+@container mainpane (max-width: 559px) {
+  .main-header { overflow: visible !important; }
+  /* Opening the search changes nothing in the bar itself: the meters keep
+     whatever visibility the width gave them (revert used to force them on). */
+  .main-header .header-tools > .model-selector-container { display: flex !important; }
+  .main-header .header-tools .header-search.is-open {
+    position: absolute !important; top: calc(100% + 6px); left: 10px; right: 10px;
+    width: auto !important; max-width: none !important; height: 40px !important;
+    z-index: calc(var(--z-sticky, 20) + 1);
+    background: var(--bg-secondary, #24211d);
+    box-shadow: 0 10px 28px rgba(0, 0, 0, .32);
+    transform-origin: top center;
+    animation: header-search-drop var(--dur, .22s) var(--ease-out, cubic-bezier(.2,.7,.2,1)) both;
+  }
+  .main-header .header-tools .header-compact-only[aria-pressed="true"],
+  .main-header .header-tools:has(.header-search.is-open) .header-compact-only { color: var(--primary, #d97757); }
+}
+@container mainpane (max-width: 599px) {
+  /* Visibility depends only on column width, never on search state. */
+  .main-header .sys-strip.in-header { display: none !important; }
+}
+@keyframes header-search-drop {
+  from { opacity: 0; transform: translateY(-8px) scaleY(.92); }
+  to { opacity: 1; transform: none; }
+}
+@media (prefers-reduced-motion: reduce) {
+  .main-header .header-tools .header-search.is-open { animation-duration: .01ms; }
+}
+
+/* Compact headers reserve a fixed touch target for the theme switch. */
+@container mainpane (max-width: 960px) {
+  .main-header .header-tools > .model-selector-container:not(.header-secondary) {
+    flex: 1 1 120px !important;
+    min-width: 0 !important;
+    max-width: none !important;
+  }
+  .main-header .header-tools > .model-selector-container:not(.header-secondary) > .dropdown-trigger {
+    width: 100% !important;
+    min-width: 0;
+    padding-inline: 8px;
+  }
+  .main-header .header-tools > .model-selector-container .model-name {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+  .main-header .header-tools > .header-theme {
+    display: inline-flex !important;
+    flex: 0 0 36px;
+    width: 36px;
+    height: 36px;
+    margin-inline-start: 0;
+    align-items: center;
+    justify-content: center;
+    order: 99;
+  }
+}
+
+/* Panel resizing: shed individual meters before folding the search field.
+   Keep these rules independent of viewport width and search-open state. */
+.main-header .header-tools .sys-strip.in-header .sys-chip-track { display: block !important; width: 26px; }
+.main-header .header-tools .sys-strip.in-header .sys-chip-value { display: none !important; }
+@container mainpane (min-width: 480px) and (max-width: 1250px) {
+  .main-header .header-tools .sys-strip.in-header {
+    display: inline-flex !important;
+    flex: 0 0 auto !important;
+    gap: 6px;
+    padding-inline: 8px;
+  }
+  .main-header .header-tools .sys-strip.in-header .sys-chip:nth-child(n) { display: inline-flex !important; }
+}
+@container mainpane (min-width: 760px) and (max-width: 960px) {
+  .main-header .header-tools .sys-strip.in-header .sys-chip:nth-child(n+4) { display: none !important; }
+}
+@container mainpane (min-width: 480px) and (max-width: 759px) {
+  .main-header .header-tools .sys-strip.in-header .sys-chip:nth-child(n+3) { display: none !important; }
+}
+@container mainpane (min-width: 560px) and (max-width: 960px) {
+  .main-header { position: relative; overflow: visible !important; }
+  .main-header .header-tools > .icon-btn.bordered.header-compact-only { display: inline-flex !important; flex: none !important; }
+  .main-header .header-tools .header-search:not(.is-open) { display: none !important; }
+  .main-header .header-tools .header-search.is-open {
+    display: flex !important;
+    position: absolute !important;
+    top: calc(100% + 6px); left: 10px; right: 10px;
+    width: auto !important; min-width: 0 !important; max-width: none !important;
+    height: 40px !important;
+    background: var(--bg-secondary, #24211d);
+    box-shadow: 0 10px 28px rgba(0,0,0,.32);
+    z-index: calc(var(--z-sticky, 20) + 1);
+    animation: header-search-drop var(--dur, .22s) var(--ease-out) backwards;
+  }
+  .main-header .header-search .search-nav { display: inline-flex !important; flex: none; align-items: center; }
+  .main-header .header-search input { min-width: 0; flex: 1 1 0; }
+}
+@container mainpane (min-width: 961px) and (max-width: 1250px) {
+  .main-header .header-tools .header-search,
+  .main-header .header-tools .header-search:focus-within { min-width: 240px !important; }
+}

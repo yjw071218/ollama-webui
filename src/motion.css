@@ -338,3 +338,64 @@ html.is-panel-resizing .claude-sidebar { transition: none; }
 /* The ✕ on an attachment: turns towards red instead of switching. */
 .attachment-remove { transition: color var(--dur-fast) var(--ease-out), background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
 .attachment-remove:active { transform: scale(var(--press-scale, 0.94)); }
+
+/* ======================================== filling the gaps (1.0.32)
+
+   Surfaces that still appeared or changed with a hard cut. Every entrance is
+   `backwards`-filled: once it has played, the element's own transform (a
+   hover lift, a fixed position) is back in charge. Travel comes from the
+   shared tokens, so reduced motion flattens all of this into short fades. */
+
+/* Row menu (… on a chat in the sidebar), dropped from its button. */
+.row-menu { transform-origin: top right; animation: pop-in var(--dur-fast) var(--ease-out) backwards; }
+
+/* Sidebar: the chat being opened slides its highlight in, a press gives. */
+.history-item { transition: background-color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out), box-shadow var(--dur) var(--ease-out); }
+.history-item:active { transform: scale(var(--press-scale, .98)); }
+.history-item.active { box-shadow: inset 2px 0 0 var(--primary, #d97757); }
+.session-group > * { animation: rise-in-soft var(--dur) var(--ease-out) backwards; }
+
+/* Message hover actions fade up instead of blinking on. */
+.msg-hover-actions { transition: opacity var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-out); }
+.message-row:not(:hover):not(:focus-within) .msg-hover-actions { transform: translateY(calc(var(--motion-shift, 10px) * .2)); }
+.action-btn { transition: background-color var(--dur-fast) var(--ease-out), color var(--dur-fast) var(--ease-out), transform var(--dur-fast) var(--ease-spring); }
+.action-btn:active, .code-copy-btn:active, .mermaid-btn:active { transform: scale(.88); }
+
+/* Attachments: a file just added pops in; sent ones rise with the message. */
+.attachment-tag, .edit-attachment, .user-attachment-card { animation: pop-in var(--dur) var(--ease-spring) backwards; }
+.user-attachments-grid > :nth-child(2) { animation-delay: 40ms; }
+.user-attachments-grid > :nth-child(3) { animation-delay: 80ms; }
+.user-attachments-grid > :nth-child(n+4) { animation-delay: 120ms; }
+
+/* Rich blocks in an answer: arrive softly, bars and points grow in. */
+.infographic, .chart-figure, .quiz-block { animation: rise-in-soft var(--dur-slow) var(--ease-out) backwards; }
+.mermaid-canvas > svg { animation: fade-in var(--dur-slow) var(--ease-out) backwards; }
+.chart-svg [role="button"] { transform-box: fill-box; transform-origin: center bottom; animation: chart-grow var(--dur-slower) var(--ease-out) backwards; }
+.chart-svg [role="button"]:nth-of-type(2n) { animation-delay: 40ms; }
+.chart-svg [role="button"]:nth-of-type(3n) { animation-delay: 80ms; }
+@keyframes chart-grow { from { opacity: 0; transform: scale(1, calc(1 - (1 - var(--motion-scale, .97)) * 20)); } }
+.ig-card, .ig-stat, .ig-col { transition: transform var(--dur-fast) var(--ease-out), border-color var(--dur-fast) var(--ease-out), box-shadow var(--dur) var(--ease-out); }
+.ig-stat:hover, .ig-col:hover { transform: translateY(-2px); box-shadow: 0 6px 18px rgba(0, 0, 0, .14); }
+
+/* Notices and floating buttons. */
+.answer-cut-notice { animation: rise-in-soft var(--dur) var(--ease-out) backwards; }
+.inapp-browser-fab { animation: pop-in var(--dur-slow) var(--ease-spring) backwards; }
+.commands-dock-pill { animation: pop-in var(--dur) var(--ease-spring) backwards; }
+.commands-dock { transition: bottom var(--dur) var(--ease-out), left var(--dur) var(--ease-out); }
+.commands-dock-panel { transform-origin: bottom left; animation: pop-in var(--dur) var(--ease-out) backwards; }
+.mermaid-hint { animation: fade-in var(--dur-slow) var(--ease-out) 300ms backwards; }
+
+/* Settings and sub tabs: the chosen one eases over. */
+.settings-tab, .subtab { transition: background-color var(--dur) var(--ease-out), color var(--dur) var(--ease-out), box-shadow var(--dur) var(--ease-out); }
+
+/* System meters glide to their new value instead of jumping. */
+.sys-chip-track > *, .sys-chip-fill { transition: width var(--dur-slow) var(--ease-out), background-color var(--dur-slow) var(--ease-out); }
+
+/* The header search widens smoothly on focus. */
+.main-header .header-search { transition: flex-basis var(--dur) var(--ease-out), min-width var(--dur) var(--ease-out), box-shadow var(--dur-fast) var(--ease-out); }
+
+/* Theme switch: one short cross-fade of colours, set by main.jsx only for
+   the moment the theme changes (not left on, which would slow every hover). */
+:root.theme-switching, :root.theme-switching *, :root.theme-switching *::before, :root.theme-switching *::after {
+  transition: background-color var(--dur-slow) var(--ease-out), color var(--dur-slow) var(--ease-out), border-color var(--dur-slow) var(--ease-out), fill var(--dur-slow) var(--ease-out) !important;
+}

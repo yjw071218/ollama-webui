@@ -114,3 +114,16 @@ loadLanguage(detectLanguage()).catch(() => {}).finally(() => createRoot(document
     )}
   </StrictMode>,
 ))
+
+/* Theme changes cross-fade (motion.css `.theme-switching`), only for the
+   moment of the change so ordinary hovers keep their own timing. */
+if (typeof MutationObserver !== 'undefined') {
+  const html = document.documentElement;
+  let timer = 0;
+  new MutationObserver(() => {
+    if (matchMedia?.('(prefers-reduced-motion: reduce)').matches && html.dataset.motion !== 'full') return;
+    html.classList.add('theme-switching');
+    clearTimeout(timer);
+    timer = setTimeout(() => html.classList.remove('theme-switching'), 450);
+  }).observe(html, { attributes: true, attributeFilter: ['data-theme'] });
+}
