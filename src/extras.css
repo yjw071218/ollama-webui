@@ -11423,3 +11423,13 @@ body:has(.msg-actions-portal) .scroll-nudge { opacity: 0; pointer-events: none; 
 .app-crash-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
 .app-crash-actions button { padding: .5rem 1rem; border-radius: 999px; border: 1px solid var(--border-color, #ffffff22); background: transparent; color: inherit; font: inherit; cursor: pointer; }
 .app-crash-actions button:first-child { background: var(--accent, #d97757); border-color: transparent; color: #fff; }
+
+/* ==== Phone: less dead space under the composer ====
+   The wrapper's 0.5rem, the footer's own gap and the gesture-bar inset were
+   added together, leaving a band of nothing below the token meter. The inset
+   is now the floor rather than an addition, and the meter sits closer. */
+@media (max-width: 860px) {
+  .input-area-wrapper { padding-bottom: max(0.25rem, env(safe-area-inset-bottom)); }
+  .input-footer { margin-top: 0.3rem; }
+  .ctx-meter { line-height: 1.2; }
+}
