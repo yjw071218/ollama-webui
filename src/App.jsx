@@ -36,6 +36,7 @@ import { AuthScreen } from './AuthScreen.jsx';
 import { ProfileDialog, ProfileAvatar } from './ProfileDialog.jsx';
 import { SecurityPanel, SignOutOthersButton } from './SecurityPanel.jsx';
 import { SystemMonitor, SystemStrip } from './SystemMonitor.jsx';
+import { watchHeaderSearch } from './headerSearchFit.js';
 import { StudioPanel, loadHistory as loadStudioHistory, thumbOf } from './StudioPanel.jsx';
 import { MaskEditor } from './MaskEditor.jsx';
 import { PictureTags } from './PictureTags.jsx';
@@ -13438,8 +13439,12 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
   }, []);
 
   const headerEl = useRef(null);
+  const stopHeaderSearchFit = useRef(null);
   const measureHeader = useCallback((node) => {
     headerEl.current = node;
+    // Open search field only when it can be SEARCH_MIN wide (src/headerSearchFit.js).
+    stopHeaderSearchFit.current?.();
+    stopHeaderSearchFit.current = node ? watchHeaderSearch(node) : null;
     if (node) {
       const height = Math.round(node.getBoundingClientRect().height);
       if (height > 0) document.documentElement.style.setProperty('--header-h', `${height}px`);

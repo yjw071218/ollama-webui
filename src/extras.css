@@ -11509,20 +11509,18 @@ body .main-header .header-tools > .model-selector-container:not(.header-secondar
    before the buttons on the right. Where there is room, the search field is
    shown open and takes that width; where there is not, the picker takes it. */
 body .main-header .header-tools > .model-selector-container:not(.header-secondary) { margin-inline-end: 0 !important; }
-@container mainpane (min-width: 760px) {
-  body .main-header .header-tools .icon-btn.bordered.header-compact-only { display: none !important; }
-  body .main-header .header-tools .header-search,
-  body .main-header .header-tools .header-search:not(.is-open) {
+/* Open search field only when src/headerSearchFit.js measured room for it. */
+  body .main-header.search-roomy .header-tools .icon-btn.bordered.header-compact-only { display: none !important; }
+  body .main-header.search-roomy .header-tools .header-search,
+  body .main-header.search-roomy .header-tools .header-search:not(.is-open) {
     display: flex !important;
-    flex: 1 1 140px !important;
+    flex: 1 1 250px !important;
     width: auto !important;
-    min-width: 110px !important;
+    min-width: 250px !important;
     max-width: none !important;
     height: 34px;
   }
-}
-@container mainpane (max-width: 759px) {
-  body .main-header .header-tools > .model-selector-container:not(.header-secondary) { flex: 1 1 auto !important; max-width: none !important; }
-  body .main-header .header-tools > .model-selector-container:not(.header-secondary) > .dropdown-trigger { width: 100% !important; justify-content: space-between; }
-  body .main-header .header-tools > .model-selector-container:not(.header-secondary) .model-name { max-width: none !important; flex: 1 1 auto; text-align: start; }
-}
+
+  body .main-header:not(.search-roomy) .header-tools > .model-selector-container:not(.header-secondary) { flex: 1 1 auto !important; max-width: none !important; }
+  body .main-header:not(.search-roomy) .header-tools > .model-selector-container:not(.header-secondary) > .dropdown-trigger { width: 100% !important; justify-content: space-between; }
+  body .main-header:not(.search-roomy) .header-tools > .model-selector-container:not(.header-secondary) .model-name { max-width: none !important; flex: 1 1 auto; text-align: start; }
