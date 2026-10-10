@@ -11432,4 +11432,31 @@ body:has(.msg-actions-portal) .scroll-nudge { opacity: 0; pointer-events: none; 
   .input-area-wrapper { padding-bottom: max(0.25rem, env(safe-area-inset-bottom)); }
   .input-footer { margin-top: 0.3rem; }
   .ctx-meter { line-height: 1.2; }
+  /* And the sides: the wrapper's inset plus the box's own padding left a wide
+     margin either side of the composer on a narrow screen. */
+  body .input-area-wrapper { padding-inline: 0.25rem; }
+  body .input-area-wrapper .input-container { padding-inline: 0.45rem; }
+  body .input-footer { padding-inline: 0.3rem; }
+}
+
+/* ==== Phone: the footer shows the notice as well as the tokens ====
+   The notice was hidden below 860px, leaving the token count on its own.
+   Now it is one row as on the PC: the notice on the left, cut with "…"
+   when it does not fit, and the token meter on the right. */
+@media (max-width: 860px) {
+  body .input-footer { display: flex; flex-wrap: nowrap; align-items: center; gap: 0.5rem; }
+  body .input-footer .composer-disclaimer {
+    display: block;
+    flex: 1 1 auto;
+    min-width: 0;
+    overflow: hidden;
+    white-space: nowrap;
+    text-overflow: ellipsis;
+    text-align: start;
+    opacity: 0.8;
+  }
+  body .input-footer .composer-controls { width: auto; flex: 0 0 auto; flex-wrap: nowrap; white-space: nowrap; justify-content: flex-end; }
+}
+@media (max-width: 400px) {
+  body .input-footer .ctx-meter-bar { width: 36px; }
 }
