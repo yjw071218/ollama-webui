@@ -11429,14 +11429,14 @@ body:has(.msg-actions-portal) .scroll-nudge { opacity: 0; pointer-events: none; 
    added together, leaving a band of nothing below the token meter. The inset
    is now the floor rather than an addition, and the meter sits closer. */
 @media (max-width: 860px) {
-  .input-area-wrapper { padding-bottom: max(0.25rem, env(safe-area-inset-bottom)); }
+  .input-area-wrapper { padding-bottom: max(0.5rem, env(safe-area-inset-bottom)); }
   .input-footer { margin-top: 0.3rem; }
   .ctx-meter { line-height: 1.2; }
   /* And the sides: the wrapper's inset plus the box's own padding left a wide
      margin either side of the composer on a narrow screen. */
-  body .input-area-wrapper { padding-inline: 0.25rem; }
-  body .input-area-wrapper .input-container { padding-inline: 0.45rem; }
-  body .input-footer { padding-inline: 0.3rem; }
+  body .input-area-wrapper { padding-inline: 0.6rem; }
+  body .input-area-wrapper .input-container { padding-inline: 0.65rem; }
+  body .input-footer { padding-inline: 0.5rem; }
 }
 
 /* ==== Phone: the footer shows the notice as well as the tokens ====
