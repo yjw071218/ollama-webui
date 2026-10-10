@@ -87,6 +87,16 @@ const i18nSplit = () => {
 // https://vitejs.dev/config/
 // The third argument to loadEnv is an empty prefix, so unprefixed values like
 // KAKAO_CLIENT_SECRET are readable here without ever being exposed to the client.
+/* With emptyOutDir off, hashed assets older than two weeks are swept. */
+const keepOldAssets = () => ({
+  name: 'ollama-webui-keep-old-assets', apply: 'build',
+  async closeBundle() {
+    const fs = await import('node:fs'); const path = await import('node:path');
+    const dir = path.resolve('dist/assets'); const cutoff = Date.now() - 14 * 86400_000;
+    try { for (const f of fs.readdirSync(dir)) { const full = path.join(dir, f); try { if (fs.statSync(full).mtimeMs < cutoff) fs.rmSync(full, { force: true }); } catch {} } } catch {}
+  },
+});
+
 export default defineConfig(({ mode }) => {
   const env = loadEnv(mode, process.cwd(), '');
 
@@ -97,7 +107,10 @@ export default defineConfig(({ mode }) => {
   const canonicalHost = canonical ? new URL(canonical).hostname : '';
 
   return {
-    plugins: [i18nSplit(), react(), apiPlugin(env)],
+    plugins: [i18nSplit(), react(), apiPlugin(env), keepOldAssets()],
+    /* The previous build's chunks stay: a page still open on it loads its lazy
+       panels from them instead of reloading itself (src/lazyPanel.jsx). */
+    build: { emptyOutDir: false },
     server: {
       // OAuth redirect URIs are registered per exact origin, so the port must
       // not drift. Without strictPort a second `npm run dev` silently lands on

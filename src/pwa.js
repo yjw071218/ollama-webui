@@ -55,8 +55,12 @@ export const registerServiceWorker = ({ onUpdate } = {}) => {
   // `controllerchange` fires when the new worker takes over. Reloading there,
   // rather than straight after postMessage, is what guarantees the reloaded
   // page is served by the build the user just accepted.
+  /* Only when this page asked for the update. A first visit's worker calling
+     clients.claim(), or another tab accepting an update, also fires
+     controllerchange -- and used to reload this page out of nowhere. */
+  let requested = false;
   const onControllerChange = () => {
-    if (reloading) return;
+    if (reloading || !requested) return;
     reloading = true;
     window.location.reload();
   };
@@ -64,7 +68,7 @@ export const registerServiceWorker = ({ onUpdate } = {}) => {
 
   const offerUpdate = (worker) => {
     if (disposed || !worker) return;
-    onUpdate?.(() => worker.postMessage({ type: 'SKIP_WAITING' }));
+    onUpdate?.(() => { requested = true; worker.postMessage({ type: 'SKIP_WAITING' }); });
   };
 
   const start = async () => {

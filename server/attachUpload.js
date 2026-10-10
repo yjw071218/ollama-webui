@@ -17,7 +17,7 @@ import crypto from 'crypto';
 import { DATA_DIR } from './db.js';
 
 const MAX_BYTES = 2 * 1024 * 1024 * 1024; // 2 GB
-const KEEP_DAYS = 14;
+const KEEP_DAYS = 60;
 
 export const attachDir = (env = {}) => path.resolve(String(env.ATTACH_DIR || '').trim() || path.join(DATA_DIR, 'attachments'));
 
@@ -48,6 +48,21 @@ export const createAttachUploadRoute = (env = {}) => async (req, res) => {
     res.writeHead(status, { 'Content-Type': 'application/json', 'Cache-Control': 'no-store' });
     res.end(JSON.stringify(payload));
   };
+  /* GET ?path=: a file kept here, read back (a sent PDF opened in the viewer).
+     Only inside the attachments folder; nothing else on the disk. */
+  if (req.method === 'GET') {
+    const wanted = new URL(req.url, 'http://localhost').searchParams.get('path') || '';
+    const root = attachDir(env);
+    const full = path.resolve(wanted);
+    if (!full.startsWith(root + path.sep) || !fs.existsSync(full) || !fs.statSync(full).isFile()) return json({ success: false, error: 'Not found' }, 404);
+    const ext = path.extname(full).toLowerCase();
+    const type = { '.pdf': 'application/pdf', '.png': 'image/png', '.jpg': 'image/jpeg', '.jpeg': 'image/jpeg', '.webp': 'image/webp' }[ext] || 'application/octet-stream';
+    res.writeHead(200, { 'Content-Type': type, 'Content-Length': fs.statSync(full).size, 'Cache-Control': 'private, max-age=86400',
+      'Content-Disposition': `${type === 'application/octet-stream' ? 'attachment' : 'inline'}; filename*=UTF-8''${encodeURIComponent(path.basename(full))}`,
+      'X-Content-Type-Options': 'nosniff' });
+    fs.createReadStream(full).pipe(res);
+    return;
+  }
   if (req.method !== 'POST') return json({ success: false, error: 'POST only' }, 405);
   let name;
   try { name = safeFileName(decodeURIComponent(String(req.headers['x-file-name'] || ''))); }

@@ -1,0 +1,7 @@
+html,body{margin:0;height:100%;background:transparent;overflow:hidden;user-select:none}
+#grip{position:absolute;top:0;bottom:0;left:50%;width:10px;transform:translateX(-50%);cursor:col-resize;display:flex;align-items:center;justify-content:center}
+#grip::before{content:"";position:absolute;top:0;bottom:0;left:4px;width:2px;background:var(--line,#3d3932);transition:background .15s}
+#grip span{position:relative;width:4px;height:36px;border-radius:4px;background:var(--muted,#8a8073);opacity:.55;transition:opacity .15s,height .15s}
+#grip:hover::before,body.drag #grip::before{background:var(--accent,#d97757)}
+#grip:hover span,body.drag #grip span{opacity:1;height:48px;background:var(--accent,#d97757)}
+body.drag{cursor:col-resize}

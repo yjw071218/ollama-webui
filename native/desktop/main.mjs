@@ -16,7 +16,7 @@ import { setLanguage, tr } from './i18n.mjs';
 import { addRecent, forgetRecent } from './recent.mjs';
 import { validColor } from './theme.mjs';
 import { clampZoom, zoomStep } from './zoom.mjs';
-import { openInAppBrowser, setBrowserModels, restoreInAppBrowser } from './browser.mjs';
+import { openInAppBrowser, showInAppBrowser, setBrowserModels, restoreInAppBrowser } from './browser.mjs';
 import { createRunner } from './runner.mjs';
 import { localPath } from './localPath.mjs';
 import { spawn } from 'node:child_process';
@@ -508,6 +508,7 @@ else {
     });
     ipcMain.handle('client:changeServer', event => { if (!validClient(event)) throw new Error('Forbidden'); openSetup(); return true; });
     ipcMain.handle('client:checkUpdates', event => { if (!validClient(event)) throw new Error('Forbidden'); notifyUpdate(true); return true; });
+    ipcMain.handle('client:openBrowser', (event, url) => { if (!validClient(event)) throw new Error('Forbidden'); showInAppBrowser({ parent: liveClient(), background: settings.pageBackground, url: /^https?:\/\//i.test(String(url || '')) ? String(url) : '' }); return true; });
     ipcMain.on('client:busy', (event, value) => { if (validClient(event)) setBusy(!!value); });
     ipcMain.on('client:browserModels', (event, value) => { const win = liveClient(); if (win && validClient(event)) setBrowserModels(win, value); });
     // Running a project on this PC (runner.mjs), for the page's Run workspace.

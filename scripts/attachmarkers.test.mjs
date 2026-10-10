@@ -172,7 +172,7 @@ const app = sources[0][1];
 // composer already used. Both halves are asserted, because either alone is a
 // chip that looks pressable and does nothing.
 check('the transcript chip opens the viewer',
-  app.includes('onClick={() => canOpen && setViewingAttachment(att)}'));
+  /if \(!canOpen\) return;[\s\S]{0,800}setViewingAttachment\(att\);/.test(app));
 check('and a sent image opens it too',
   /setViewingAttachment\(\{[^}]*type: 'image'/.test(app));
 check('an indexed document is found by name when it has no id',

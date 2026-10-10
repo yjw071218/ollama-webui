@@ -26,14 +26,11 @@ const loadChunk = async (load) => {
     if (!isChunkError(first)) throw first;
     await new Promise(r => setTimeout(r, 600));
     try { return await load(); } catch (second) {
-      let last = 0;
-      try { last = Number(sessionStorage.getItem(RELOAD_KEY)) || 0; } catch { /* storage off */ }
-      if (Date.now() - last > 30000) {
-        try { sessionStorage.setItem(RELOAD_KEY, String(Date.now())); } catch { /* storage off */ }
-        window.location.reload();
-        return new Promise(() => {}); // the reload replaces the page
-      }
-      throw second;
+      /* Never reloads the page any more (that threw away whatever was being
+         typed or streamed). Old chunks are kept on the server, so a third try
+         after a pause usually works; otherwise the panel shows its error. */
+      await new Promise(r => setTimeout(r, 2000));
+      return load();
     }
   }
 };

@@ -692,7 +692,7 @@ on(laptop);
 {
   const app = fs.readFileSync(path.join(HERE, '../src/App.jsx'), 'utf8');
   check('the one door to storage writes pictures by address',
-    /list = persistable\(list\)\.map\(withoutPictureBytes\);/.test(app));
+    /list = persistable\(list\)\.map\(withoutPictureBytes\)(?:\.map\(dedupeSession\))?;/.test(app));
   check('  using this transform, not a second one of its own',
     /withoutPictureBytes[\s\S]{0,600}from '\.\/syncEngine\.js'/.test(app));
 

@@ -24,6 +24,9 @@ import { tr } from './i18n.mjs';
 
 const root = path.dirname(fileURLToPath(import.meta.url));
 const barURL = pathToFileURL(path.join(root, 'browser.html')).href;
+const splitURL = pathToFileURL(path.join(root, 'splitter.html')).href;
+const DOCK_RATIO = 0.58;
+const GRIP = 10;
 const TITLE = 44;    // the app's own title bar (chrome.mjs), which stays on top
 const BAR = 112;     // tabs 32 + toolbar 42 + AI row 38
 const FIND = 36;     // the find row, when open
@@ -224,12 +227,39 @@ export function openInAppBrowser(url, { parent, background } = {}) {
   return b;
 }
 
+/* The round button at the bottom right of the chat: the browser as it was
+   left (its saved tabs), or a start page when there is nothing to restore. */
+export function showInAppBrowser({ parent, background, home = 'https://www.google.com', url = '' } = {}) {
+  const host = parent && !parent.isDestroyed() ? parent : BrowserWindow.getFocusedWindow();
+  if (!host || host.isDestroyed()) return null;
+  const open = embedded.get(host);
+  /* With an address (a web page chip in the chat): the tab already showing
+     it is brought forward, otherwise it opens in a new tab. */
+  if (open && !open.closed) { if (url) open.goTo(url); open.reveal(); return open; }
+  const b = embed(host, background);
+  embedded.set(host, b);
+  const saved = sessionOf(readStore());
+  if (saved.tabs.length) b.restore(saved); else if (!url) b.openTab(home);
+  if (url) b.goTo(url);
+  return b;
+}
+
 function embed(host, background) {
   const colors = chromeColors(background);
   const bar = new WebContentsView({ webPreferences: { preload: path.join(root, 'browser-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
   // Transparent, so a panel (bookmarks, history) can hang over the page.
   bar.setBackgroundColor('#00000000');
   host.contentView.addChildView(bar);
+  /* The bar between the docked page and the chat: drag to share the width. */
+  const splitter = new WebContentsView({ webPreferences: { preload: path.join(root, 'splitter-preload.cjs'), contextIsolation: true, nodeIntegration: false, sandbox: true } });
+  splitter.setBackgroundColor('#00000000');
+  host.contentView.addChildView(splitter);
+  splitter.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+  void splitter.webContents.loadURL(splitURL);
+  splitter.webContents.on('did-finish-load', () => { try { splitter.webContents.send('split:colors', { line: colors.line, muted: colors.muted, accent: '#d97757' }); } catch { /* gone */ } });
+  let ratio = Number(readStore().dockRatio);
+  if (!(ratio > 0.15 && ratio < 0.9)) ratio = DOCK_RATIO;
+  let splitting = false;
   const b = { closed: false };
   const tabs = [];
   let active = null;
@@ -261,7 +291,7 @@ function embed(host, background) {
   /* Laid out under the title bar, over exactly the area the chat has. `shift`
      slides it in from a little below, the way the app's own panels arrive. */
   let shift = 0;
-  const pageWidth = (w) => (docked ? Math.max(320, Math.min(Math.round(w * 0.58), w - 360)) : w);
+  const pageWidth = (w) => (docked ? Math.max(320, Math.min(Math.round(w * ratio), w - 360)) : w);
   const barHeight = () => BAR + (findOpen ? FIND : 0);
   const layout = () => {
     if (b.closed || host.isDestroyed()) return;
@@ -275,6 +305,11 @@ function embed(host, background) {
       else t.view.setBounds({ x: 0, y: top + bh, width: 0, height: 0 });
     }
     const left = docked && pw < w ? pw : 0;
+    // While dragged the splitter covers everything so the pointer stays with it.
+    if (splitting) splitter.setBounds({ x: 0, y: top, width: w, height: Math.max(0, h - top) });
+    else if (left) splitter.setBounds({ x: left - GRIP / 2, y: top, width: GRIP, height: Math.max(0, h - top) });
+    else splitter.setBounds({ x: 0, y: 0, width: 0, height: 0 });
+    try { splitter.webContents.send('split:place', splitting ? left : GRIP / 2); } catch { /* gone */ }
     if (host.clientLeft !== left) {
       host.clientLeft = left; host.layoutClient?.();
       // The chat beside the page has no room for its own side panel.
@@ -331,6 +366,7 @@ function embed(host, background) {
     // The active page on top of the hidden ones, the bar on top of all.
     host.contentView.addChildView(tab.view);
     host.contentView.addChildView(bar);
+    host.contentView.addChildView(splitter);
     layout(); sendState();
     tab.view.webContents.focus();
   };
@@ -395,12 +431,21 @@ function embed(host, background) {
 
   /* ---------------------------------------------------------- the tabs */
 
+  const sameAddress = (a, b2) => {
+    const norm = (u) => { try { const x = new URL(u); return (x.host.replace(/^www\./, '') + x.pathname.replace(/\/+$/, '') + x.search).toLowerCase(); } catch { return String(u || ''); } };
+    return norm(a) === norm(b2);
+  };
+  b.goTo = (url) => {
+    const found = tabs.find(t => sameAddress(t.view.webContents.getURL() || t.url, url));
+    if (found) select(found); else b.openTab(url);
+  };
   b.openTab = (url = START) => {
     const view = new WebContentsView({ webPreferences: { session: siteSession(), backgroundThrottling: false, contextIsolation: true, nodeIntegration: false, sandbox: true } });
     view.setBackgroundColor(colors.bg);
     const tab = { id: nextId++, view, favicon: '', url };
     tabs.push(tab);
     host.contentView.addChildView(view);
+    host.contentView.addChildView(splitter);
     const wc = view.webContents;
     for (const ev of ['did-start-loading', 'did-stop-loading', 'did-navigate-in-page']) wc.on(ev, sendState);
     const visited = () => {
@@ -537,6 +582,17 @@ function embed(host, background) {
     else if (action === 'clearHistory') { s.history = []; saveStore(); sendLists(); }
   }
   const ready = (e) => { if (fromBar(e)) { sendState(); sendLists(); } };
+  const split = (e, kind, x) => {
+    if (b.closed || e.sender !== splitter.webContents || !docked) return;
+    const [w] = host.getContentSize();
+    if (kind === 'start') { splitting = true; layout(); return; }
+    if (kind === 'reset') { ratio = DOCK_RATIO; }
+    else if (kind === 'move' || kind === 'end') ratio = Math.min(0.85, Math.max(0.2, Number(x) / Math.max(1, w)));
+    if (kind === 'end') splitting = false;
+    layout();
+    if (kind === 'end' || kind === 'reset') { readStore().dockRatio = ratio; saveStore(); }
+  };
+  ipcMain.on('browser:split', split);
   ipcMain.on('browser:action', command);
   ipcMain.on('browser:ready', ready);
 
@@ -549,7 +605,9 @@ function embed(host, background) {
     clearInterval(anim);
     ipcMain.removeListener('browser:action', command);
     ipcMain.removeListener('browser:ready', ready);
+    ipcMain.removeListener('browser:split', split);
     if (!host.isDestroyed()) {
+      try { host.contentView.removeChildView(splitter); } catch { /* gone */ }
       if (host.clientLeft) {
         host.clientLeft = 0; host.layoutClient?.();
         if (host.clientContents && !host.clientContents.isDestroyed()) host.clientContents.send('client:action', { type: 'browser-dock', docked: false });
@@ -562,6 +620,7 @@ function embed(host, background) {
     }
     for (const t of tabs.splice(0)) if (!t.view.webContents.isDestroyed()) t.view.webContents.close();
     if (!bar.webContents.isDestroyed()) bar.webContents.close();
+    if (!splitter.webContents.isDestroyed()) splitter.webContents.close();
     if (embedded.get(host) === b) embedded.delete(host);
   };
   const keepForNext = () => { if (!b.closed && tabs.length) saveSession(true); };

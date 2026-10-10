@@ -405,6 +405,7 @@ export const CommandsDock = () => {
      under its column, it rides just above that bar. */
   const dock = useRef(null);
   const [lift, setLift] = useState(null);
+  const [inset, setInset] = useState(null);
   const shown = running.length > 0 || open;
   useEffect(() => {
     if (!shown) return undefined;
@@ -413,6 +414,21 @@ export const CommandsDock = () => {
       if (!el) return;
       const pill = el.querySelector('.commands-dock-pill');
       const box = (pill || el).getBoundingClientRect();
+      /* Above the message box, at its left edge, when the composer is at the
+         bottom of the window. */
+      const composer = [...document.querySelectorAll('.input-container')].find(c => {
+        const r = c.getBoundingClientRect();
+        return r.width && r.height && r.top < window.innerHeight && r.bottom >= window.innerHeight - 200;
+      });
+      if (composer) {
+        const r = composer.getBoundingClientRect();
+        const nextLift = Math.max(16, Math.round(window.innerHeight - r.top + 8));
+        const nextLeft = Math.max(8, Math.round(r.left));
+        setLift(prev => (prev === nextLift ? prev : nextLift));
+        setInset(prev => (prev === nextLeft ? prev : nextLeft));
+        return;
+      }
+      setInset(prev => (prev === null ? prev : null));
       let top = Infinity;
       for (const bar of document.querySelectorAll('.input-container, .input-footer, .studio-place:not([hidden]) .studio-footer')) {
         const r = bar.getBoundingClientRect();
@@ -451,7 +467,7 @@ export const CommandsDock = () => {
 
   if (!shown) return null;
   return (
-    <div ref={dock} className={`commands-dock ${open ? 'is-open' : ''}`} style={lift ? { bottom: `${lift}px`, '--dock-bottom': `${lift}px` } : undefined}>
+    <div ref={dock} className={`commands-dock ${open ? 'is-open' : ''}`} style={lift ? { bottom: `${lift}px`, '--dock-bottom': `${lift}px`, ...(inset != null ? { left: `${inset}px` } : null) } : undefined}>
       {open && (
         <div className="commands-dock-panel" role="dialog" aria-label={t('agent.dockTitle')}>
           <div className="commands-dock-head">

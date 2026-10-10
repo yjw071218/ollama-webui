@@ -133,6 +133,11 @@ export const extractAttachments = (content) => {
     found.push({ at: m.index, attachment: { type: 'url', name: m[1] } });
   }
 
+  /* Where a file was kept (pathMarker), so a sent PDF opens as the document. */
+  const paths = new Map();
+  for (const m of text.matchAll(/\[Attached file path: (.*?) -> ([^\]\n]+)\]/g)) paths.set(m[1], m[2]);
+  for (const f of found) if (paths.has(f.attachment.name) && !f.attachment.path) f.attachment.path = paths.get(f.attachment.name);
+
   found.sort((a, b) => a.at - b.at);
 
   return {

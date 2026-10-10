@@ -135,22 +135,40 @@ export const shouldPasteAsFile = (text) => {
  */
 export const namePastedText = (text, { prefix = 'pasted' } = {}) => {
   const s = String(text ?? '');
-  const head = s.slice(0, 4000);
+  const head = s.slice(0, 6000);
+  const lines = head.split('\n').filter(l => l.trim());
+  const n = Math.max(1, lines.length);
+  const share = (re) => lines.filter(l => re.test(l)).length / n;
+
+  /* Prose first. One word that happens to be a keyword ("const", "=>",
+     "SELECT" inside a sentence) used to name a Korean answer `pasted.js`.
+     Code is now recognised by how many *lines* look like code. */
+  const letters = (head.match(/[A-Za-z\uAC00-\uD7A3]/g) || []).length || 1;
+  const hangul = (head.match(/[\uAC00-\uD7A3]/g) || []).length / letters;
+  const codeLine = /(?:[;{}]\s*$|^\s*(?:import|export|const|let|var|function|def|class|return|if\s*\(|for\s*\(|while\s*\(|public|private|#include|package)\b|^\s*[}\])]|=>\s*[{(]?\s*$)/;
+  const code = share(codeLine);
+  const markdown = share(/^\s*(?:#{1,6}\s|[*+-]\s+\S|\d+\.\s+\S|>\s|```|\|.*\|)|\*\*[^*]+\*\*/);
+  const trimmed = s.trim();
+  if (/^[[{][\s\S]*[\]}]$/.test(trimmed)) { try { JSON.parse(trimmed); return `${prefix}.json`; } catch { /* not json */ } }
+  if (/^\s*(?:Traceback \(most recent call last\)|\w*(?:Error|Exception)\b.*:)/m.test(head) && share(/^\s*(?:at |File "|\w*Error|\w*Exception)/) > 0.15) return `${prefix}.log`;
+  // Markup and shell sessions are not "code lines" by the measure above.
+  if (/^\s*<(?:!doctype html|html)\b/i.test(head) || share(/^\s*<\/?[a-z][\w-]*[\s>]/i) > 0.5) return `${prefix}.html`;
+  if (share(/^\s*(?:#!\/|\$ )/) > 0.5) return `${prefix}.sh`;
+  if (code < 0.3) return `${prefix}.${markdown >= 0.08 ? 'md' : 'txt'}`;
+  if (hangul > 0.35 && code < 0.5) return `${prefix}.${markdown >= 0.08 ? 'md' : 'txt'}`;
 
   const looks = [
-    ['json', () => /^\s*[[{][\s\S]*[\]}]\s*$/.test(s.trim())],
-    ['py', () => /^\s*(?:def |class |import |from \w+ import )/m.test(head)],
-    ['ts', () => /\b(?:interface|type)\s+\w+\s*[={]|:\s*(?:string|number|boolean)\b/.test(head)],
-    ['jsx', () => /<\/?[A-Z]\w*[\s/>]/.test(head) && /\b(?:const|function|import)\b/.test(head)],
-    ['js', () => /\b(?:function|const|let|var|=>|require\(|import .* from)\b/.test(head)],
-    ['java', () => /\b(?:public|private)\s+(?:static\s+)?(?:class|void|int|String)\b/.test(head)],
-    ['sql', () => /\b(?:SELECT|INSERT INTO|UPDATE|CREATE TABLE)\b/i.test(head)],
-    ['html', () => /<(?:!doctype|html|div|span|p)\b/i.test(head)],
-    ['css', () => /[.#]?[\w-]+\s*\{[^}]*:[^}]*;[\s\S]*\}/.test(head)],
-    ['sh', () => /^\s*(?:#!\/|\$ |sudo |npm |git |cd )/m.test(head)],
-    ['log', () => /^\s*(?:Traceback|Error|Exception|\w+Error:|at \w+)/m.test(head)],
+    ['py', () => share(/^\s*(?:def |class \w+.*:\s*$|import \w|from \w+ import |elif |print\()/) > 0.1],
+    ['tsx', () => /<\/?[A-Z]\w*[\s/>]/.test(head) && /:\s*(?:string|number|boolean|React\.)/.test(head)],
+    ['ts', () => share(/^\s*(?:export\s+)?(?:interface|type)\s+\w+|:\s*(?:string|number|boolean)\b[;,)=]/) > 0.05],
+    ['jsx', () => /<\/?[A-Z]\w*[\s/>]/.test(head) && share(/^\s*(?:const|function|import|export)\b/) > 0.03],
+    ['java', () => share(/^\s*(?:public|private|protected)\s+(?:static\s+)?(?:final\s+)?(?:class|void|int|String|[A-Z]\w*)\b/) > 0.05],
+    ['sql', () => share(/^\s*(?:SELECT|FROM|WHERE|INSERT INTO|UPDATE|CREATE TABLE|JOIN|GROUP BY|ORDER BY)\b/i) > 0.2],
+    ['html', () => share(/^\s*<\/?[a-z][\w-]*[\s>]/i) > 0.3],
+    ['css', () => share(/^\s*(?:[.#@]?[\w-][\w\s.#:>,-]*\{|[\w-]+\s*:\s*[^;]+;\s*$)/) > 0.4],
+    ['sh', () => share(/^\s*(?:#!\/|\$ |sudo |npm |git |cd |echo |export \w+=)/) > 0.3],
+    ['js', () => share(/^\s*(?:const|let|var|function|import|export|module\.exports|require\()\b|=>/) > 0.08],
   ];
-
   const hit = looks.find(([, test]) => { try { return test(); } catch { return false; } });
   return `${prefix}.${hit ? hit[0] : 'txt'}`;
 };

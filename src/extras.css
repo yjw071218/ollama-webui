@@ -11042,3 +11042,76 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 .main-header.is-browser-docked .model-selector-container { display: flex !important; flex: 0 1 auto; min-width: 0; margin-inline-start: auto; }
 .main-header.is-browser-docked .model-selector-container .model-name { max-width: 160px; }
 .browser-dock-new { flex: none; margin-inline-end: .35rem; }
+
+/* ==== Tablet-width header: all four meters, slimmer search, theme last ====
+   At 861–1250px of chat column the search box took the room the RAM and VRAM
+   meters needed. The search now starts smaller (it still widens on focus),
+   all meters stay with their values, the studio button goes (the sidebar's
+   스튜디오 tab is right there), and the theme toggle stays at the far right. */
+@container mainpane (min-width: 861px) and (max-width: 1250px) {
+  .main-header .sys-strip.in-header .sys-chip:nth-child(n) { display: inline-flex !important; }
+  .main-header .sys-strip.in-header .sys-chip-value { display: inline-block !important; }
+  .main-header .sys-strip.in-header { gap: 8px; padding: 0 8px; }
+  .main-header .sys-strip.in-header .sys-chip-track { width: 22px; }
+  .main-header .header-search { flex: 1 1 140px !important; min-width: 90px !important; }
+  .main-header .header-search:focus-within { flex-basis: 220px !important; }
+}
+@container mainpane (max-width: 1400px) {
+  .main-header .header-studio { display: none !important; }
+}
+.main-header .header-theme { display: inline-flex; flex-shrink: 0; order: 99; }
+@container mainpane (max-width: 860px) {
+  .main-header .header-theme { display: none !important; }
+}
+
+/* Round button at the bottom right: opens the Windows app's in-app browser. */
+.inapp-browser-fab {
+  position: fixed; right: 20px; bottom: 20px; z-index: var(--z-dock, 40);
+  width: 48px; height: 48px; border-radius: 50%;
+  display: grid; place-items: center; cursor: pointer;
+  border: 1px solid var(--border-color);
+  background: var(--bg-secondary, #24211d); color: var(--text-primary);
+  box-shadow: 0 6px 18px rgba(0,0,0,.28);
+  transition: transform .15s ease, background-color .15s ease, color .15s ease;
+}
+.inapp-browser-fab:hover { transform: translateY(-2px); color: var(--accent, #d97757); border-color: var(--accent, #d97757); }
+.inapp-browser-fab:active { transform: scale(.94); }
+@media (max-width: 860px) { .inapp-browser-fab { display: none; } }
+@media (prefers-reduced-motion: reduce) { .inapp-browser-fab { transition: none; } }
+
+/* ==== Diagrams: touch handling and full screen (Mermaid.jsx) ====
+   The page keeps vertical scrolling; sideways drags and pinches go to the
+   diagram. Zoomed in or full screen, every gesture belongs to the diagram. */
+.mermaid-canvas { will-change: transform; }
+.mermaid-stage { touch-action: pan-y; -webkit-tap-highlight-color: transparent; }
+.mermaid-block.is-zoomed .mermaid-stage,
+.mermaid-block.is-full .mermaid-stage { touch-action: none; }
+@media (pointer: coarse) {
+  .mermaid-block.is-overflow .mermaid-stage { overflow: hidden; touch-action: pan-y; }
+  .mermaid-block.is-overflow.is-zoomed .mermaid-stage { touch-action: none; }
+  .mermaid-pad { display: none !important; }
+  .mermaid-tools .mermaid-btn { width: 36px; height: 36px; border-radius: 10px; }
+  .mermaid-hint { font-size: .7rem; }
+}
+.mermaid-block.is-full {
+  position: fixed; inset: 0; z-index: 1000; margin: 0; border-radius: 0;
+  display: flex; flex-direction: column;
+  background: var(--bg-primary, #171512);
+  padding-top: env(safe-area-inset-top); padding-bottom: env(safe-area-inset-bottom);
+  animation: mmd-full-in .18s ease-out;
+}
+.mermaid-block.is-full .mermaid-stage { flex: 1; max-height: none !important; overflow: hidden !important; display: flex; align-items: center; justify-content: center; }
+.mermaid-block.is-full .mermaid-tools { top: calc(env(safe-area-inset-top) + .6rem); right: .6rem; }
+.mermaid-block.is-full .mermaid-source { max-height: 35vh; overflow: auto; margin: 0; }
+@keyframes mmd-full-in { from { opacity: 0; transform: scale(.98); } to { opacity: 1; transform: none; } }
+@media (prefers-reduced-motion: reduce) { .mermaid-block.is-full { animation: none; } }
+
+/* An answer whose stream stopped partway (App.jsx). */
+.answer-cut-notice { display: flex; align-items: center; gap: .6rem; flex-wrap: wrap; margin-top: .6rem; padding: .45rem .7rem; border-radius: 10px; font-size: .82rem; color: var(--text-secondary); background: color-mix(in srgb, #e08a4a 9%, transparent); border: 1px solid color-mix(in srgb, #e08a4a 30%, transparent); width: fit-content; }
+.answer-cut-retry { display: inline-flex; align-items: center; gap: .3rem; border: none; background: transparent; color: var(--text-primary); font: inherit; font-weight: 600; cursor: pointer; padding: .15rem .4rem; border-radius: 6px; }
+.answer-cut-retry:hover { background: color-mix(in srgb, var(--text-primary) 10%, transparent); }
+
+/* A diagram whose code could not be loaded (App.jsx DiagramBoundary). */
+.mermaid-error { display: flex; align-items: center; gap: .5rem; flex-wrap: wrap; padding: .7rem 1rem 0; font-size: .82rem; color: var(--text-secondary); }
+.mermaid-retry { border: 1px solid var(--border-color); background: transparent; color: var(--text-primary); border-radius: 8px; padding: .2rem .6rem; font: inherit; cursor: pointer; }
+.mermaid-retry:hover { border-color: var(--primary); }

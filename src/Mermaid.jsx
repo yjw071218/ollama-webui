@@ -1,6 +1,7 @@
-import React, { useEffect, useId, useRef, useState } from 'react';
-import { ZoomIn, ZoomOut, RotateCcw, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Copy, Check, MoveHorizontal, Code } from 'lucide-react';
+import React, { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { ZoomIn, ZoomOut, RotateCcw, ChevronUp, ChevronDown, ChevronLeft, ChevronRight, Copy, Check, MoveHorizontal, Code, Maximize2, Minimize2 } from 'lucide-react';
 import { copyText } from './clipboard.js';
+import { repairMermaid } from './mermaidRepair.js';
 // Self-hosted Korean UI font, loaded only with diagrams (split by glyph range).
 import 'pretendard/dist/web/variable/pretendardvariable-dynamic-subset.css';
 
@@ -107,6 +108,12 @@ export default function Mermaid({ source, live = false }) {
   const [natural, setNatural] = useState(null);
   const [stageWidth, setStageWidth] = useState(0);
   const drag = useRef(null);
+  const touches = useRef(new Map());
+  const lastPointer = useRef('mouse');
+  const canvas = useRef(null);
+  const [full, setFull] = useState(false);
+  const viewRef = useRef(view);
+  viewRef.current = view;
   const seq = useRef(0);
   const stage = useRef(null);
   const [badge, setBadge] = useState(false);
@@ -117,7 +124,7 @@ export default function Mermaid({ source, live = false }) {
   useEffect(() => {
     const el = stage.current;
     if (!el) return undefined;
-    const wheel = (e) => { if (!e.ctrlKey) return; e.preventDefault(); zoom(e.deltaY < 0 ? 1.1 : 1 / 1.1); };
+    const wheel = (e) => { if (!e.ctrlKey) return; e.preventDefault(); zoomAt(e.deltaY < 0 ? 1.1 : 1 / 1.1, e.clientX, e.clientY); flash(); };
     el.addEventListener('wheel', wheel, { passive: false });
     return () => el.removeEventListener('wheel', wheel);
   });
@@ -125,14 +132,21 @@ export default function Mermaid({ source, live = false }) {
   useEffect(() => {
     let cancelled = false;
     const n = ++seq.current;
-    const text = String(source || '').trim();
-    if (!text) return undefined;
+    const original = String(source || '').trim();
+    if (!original) return undefined;
     // Streaming: wait for a pause so a growing block is not parsed per token.
     const timer = setTimeout(async () => {
       try {
         const mermaid = await ready();
-        await fontsReady(text);
-        await mermaid.parse(text);
+        await fontsReady(original);
+        /* A label with unquoted brackets is the usual parse error; the same
+           diagram with its labels quoted is tried before saying it failed. */
+        let text = original;
+        try { await mermaid.parse(text); } catch (first) {
+          const fixed = repairMermaid(text);
+          if (!fixed) throw first;
+          try { await mermaid.parse(fixed); text = fixed; } catch { throw first; }
+        }
         let { svg: out } = await mermaid.render(`${id}-${n}`, text);
         let size = naturalSize(out);
         // Too wide to read once fitted? Try the same tree drawn sideways.
@@ -163,6 +177,35 @@ export default function Mermaid({ source, live = false }) {
     return () => ro.disconnect();
   }, [svg]);
 
+  /* Readable labels on any fill. A diagram that sets its own colours
+     (classDef / style, usually light pastels) kept the theme's light text in
+     dark mode: white on pale pink. Each node's text now follows its fill. */
+  useLayoutEffect(() => {
+    const root = canvas.current;
+    if (!root || !svg) return;
+    const lum = (c) => {
+      const m = /rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)(?:[ ,/]+([\d.]+))?/.exec(c || '');
+      if (!m || (m[4] !== undefined && Number(m[4]) < 0.25)) return null;
+      const f = (v) => { v /= 255; return v <= 0.03928 ? v / 12.92 : ((v + 0.055) / 1.055) ** 2.4; };
+      return 0.2126 * f(+m[1]) + 0.7152 * f(+m[2]) + 0.0722 * f(+m[3]);
+    };
+    for (const node of root.querySelectorAll('g.node, g.cluster, g.actor, rect.actor, g.note')) {
+      const shape = node.matches('rect') ? node : node.querySelector('rect, polygon, circle, ellipse, path.label-container, path.basic');
+      if (!shape) continue;
+      const L = lum(getComputedStyle(shape).fill);
+      if (L == null) continue;
+      const ink = L > 0.42 ? '#1d1915' : L < 0.18 ? '#f3eee6' : null;
+      if (!ink) continue;
+      const scope = node.matches('rect') ? node.parentElement : node;
+      for (const el of scope.querySelectorAll('.nodeLabel, .label, span, p, div, foreignObject *, text, tspan')) {
+        el.style.setProperty('color', ink, 'important');
+        if (el instanceof SVGElement) el.style.setProperty('fill', ink, 'important');
+      }
+      // A light card gets a soft outline instead of the glow meant for dark ones.
+      if (L > 0.42) shape.style.setProperty('filter', 'drop-shadow(0 1px 1.5px rgba(0,0,0,.35))');
+    }
+  }, [svg]);
+
   /* The size it is drawn at: fitted to the column, but never below the
      readable scale (then it scrolls) and never blown up past a little over
      natural size. "원래 크기" shows it at 100%. */
@@ -173,7 +216,133 @@ export default function Mermaid({ source, live = false }) {
   const svgStyle = natural ? { '--mmd-w': `${Math.round(natural.w * drawScale)}px`, '--mmd-h': `${Math.round(natural.h * drawScale)}px` } : undefined;
 
   const move = (dx, dy) => setView(v => ({ ...v, x: v.x + dx, y: v.y + dy }));
-  const zoom = (f) => { setView(v => ({ ...v, scale: Math.min(6, Math.max(0.25, Math.round(v.scale * f * 100) / 100)) })); flash(); };
+  /* Zoom keeping the point under (cx, cy) -- a finger, the pointer, or the
+     middle of the stage for the buttons -- where it is. The canvas scales from
+     its top-left corner, so its untransformed corner is rect.left - x. */
+  const zoomAt = (f, cx, cy) => {
+    setView(v => {
+      const scale = Math.min(6, Math.max(0.25, Math.round(v.scale * f * 1000) / 1000));
+      const el = canvas.current;
+      if (!el || cx == null) return { ...v, scale };
+      const r = el.getBoundingClientRect();
+      const px = cx - (r.left - v.x), py = cy - (r.top - v.y);
+      const k = scale / v.scale;
+      return { scale, x: px - (px - v.x) * k, y: py - (py - v.y) * k };
+    });
+  };
+  const zoom = (f) => {
+    const r = stage.current?.getBoundingClientRect();
+    zoomAt(f, r ? r.left + r.width / 2 : null, r ? r.top + r.height / 2 : null);
+    flash();
+  };
+
+  /* Gestures, all measured from where they began (not frame to frame), so
+     nothing drifts:
+       - one finger: in the answer, sideways pans the diagram and up/down is
+         left to the page; zoomed in or full screen, it pans every way.
+       - two fingers: pinch-zoom about the fingers, and pan.
+       - double tap: 2x at that point, or back. Only two real taps count --
+         short, still, close together -- so quick repeated swipes while
+         panning are no longer read as a double tap (which zoomed in/out). */
+  const gesture = useRef(null);
+  const lastTapAt = useRef({ t: 0, x: 0, y: 0 });
+  const originOf = () => {
+    const r = canvas.current?.getBoundingClientRect();
+    const v = viewRef.current;
+    return r ? { ox: r.left - v.x, oy: r.top - v.y } : { ox: 0, oy: 0 };
+  };
+  const startPan = (p) => {
+    gesture.current = { kind: 'pan', sx: p.x, sy: p.y, v: { ...viewRef.current }, axis: null, moved: 0, t: Date.now() };
+  };
+  const startPinch = () => {
+    const [a, b] = [...touches.current.values()];
+    const v = { ...viewRef.current };
+    const { ox, oy } = originOf();
+    const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+    // The diagram point under the fingers, in unscaled canvas units.
+    gesture.current = { kind: 'pinch', d0: Math.hypot(a.x - b.x, a.y - b.y) || 1, v, ox, oy, px: (mx - ox - v.x) / v.scale, py: (my - oy - v.y) / v.scale };
+  };
+  const zoomedNow = () => viewRef.current.scale > 1.05;
+  const onDown = (e) => {
+    lastPointer.current = e.pointerType;
+    if (e.target.closest('button')) return;
+    if (e.pointerType === 'mouse') {
+      if (e.button !== 0) return;
+      drag.current = { x: e.clientX, y: e.clientY };
+      e.currentTarget.setPointerCapture(e.pointerId);
+      return;
+    }
+    touches.current.set(e.pointerId, { x: e.clientX, y: e.clientY, x0: e.clientX, y0: e.clientY, t0: Date.now() });
+    try { e.currentTarget.setPointerCapture(e.pointerId); } catch { /* gone */ }
+    if (touches.current.size === 2) startPinch();
+    else if (touches.current.size === 1) startPan({ x: e.clientX, y: e.clientY });
+  };
+  const onMove = (e) => {
+    if (e.pointerType === 'mouse') {
+      if (!drag.current) return;
+      move(e.clientX - drag.current.x, e.clientY - drag.current.y);
+      drag.current = { x: e.clientX, y: e.clientY };
+      return;
+    }
+    const tp = touches.current.get(e.pointerId);
+    if (!tp) return;
+    tp.x = e.clientX; tp.y = e.clientY;
+    const g = gesture.current;
+    if (!g) return;
+    if (g.kind === 'pinch' && touches.current.size >= 2) {
+      const [a, b] = [...touches.current.values()];
+      const d = Math.hypot(a.x - b.x, a.y - b.y) || 1;
+      const mx = (a.x + b.x) / 2, my = (a.y + b.y) / 2;
+      const scale = Math.min(6, Math.max(0.25, g.v.scale * (d / g.d0)));
+      setView({ scale, x: mx - g.ox - g.px * scale, y: my - g.oy - g.py * scale });
+      setBadge(true);
+      return;
+    }
+    if (g.kind !== 'pan' || touches.current.size !== 1) return;
+    const dx = e.clientX - g.sx, dy = e.clientY - g.sy;
+    g.moved = Math.max(g.moved, Math.hypot(dx, dy));
+    const free = full || zoomedNow();
+    if (!free) {
+      // Decide once, after a few pixels: sideways is ours, up/down the page's.
+      if (!g.axis && g.moved > 8) g.axis = Math.abs(dx) > Math.abs(dy) ? 'x' : 'y';
+      if (g.axis !== 'x') return;
+      setView({ ...g.v, x: g.v.x + dx });
+      return;
+    }
+    setView({ ...g.v, x: g.v.x + dx, y: g.v.y + dy });
+  };
+  const onUp = (e) => {
+    if (e.pointerType === 'mouse') { drag.current = null; return; }
+    const tp = touches.current.get(e.pointerId);
+    touches.current.delete(e.pointerId);
+    const g = gesture.current;
+    if (g?.kind === 'pinch') {
+      flash();
+      // One finger still down: it carries on panning from here, no jump.
+      const rest = [...touches.current.values()][0];
+      if (rest) startPan(rest); else gesture.current = null;
+      if (rest) gesture.current.fromPinch = true;
+      return;
+    }
+    gesture.current = null;
+    if (!tp || e.type === 'pointercancel' || g?.fromPinch) return;
+    const still = Math.hypot(tp.x - tp.x0, tp.y - tp.y0) < 10 && Date.now() - tp.t0 < 260;
+    if (!still) { lastTapAt.current = { t: 0, x: 0, y: 0 }; return; }
+    const prev = lastTapAt.current, now = Date.now();
+    if (now - prev.t < 320 && Math.hypot(tp.x - prev.x, tp.y - prev.y) < 36) {
+      lastTapAt.current = { t: 0, x: 0, y: 0 };
+      if (zoomedNow()) reset(); else { zoomAt(2, tp.x, tp.y); flash(); }
+    } else lastTapAt.current = { t: now, x: tp.x, y: tp.y };
+  };
+
+  useEffect(() => {
+    if (!full) return undefined;
+    const onKey = (e) => { if (e.key === 'Escape') setFull(false); };
+    window.addEventListener('keydown', onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = 'hidden';
+    return () => { window.removeEventListener('keydown', onKey); document.body.style.overflow = prev; };
+  }, [full]);
   const reset = () => { setView({ scale: 1, x: 0, y: 0 }); flash(); };
   const copy = async () => { if (await copyText(source)) { setCopied(true); setTimeout(() => setCopied(false), 1500); } };
 
@@ -186,24 +355,25 @@ export default function Mermaid({ source, live = false }) {
     );
   }
   return (
-    <figure className={`mermaid-block ${fit ? 'is-fit' : 'is-wide'}${natural ? ' is-sized' : ''}${overflows ? ' is-overflow' : ''}`}>
+    <figure className={`mermaid-block ${fit ? 'is-fit' : 'is-wide'}${natural ? ' is-sized' : ''}${overflows ? ' is-overflow' : ''}${full ? ' is-full' : ''}${view.scale > 1.05 ? ' is-zoomed' : ''}`}>
       <div className="mermaid-tools">
         <button type="button" className="mermaid-btn" title={fit ? '원래 크기' : '폭에 맞추기'} aria-label={fit ? '원래 크기' : '폭에 맞추기'} onClick={() => setFit(f => !f)}><MoveHorizontal size={15} /></button>
         <button type="button" className="mermaid-btn" title="코드 보기" aria-label="코드 보기" aria-pressed={showCode} onClick={() => setShowCode(s => !s)}><Code size={15} /></button>
+        <button type="button" className="mermaid-btn" title={full ? '닫기 (Esc)' : '전체 화면'} aria-label={full ? '전체 화면 닫기' : '전체 화면'} aria-pressed={full} onClick={() => { setFull(f => !f); setView({ scale: 1, x: 0, y: 0 }); }}>{full ? <Minimize2 size={15} /> : <Maximize2 size={15} />}</button>
         <button type="button" className="mermaid-btn" title="코드 복사" aria-label="코드 복사" onClick={copy}>{copied ? <Check size={15} /> : <Copy size={15} />}</button>
       </div>
       <div
         ref={stage}
         className="mermaid-stage"
-        onPointerDown={(e) => { if (e.button !== 0 || e.target.closest('button')) return; drag.current = { x: e.clientX, y: e.clientY }; e.currentTarget.setPointerCapture(e.pointerId); }}
-        onPointerMove={(e) => { if (!drag.current) return; move(e.clientX - drag.current.x, e.clientY - drag.current.y); drag.current = { x: e.clientX, y: e.clientY }; }}
-        onPointerUp={() => { drag.current = null; }}
-        onPointerCancel={() => { drag.current = null; }}
-        onDoubleClick={reset}
+        onPointerDown={onDown}
+        onPointerMove={onMove}
+        onPointerUp={onUp}
+        onPointerCancel={onUp}
+        onDoubleClick={(e) => { if (lastPointer.current !== 'mouse' || e.target.closest('button')) return; reset(); }}
       >
         <div className={`mermaid-zoom${badge || view.scale !== 1 ? ' is-on' : ''}${badge ? ' is-flash' : ''}`} role="status" aria-live="polite">{Math.round(view.scale * 100)}%</div>
-        {overflows && <div className="mermaid-hint">← 끌거나 가로로 스크롤해서 보기 →</div>}
-        <div className="mermaid-canvas" style={{ ...svgStyle, transform: `translate(${view.x}px, ${view.y}px) scale(${view.scale})` }}
+        {overflows && !full && <div className="mermaid-hint">← 밀어서 보기 · 두 손가락으로 확대 →</div>}
+        <div ref={canvas} className="mermaid-canvas" style={{ ...svgStyle, transformOrigin: '0 0', transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.scale})` }}
           // Rendered by mermaid with securityLevel "strict" (sanitised, no scripts or click handlers).
           dangerouslySetInnerHTML={{ __html: svg }} />
         <div className="mermaid-pad" role="group" aria-label="다이어그램 이동·확대">

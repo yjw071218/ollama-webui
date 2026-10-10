@@ -886,6 +886,14 @@ public class MainActivity extends Activity {
         if (code == UpdateDialog.INSTALL_PERMISSION) { if (updateDialog != null) updateDialog.onPermissionResult(); return; }
         if (code == FILE && fileResult != null) {
             Uri[] picked = WebChromeClient.FileChooserParams.parseResult(result, intent);
+            /* Several files come back as ClipData, which parseResult ignores: only
+               the first photo of a multi-select reached the page. */
+            if (result == RESULT_OK && intent != null && intent.getClipData() != null && intent.getClipData().getItemCount() > 0) {
+                ClipData clip = intent.getClipData();
+                java.util.ArrayList<Uri> all = new java.util.ArrayList<>();
+                for (int i = 0; i < clip.getItemCount(); i++) { Uri u = clip.getItemAt(i).getUri(); if (u != null && !all.contains(u)) all.add(u); }
+                if (!all.isEmpty()) picked = all.toArray(new Uri[0]);
+            }
             // A photo just taken comes back with no data: it is in the file it was given.
             if ((picked == null || picked.length == 0) && result == RESULT_OK && cameraOutput != null) {
                 File photo = new File(new File(getCacheDir(), "camera"), cameraOutput.getLastPathSegment());

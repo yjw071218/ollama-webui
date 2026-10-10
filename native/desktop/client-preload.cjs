@@ -19,6 +19,7 @@ contextBridge.exposeInMainWorld('ollamaNative', {
   openLocalPath: value => ipcRenderer.invoke('client:openLocalPath', value),
   changeServer: () => ipcRenderer.invoke('client:changeServer'),
   checkUpdates: () => ipcRenderer.invoke('client:checkUpdates'),
+  openBrowser: (url) => ipcRenderer.invoke('client:openBrowser', typeof url === 'string' ? url : ''),
   busy: (busy) => ipcRenderer.send('client:busy', !!busy),
   // The models the in-app browser's picker offers (browser.mjs).
   browserModels: (value) => ipcRenderer.send('client:browserModels', {

@@ -208,8 +208,43 @@ import { Logo } from './Logo.jsx';
 import { Chart } from './Chart.jsx';
 import { parseChart } from './chart.js';
 import Quiz, { parseQuiz } from './Quiz.jsx';
+import InfoBlocks, { parseInfoBlocks } from './InfoBlocks.jsx';
+import { dedupeSession } from './dedupeLegs.js';
 import ArtifactVersionPicker from './ArtifactVersionPicker.jsx';
-const MermaidDiagram = lazy(() => import('./Mermaid.jsx'));
+/* The diagram code is its own file, fetched the first time a diagram is drawn.
+   A failed fetch (a server restarted onto a new build, a dropped connection)
+   used to throw out of React.lazy into the top-level boundary: the whole app
+   showed "React Crashed!". It is retried, and if it still fails only that
+   diagram says so, with its source and a retry button. */
+const importMermaid = async () => {
+  let last;
+  for (let i = 0; i < 4; i++) {
+    try { return await import('./Mermaid.jsx'); } catch (e) { last = e; await new Promise(r => setTimeout(r, 500 * (i + 1))); }
+  }
+  throw last;
+};
+let MermaidLazy = lazy(importMermaid);
+class DiagramBoundary extends React.Component {
+  constructor(props) { super(props); this.state = { failed: false }; }
+  static getDerivedStateFromError() { return { failed: true }; }
+  componentDidCatch(e) { console.warn('[diagram] could not load:', e?.message || e); }
+  render() {
+    if (!this.state.failed) return this.props.children;
+    return (
+      <figure className="mermaid-block is-error">
+        <figcaption className="mermaid-error">다이어그램을 불러오지 못했습니다.{' '}
+          <button type="button" className="mermaid-retry" onClick={() => { MermaidLazy = lazy(importMermaid); this.setState({ failed: false }); }}>다시 시도</button>
+        </figcaption>
+        <pre className="mermaid-source"><code>{this.props.source}</code></pre>
+      </figure>
+    );
+  }
+}
+const MermaidDiagram = (props) => (
+  <DiagramBoundary source={props.source}>
+    <Suspense fallback={<pre className="mermaid-source"><code>{props.source}</code></pre>}><MermaidLazy {...props} /></Suspense>
+  </DiagramBoundary>
+);
 import {
   buildSnapshot, createShare, listShares, revokeShare,
   loadShareUrls, rememberShareUrl, forgetShareUrl, picturePayload,
@@ -1127,8 +1162,9 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
     if (drawn && parseChart(codeContent)) return drawn;
   }
   // Diagrams and quizzes are drawn in place too (src/Mermaid.jsx, src/Quiz.jsx).
-  if (language === 'mermaid') return <Suspense fallback={<pre className="mermaid-source"><code>{codeContent}</code></pre>}><MermaidDiagram source={codeContent} /></Suspense>;
+  if (language === 'mermaid') return <MermaidDiagram source={codeContent} />;
   if (language === 'quiz' && parseQuiz(codeContent)) return <Quiz source={codeContent} />;
+  if ((language === 'infographic' || language === 'info') && parseInfoBlocks(codeContent)) return <InfoBlocks source={codeContent} />;
 
   const previewable = isPreviewable(language);
   const runnable = isPythonish(language);
@@ -4823,7 +4859,7 @@ function App() {
    * someone drags a long line into view would be noise. A tap that ends a text
    * selection is ignored for the same reason: the user was selecting.
    */
-  const IGNORE_TAP = 'button, a, input, textarea, select, label, summary, details > summary, [role="button"], [role="tab"], [role="link"], [role="switch"], [role="checkbox"], [contenteditable="true"], .msg-hover-actions, .code-container, .artifact-card, .chart-figure, table, pre';
+  const IGNORE_TAP = 'button, a, input, textarea, select, label, summary, details > summary, [role="button"], [role="tab"], [role="link"], [role="switch"], [role="checkbox"], [contenteditable="true"], .msg-hover-actions, .code-container, .artifact-card, .chart-figure, table, pre, .mermaid-block, .infographic, .quiz-block, .quiz, [class*="quiz-"], img, video, svg';
   /* Listing classes missed every control built from a <div> with a click
      handler -- a work step, the thinking label, a tool call's header -- and
      tapping one opened the toolbar as well. Anything the page shows a hand
@@ -5375,7 +5411,7 @@ function App() {
      *
      * A picture the reader attached is left alone: it has no copy anywhere
      * else, and its own bytes are all there is. */
-    list = persistable(list).map(withoutPictureBytes);
+    list = persistable(list).map(withoutPictureBytes).map(dedupeSession);
     let stored = [];
     try { stored = (await localforage.getItem(key)) || []; } catch (e) { stored = []; }
 
@@ -5579,6 +5615,17 @@ function App() {
    * and the last message is then the previous answer, which finished when it
    * said it did.
    */
+  /* One answer stored several times (src/dedupeLegs.js) is put right in the
+     chats themselves -- not only on screen, where indexes would then disagree
+     with the record. Never mid-answer: a turn writes by index. */
+  useEffect(() => {
+    if (isGenerating) return;
+    let changed = false;
+    const next = sessions.map(sess => { const d = dedupeSession(sess); if (d !== sess) changed = true; return d; });
+    if (changed) { setSessions(next); persistSessions(next); }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [sessions, isGenerating]);
+
   const markAnswered = (id, since = 0) => reviseSession(id, s => {
     const last = s.messages[s.messages.length - 1];
     if (!last || last.role !== 'assistant') return s;
@@ -7795,10 +7842,7 @@ function App() {
       if (settingsWin) applySyncedSettings({ settings: restored.settings, settingKeys: Object.keys(mapped.settings) });
       await refreshChatsFromStorage();
       addLog(`[backup] restored ${restored.chats} chats, ${restored.settings} settings.`, 'success');
-      toast(t('backup.restored', restored), 'success', 8000, {
-        label: t('backup.reload'),
-        onClick: () => window.location.reload(),
-      });
+      toast(t('backup.restored', restored), 'success', 8000);
     } catch (e) {
       addLog(`[backup] import failed: ${e.message}`, 'error');
       toast(t('backup.failed', { error: e.message }), 'error', 7000);
@@ -8355,12 +8399,8 @@ function App() {
       const stats = await accountStamp({ full: true });
       setSyncInfo(stats);
       toast(t('sync.pushed', { chats: stats?.chats ?? 0 }), 'success');
-      if (result.changedLocally > 0) {
-        toast(t('sync.remoteChanges'), 'info', 10000, {
-          label: t('backup.reload'),
-          onClick: () => window.location.reload(),
-        });
-      }
+      // Applied in place, like every other sync: no reload.
+      if (result.changedLocally > 0) showRemoteChanges(result);
     } catch (e) {
       if (e instanceof OwnerMismatch) {
         toast(t('sync.accountChanged'), 'error', 9000);
@@ -9312,7 +9352,8 @@ function App() {
     for (const file of files) {
       if (!file) continue;
 
-      if (file.type.startsWith('image/')) {
+      // Android content pickers often hand photos over with no MIME type.
+      if (file.type.startsWith('image/') || (!file.type && /\.(jpe?g|png|webp|gif|bmp)$/i.test(file.name || ''))) {
         const dataUrl = await new Promise((resolve, reject) => {
           const reader = new FileReader();
           reader.onload = (ev) => resolve(ev.target.result);
@@ -9640,9 +9681,23 @@ function App() {
     const had = originals.current.get(key);
     if (had) URL.revokeObjectURL(had);
     try { originals.current.set(key, URL.createObjectURL(file)); } catch (e) { /* no blob URLs here */ }
+    /* A PDF is also kept on the server, so the document -- not the text pulled
+       out of it -- still opens after a reload, on another device, or in a
+       sent message. The path goes into the message (pathMarker) when sent. */
+    if (/\.pdf$/i.test(String(file?.name || ''))) {
+      fetch('/api/attach-file', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/octet-stream', 'X-File-Name': encodeURIComponent(file.name) },
+        body: file,
+      }).then(r => r.json()).then(answer => {
+        if (!answer?.success || !answer.path) return;
+        setAttachments(prev => prev.map(a => (keyOfAttachment(a) === key && !a.path ? { ...a, path: answer.path } : a)));
+      }).catch(() => { /* the text still goes; only the viewer falls back */ });
+    }
   };
 
-  const originalOf = (att) => originals.current.get(keyOfAttachment(att)) || '';
+  const originalOf = (att) => originals.current.get(keyOfAttachment(att))
+    || (att?.path && /\.pdf$/i.test(String(att.name || '')) ? `/api/attach-file?path=${encodeURIComponent(att.path)}` : '');
 
   /* Which attachments are worth opening in the browser's own reader.
    *
@@ -11277,6 +11332,28 @@ Diagrams and infographics
   data pipeline, a process -- and explain it in prose as well. Quote labels that
   contain brackets, slashes or punctuation: A["Python Tracker (MediaPipe)"].
   Keep it to what one screen can show; split a large system into two diagrams.
+
+  A fenced \`\`\`infographic block of JSON is drawn as clean visual cards. Use it
+  for summaries a reader should take in at a glance -- key figures, a process,
+  a history, options side by side, pros and cons -- not for numbers on axes
+  (that is \`\`\`chart) or structure with arrows (that is \`\`\`mermaid):
+
+  \`\`\`infographic
+  {"title":"요약","blocks":[
+    {"type":"stats","items":[{"label":"사용자","value":"1.2","unit":"만","delta":"+12%","icon":"👥"}]},
+    {"type":"steps","title":"진행 순서","items":[{"title":"설치","text":"..."},{"title":"설정","text":"..."}]},
+    {"type":"compare","columns":[{"name":"A안","tag":"추천","highlight":true,"items":["빠름","저렴"]},{"name":"B안","items":["안정적"]}]}
+  ]}
+  \`\`\`
+
+  Types: stats (items: label, value, unit, delta "+n"/"-n", note, icon emoji),
+  steps (items: title, text), timeline (items: when, title, text),
+  compare (columns: name, items[], tag, highlight), progress (items: label,
+  value, max -- default 100), cards (items: icon, title, text), proscons (pros[],
+  cons[]), funnel (items: label, value; widest first), callout (tone
+  info|tip|warn|success, title, text). A single block may be written without
+  "blocks". Text is plain; **bold** is the only markup. Keep each block short
+  (2-6 items) and still say the key points in prose.
 
 Interactive quizzes
   When the reader asks to be quizzed or tested ("퀴즈 내줘", "문제 내줘", "테스트해줘"),
@@ -15534,7 +15611,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 rather than a setting they occasionally check, so it gets its own
                 way in rather than living three clicks inside the monitor. */}
             {!browserDocked && <button
-              className={`icon-btn bordered ${sidebarPlace === 'studio' ? 'toggled' : ''}`}
+              className={`icon-btn bordered header-studio ${sidebarPlace === 'studio' ? 'toggled' : ''}`}
               title={t('studio.title')}
               onClick={() => {
                 if (sidebarPlace !== 'studio') setStudioOpened(true);
@@ -15654,7 +15731,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             </button>
 
             <button
-              className="icon-btn bordered header-secondary"
+              className="icon-btn bordered header-theme"
               title={`${t('header.theme')}: ${theme}`}
               onClick={() => setTheme(theme === 'system' ? 'light' : theme === 'light' ? 'dark' : 'system')}
             >
@@ -17218,7 +17295,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                       // show; the other two kinds do -- the
                                       // file's own text, or the passages the
                                       // library holds for an indexed one.
-                                      const canOpen = att.type !== 'url';
+                                      const canOpen = att.type !== 'url' || /^https?:\/\//i.test(att.url || '');
                                       return (
                                         <button
                                           key={aIdx}
@@ -17227,7 +17304,18 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                                           title={att.type === 'indexed'
                                             ? `${att.name} — ${t('attach.indexedFull')}${att.pages ? ` (${att.pages}p)` : ''}`
                                             : canOpen ? `${att.name} — ${t('attach.open')}` : att.name}
-                                          onClick={() => canOpen && setViewingAttachment(att)}
+                                          onClick={() => {
+                                            if (!canOpen) return;
+                                            /* A page sent to the model: opened in the app's own
+                                               browser (its tab if already open, else a new one),
+                                               or a browser tab on the web. */
+                                            if (att.type === 'url') {
+                                              if (typeof window.ollamaNative?.openBrowser === 'function') window.ollamaNative.openBrowser(att.url).catch(() => {});
+                                              else window.open(att.url, '_blank', 'noopener,noreferrer');
+                                              return;
+                                            }
+                                            setViewingAttachment(att);
+                                          }}
                                           className={`user-attachment-card sent-attachment${canOpen ? ' is-openable' : ''}`}
                                         >
                                           <Paperclip size={14} />
@@ -17261,6 +17349,17 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         text={group.map(m => `${m.thinking || ''}${typeof m.content === 'string' ? m.content : ''}`).join('')}
                         answer={textBlocksOfGroup(group)}
                       />
+                    )}
+                    {/* The stream stopped in the middle of the answer (the page
+                        or the connection went away and the job is gone): the
+                        saved copy still says it is being written. Said, with a
+                        way to finish it, instead of passing as a whole answer. */}
+                    {msg.role === 'assistant' && !answerLiveHere && !isGenerating && i + group.length - 1 === messages.length - 1
+                      && group[group.length - 1].cliActivity && !group[group.length - 1].metrics && !group[group.length - 1].followedOnly && (
+                      <div className="answer-cut-notice" role="status">
+                        <span>{t('msg.cutOff')}</span>
+                        <button type="button" className="answer-cut-retry" onClick={() => handleRetry()}><RefreshCcw size={13} />{t('msg.retry')}</button>
+                      </div>
                     )}
                   </div>
                   
@@ -21133,6 +21232,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         <CliApprovals />
         {/* Every command a CLI is running, wherever the reader is (src/AgentActivity.jsx). */}
         <CommandsDock />
+        {/* Windows app: the in-app browser, one click from any chat. */}
+        {typeof window !== 'undefined' && typeof window.ollamaNative?.openBrowser === 'function' && !browserDocked && (
+          <button type="button" className="inapp-browser-fab" title={t('browser.open')} aria-label={t('browser.open')}
+            onClick={() => { haptic('light'); window.ollamaNative.openBrowser().catch(() => {}); }}>
+            <Globe size={20} />
+          </button>
+        )}
 
         {/* Toasts */}
         {toasts.length > 0 && (
