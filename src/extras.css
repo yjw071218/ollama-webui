@@ -11465,7 +11465,11 @@ body:has(.msg-actions-portal) .scroll-nudge { opacity: 0; pointer-events: none; 
    Below this width the CPU/GPU chips took the room the model picker needed
    and squeezed it to "clau…". The GPU is the one that matters while a model
    runs, so it alone stays; the picker keeps its width. */
-@container mainpane (max-width: 700px) {
-  .main-header .sys-strip.in-header .sys-chip:not(.sys-chip--gpu) { display: none !important; }
-  .main-header .sys-strip.in-header .sys-chip--gpu { display: inline-flex !important; }
+/* `body` and `.header-tools` in the selector: the tier rules above
+   (`.main-header .header-tools ... :nth-child(n)`, !important) are one class
+   more specific than a plain `.main-header` rule and kept CPU showing. The
+   width matches the tier that used to show CPU and GPU together. */
+@container mainpane (max-width: 759px) {
+  body .main-header .header-tools .sys-strip.in-header .sys-chip:not(.sys-chip--gpu) { display: none !important; }
+  body .main-header .header-tools .sys-strip.in-header .sys-chip.sys-chip--gpu { display: inline-flex !important; }
 }
