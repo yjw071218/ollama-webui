@@ -711,7 +711,7 @@ export const SystemStrip = ({ onOpen, inHeader = false }) => {
           : Math.max(0, Math.min(100, meter.value));
         const level = pct === null ? '' : pct >= 90 ? 'over' : pct >= 70 ? 'warn' : '';
         return (
-          <span className="sys-chip" key={meter.key} title={`${meter.label}: ${pct === null ? '—' : `${Math.round(pct)}%`} · ${meter.hint}`}>
+          <span className={`sys-chip sys-chip--${meter.key}`} key={meter.key} title={`${meter.label}: ${pct === null ? '—' : `${Math.round(pct)}%`} · ${meter.hint}`}>
             <span className="sys-chip-label">{meter.label}</span>
             <span className="sys-chip-track">
               <span className={`sys-chip-fill ${level}`} style={{ width: `${pct ?? 0}%` }} />

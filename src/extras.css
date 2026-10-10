@@ -11460,3 +11460,11 @@ body:has(.msg-actions-portal) .scroll-nudge { opacity: 0; pointer-events: none; 
 @media (max-width: 400px) {
   body .input-footer .ctx-meter-bar { width: 36px; }
 }
+
+/* ==== Header readout: only the GPU once the header gets tight ====
+   Below this width the CPU/GPU chips took the room the model picker needed
+   and squeezed it to "clau…". The GPU is the one that matters while a model
+   runs, so it alone stays; the picker keeps its width. */
+@media (max-width: 720px) {
+  .sys-strip.in-header .sys-chip:not(.sys-chip--gpu) { display: none; }
+}
