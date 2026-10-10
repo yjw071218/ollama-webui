@@ -10,7 +10,7 @@
  * after the user has said yes to it once, in a dialog the page cannot draw.
  */
 import { ipcMain, dialog, shell, screen } from 'electron';
-import { spawn, spawnSync } from 'node:child_process';
+import { spawn, spawnSync, execFile } from 'node:child_process';
 import { readFile, readdir, stat } from 'node:fs/promises';
 import { writeFileSync, mkdirSync } from 'node:fs';
 import os from 'node:os';
@@ -55,9 +55,27 @@ export const busyPort = (line) => {
 };
 
 /* Who is listening on `port`: pid, name, command line and start time. */
+/* Run a command without blocking the main process. These used to be
+   spawnSync: netstat plus a PowerShell start-up, up to thirteen seconds each,
+   on the thread that draws every window -- and `freePort` asked up to forty
+   times in a row. Windows saw the app stop responding and closed it
+   ("Application Hang", 2026-10-09). */
+const run = (command, args, timeout) => new Promise((resolve) => {
+  execFile(command, args, { encoding: 'utf8', windowsHide: true, timeout, maxBuffer: 8 * 1024 * 1024 }, (_err, stdout) => resolve({ stdout: stdout || '' }));
+});
+
+async function portInUse(port) {
+  if (process.platform !== 'win32') return false;
+  const ns = await run('netstat', ['-ano', '-p', 'TCP'], 5000);
+  return String(ns.stdout || '').split(/\r?\n/).some((line) => {
+    const c = line.trim().split(/\s+/);
+    return c[0] === 'TCP' && c[1]?.endsWith(':' + port) && /:0$/.test(c[2] || '');
+  });
+}
+
 async function portOwner(port) {
   if (process.platform !== 'win32') return null;
-  const ns = spawnSync('netstat', ['-ano', '-p', 'TCP'], { encoding: 'utf8', windowsHide: true, timeout: 5000 });
+  const ns = await run('netstat', ['-ano', '-p', 'TCP'], 5000);
   let pid = 0;
   for (const line of String(ns.stdout || '').split(/\r?\n/)) {
     const c = line.trim().split(/\s+/);
@@ -71,7 +89,7 @@ async function portOwner(port) {
   }
   if (!pid) return null;
   const script = `[Console]::OutputEncoding=[Text.Encoding]::UTF8; $p = Get-CimInstance Win32_Process -Filter "ProcessId=${pid}"; if ($p) { @{ name=$p.Name; cmd=$p.CommandLine; started=$p.CreationDate.ToString('o') } | ConvertTo-Json -Compress }`;
-  const ps = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], { encoding: 'utf8', windowsHide: true, timeout: 8000 });
+  const ps = await run('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], 8000);
   let info = {};
   try { info = JSON.parse(String(ps.stdout || '').trim() || '{}'); } catch { /* name unknown */ }
   return { pid, port, name: info.name || '', command: info.cmd || '', startedAt: info.started ? Date.parse(info.started) : null };
@@ -381,8 +399,9 @@ export function createRunner({ valid, owner, send, allowed, allow, openBrowser }
       buttons: [tr('취소', 'Cancel'), tr('종료', 'End it')], defaultId: 0, cancelId: 0, noLink: true,
     });
     if (r.response !== 1) return false;
-    spawnSync('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true, timeout: 8000 });
-    for (let i = 0; i < 40; i++) { if (!(await portOwner(port))) return true; await new Promise(res => setTimeout(res, 250)); }
+    await run('taskkill', ['/pid', String(pid), '/T', '/F'], 8000);
+    // Only "is anyone still on it" -- netstat, not a PowerShell per look.
+    for (let i = 0; i < 40; i++) { if (!(await portInUse(port))) return true; await new Promise(res => setTimeout(res, 250)); }
     throw new Error(tr('프로세스를 종료했지만 포트가 아직 사용 중입니다.', 'The process was ended but the port is still in use.'));
   }));
   ipcMain.handle('runner:browse', guard(async (url) => { openBrowser(String(url || '')); return true; }));

@@ -11341,3 +11341,85 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
   .main-header .header-tools .header-search,
   .main-header .header-tools .header-search:focus-within { min-width: 240px !important; }
 }
+
+/* ==== Message actions capsule, portalled to <body> (App.jsx) ====
+   Drawn and hit-tested in the same place: no transformed ancestor any more,
+   so `position: fixed` really is the screen. The rules above keyed on
+   `.message-row.actions-open` no longer reach it; these replace them. */
+.msg-actions-portal { position: static; }
+.msg-actions-portal .msg-hover-actions {
+  position: fixed;
+  top: auto; left: 0; right: 0;
+  bottom: calc(env(safe-area-inset-bottom, 0px) + 1.4rem);
+  width: max-content;
+  max-width: calc(100% - 1.5rem);
+  margin-inline: auto;
+  z-index: 1000;
+  opacity: 1;
+  visibility: hidden;          /* until App.jsx has measured and placed it */
+  pointer-events: auto;
+  display: flex;
+  flex-wrap: nowrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  padding: 4px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--text-primary) 10%, transparent);
+  background: color-mix(in srgb, var(--bg-secondary, #1c1b1a) 92%, transparent);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.35);
+  transform: none;
+  animation: msg-pill-in 0.18s var(--ease-out, ease);
+}
+.msg-actions-portal .msg-hover-actions::-webkit-scrollbar { display: none; }
+.msg-actions-portal .msg-hover-actions::before,
+.msg-actions-portal .msg-hover-actions .action-btn::after { content: none; }
+.msg-actions-portal .msg-hover-actions .action-btn {
+  display: inline-flex; align-items: center; justify-content: center;
+  flex: 0 0 auto;
+  width: 36px; height: 40px; min-width: 0; min-height: 0;
+  margin: 0; padding: 0; gap: 0;
+  border: none; border-radius: 999px;
+  background: transparent;
+  color: var(--text-secondary);
+  /* No scale on press: a button that shrinks under the finger moves its
+     own target edge. */
+  transform: none !important;
+}
+.msg-actions-portal .msg-hover-actions .action-btn:active {
+  background: color-mix(in srgb, var(--text-primary) 10%, transparent);
+}
+.msg-actions-portal .msg-hover-actions .action-btn svg { width: 17px; height: 17px; }
+@media (max-width: 419px) {
+  .msg-actions-portal .msg-hover-actions { gap: 0; padding: 3px; }
+  .msg-actions-portal .msg-hover-actions .action-btn { width: 32px; }
+  .msg-actions-portal .msg-hover-actions .action-btn svg { width: 16px; height: 16px; }
+}
+/* Delete set a little apart (only the bar's own last button). */
+.msg-actions-portal .msg-hover-actions > .action-btn:last-child { margin-inline-start: 6px; position: relative; }
+.msg-actions-portal .msg-hover-actions > .action-btn:last-child::before {
+  content: ''; position: absolute;
+  inset-inline-start: -4px; top: 10px; bottom: 10px; width: 1px;
+  background: color-mix(in srgb, var(--text-primary) 14%, transparent);
+}
+.msg-actions-portal .regen-menu { position: fixed; top: auto; right: auto; bottom: calc(env(safe-area-inset-bottom, 0px) + 5rem); left: 50%; transform: translateX(-50%); z-index: 1001; }
+body:has(.msg-actions-portal) form.input-container { opacity: 0; transform: translateY(6px); pointer-events: none; }
+body:has(.msg-actions-portal) .scroll-nudge { opacity: 0; pointer-events: none; }
+@media (prefers-reduced-motion: reduce) { .msg-actions-portal .msg-hover-actions { animation: none; } }
+
+/* ==== A part that failed to render (src/crashGuard.jsx) ==== */
+.safe-boundary { display: flex; align-items: center; flex-wrap: wrap; gap: .5rem; margin: .35rem 0; padding: .55rem .8rem; border-radius: 10px; border: 1px dashed color-mix(in srgb, var(--danger, #ef4444) 45%, transparent); background: color-mix(in srgb, var(--danger, #ef4444) 7%, transparent); color: var(--text-secondary); font-size: .85rem; }
+.safe-boundary button { padding: .25rem .7rem; border-radius: 999px; border: 1px solid var(--border-color); background: transparent; color: var(--text-primary); font: inherit; font-size: .8rem; cursor: pointer; }
+.safe-boundary button:hover { background: var(--hover-bg); }
+.app-crash { position: fixed; inset: 0; display: grid; place-items: center; padding: 1.5rem; background: var(--bg-main, #1a1916); color: var(--text-primary, #eee); z-index: 99999; }
+.app-crash-card { width: min(640px, 100%); padding: 1.5rem; border-radius: 18px; border: 1px solid var(--border-color, #ffffff22); background: var(--bg-secondary, #222); }
+.app-crash-card h2 { margin: 0 0 .5rem; }
+.app-crash-card p { color: var(--text-secondary, #aaa); margin: 0 0 1rem; }
+.app-crash-card pre { max-height: 240px; overflow: auto; padding: .75rem; border-radius: 10px; background: #0004; font-size: .75rem; white-space: pre-wrap; word-break: break-word; }
+.app-crash-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin-top: 1rem; }
+.app-crash-actions button { padding: .5rem 1rem; border-radius: 999px; border: 1px solid var(--border-color, #ffffff22); background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.app-crash-actions button:first-child { background: var(--accent, #d97757); border-color: transparent; color: #fff; }

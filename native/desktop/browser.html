@@ -6,7 +6,7 @@
 <button data-action="back" title="뒤로 (Alt+←)" data-en-title="Back (Alt+Left)" disabled>←</button>
 <button data-action="forward" title="앞으로 (Alt+→)" data-en-title="Forward (Alt+Right)" disabled>→</button>
 <button data-action="reload" id="reload" title="새로고침 (F5)" data-en-title="Reload (F5)">↻</button>
-<form id="go"><input id="address" spellcheck="false" autocomplete="off" aria-label="주소" data-en-label="Address"><button type="button" id="star" data-action="bookmark" title="북마크 (Ctrl+D)" data-en-title="Bookmark (Ctrl+D)">☆</button></form>
+<form id="go"><input id="address" spellcheck="false" autocomplete="off" role="combobox" aria-autocomplete="both" aria-expanded="false" aria-controls="suggest" aria-label="주소" data-en-label="Address"><ul id="suggest" role="listbox" hidden></ul><button type="button" id="star" data-action="bookmark" title="북마크 (Ctrl+D)" data-en-title="Bookmark (Ctrl+D)">☆</button></form>
 <span class="zoom"><button data-action="zoomOut" title="축소 (Ctrl+-)" data-en-title="Zoom out (Ctrl+-)">−</button><button data-action="zoomReset" id="zoom" title="100%로 (Ctrl+0)" data-en-title="Reset zoom (Ctrl+0)">100%</button><button data-action="zoomIn" title="확대 (Ctrl+=)" data-en-title="Zoom in (Ctrl+=)">＋</button></span>
 <button data-action="findOpen" title="페이지에서 찾기 (Ctrl+F)" data-en-title="Find in page (Ctrl+F)">🔍</button>
 <button data-panel="bookmarks" title="북마크" data-en-title="Bookmarks">★</button>

@@ -19,10 +19,13 @@ contextBridge.exposeInMainWorld('ollamaNative', {
   openLocalPath: value => ipcRenderer.invoke('client:openLocalPath', value),
   // Full paths of files/folders copied in Explorer (Ctrl+C), for pasting a folder as its path.
   clipboardPaths: () => ipcRenderer.invoke('client:clipboardPaths'),
+  // An error the page caught, written to userData/crash.log (main.mjs).
+  reportError: (text) => ipcRenderer.send('client:error', String(text || '').slice(0, 4000)),
   changeServer: () => ipcRenderer.invoke('client:changeServer'),
   checkUpdates: () => ipcRenderer.invoke('client:checkUpdates'),
   openBrowser: (url) => ipcRenderer.invoke('client:openBrowser', typeof url === 'string' ? url : ''),
-  busy: (busy) => ipcRenderer.send('client:busy', !!busy),
+  // While an answer is written; `info` says which chat, for the notification when it ends unseen.
+  busy: (busy, info) => ipcRenderer.send('client:busy', { busy: !!busy, chat: String(info?.chat ?? ''), title: String(info?.title ?? '') }),
   // The models the in-app browser's picker offers (browser.mjs).
   browserModels: (value) => ipcRenderer.send('client:browserModels', {
     models: (Array.isArray(value?.models) ? value.models : []).slice(0, 300).map(String),

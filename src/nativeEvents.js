@@ -8,6 +8,7 @@
  * `window.ollamaNative.onAction` (client-preload.cjs).
  *
  *   { type: 'new-chat' }
+ *   { type: 'voice' }       a new chat that starts listening (Android widget / tile)
  *   { type: 'ask', text }   a question from the in-app browser
  *   { type: 'share', text, files: [{ name, type, data /* base64 *\/ }] }
  *
@@ -30,6 +31,8 @@ export const fileOf = ({ name, type, data }) => {
 export const dispatchNative = (request, handlers) => {
   if (!request || typeof request !== 'object') return false;
   if (request.type === 'new-chat') { handlers.newChat?.(); return true; }
+  // A widget or quick-settings tile on Android: a new chat, listening at once.
+  if (request.type === 'voice') { handlers.voice?.(); return true; }
   if (request.type === 'browser-model') { if (typeof request.model === 'string' && request.model) handlers.browserModel?.(request.model); return true; }
   if (request.type === 'browser-dock') { handlers.browserDock?.(!!request.docked); return true; }
   if (request.type === 'ask') {
@@ -41,7 +44,9 @@ export const dispatchNative = (request, handlers) => {
       images: (Array.isArray(pg.images) ? pg.images : []).filter(x => typeof x === 'string' && x),
       focusImage: !!pg.focusImage,
     } : null;
-    handlers.ask?.({ text, page });
+    // `chat`: a reply typed into a notification belongs to the chat that notification was about.
+    const chat = request.chat != null && request.chat !== '' ? String(request.chat) : '';
+    handlers.ask?.(chat ? { text, page, chat } : { text, page });
     return true;
   }
   if (request.type === 'share') {
@@ -74,6 +79,7 @@ export const listenNative = (handlers, win = typeof window === 'undefined' ? und
 };
 
 /** Tell the app an answer is (or is no longer) being written. */
-export const tellNativeBusy = (busy, win = typeof window === 'undefined' ? undefined : window) => {
-  try { win?.ollamaNative?.busy?.(!!busy); } catch { /* an app without it */ }
+export const tellNativeBusy = (busy, info = null, win = typeof window === 'undefined' ? undefined : window) => {
+  // `info` ({ chat, title }) lets the Windows app say which chat finished, and open it when clicked.
+  try { win?.ollamaNative?.busy?.(!!busy, info && typeof info === 'object' ? { chat: String(info.chat ?? ''), title: String(info.title ?? '') } : undefined); } catch { /* an app without it */ }
 };

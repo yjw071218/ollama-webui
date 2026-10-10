@@ -1,3 +1,4 @@
+import { nextStamp, observeStamp } from './logicalClock.js';
 // When a chat last changed, decided in one place.
 //
 // `updatedAt` looks like a display detail — it is what the sidebar sorts by and
@@ -44,7 +45,42 @@
  */
 export const stamped = (before, after, now = Date.now()) => {
   if (!after || after === before) return before;
-  return after.updatedAt === before.updatedAt ? { ...after, updatedAt: now } : after;
+  /* The stamp comes from the logical clock (src/logicalClock.js): later than
+     the wall clock, than anything this device has seen from the account, and
+     than the copy being edited -- so a phone whose clock runs behind cannot
+     stamp a newer edit as older than the one it was made on. A stamp the
+     caller chose is kept unless it would go backwards. */
+  const chose = after.updatedAt !== before.updatedAt && Number.isFinite(after.updatedAt);
+  const at = chose && after.updatedAt > (before.updatedAt || 0)
+    ? (observeStamp(after.updatedAt), after.updatedAt)
+    : nextStamp(before.updatedAt || 0, chose ? after.updatedAt : now);
+  return withFieldStamps(before, { ...after, updatedAt: at }, at);
+};
+
+/* Fields that are not stamped one by one: the messages have their own merge
+   (server/chatMerge.js) and the two clocks are bookkeeping. */
+const UNSTAMPED = new Set(['messages', 'updatedAt', '_fieldAt']);
+const sameValue = (a, b) => a === b || (typeof a === 'object' && typeof b === 'object' && a && b && JSON.stringify(a) === JSON.stringify(b));
+
+/**
+ * Every top-level field that this edit changed, with when it changed.
+ *
+ * This is what makes a chat a map of last-writer-wins registers instead of one
+ * register: a pin made on the PC and a rename made on the phone at the same
+ * time are two different fields, and both survive the merge -- each field is
+ * decided by its own stamp, not by which device uploaded the whole chat last.
+ */
+export const withFieldStamps = (before, after, at) => {
+  const prior = before?._fieldAt && typeof before._fieldAt === 'object' ? before._fieldAt : {};
+  let next = null;
+  const keys = new Set([...Object.keys(before || {}), ...Object.keys(after || {})]);
+  for (const key of keys) {
+    if (UNSTAMPED.has(key)) continue;
+    if (sameValue(before?.[key], after?.[key])) continue;
+    next ??= { ...prior, ...(after._fieldAt || {}) };
+    next[key] = at;
+  }
+  return next ? { ...after, _fieldAt: next } : after;
 };
 
 /**

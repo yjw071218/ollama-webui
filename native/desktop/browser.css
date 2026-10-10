@@ -84,3 +84,15 @@ body.asking .ai-badge{animation:pulse 1.2s ease-in-out infinite}
 @media (max-width:760px){.zoom,[data-action="external"]{display:none}#airow [data-quick="points"],#airow [data-quick="explain"]{display:none}}
 @media (max-width:520px){#airow [data-quick]{display:none}}
 @media (prefers-reduced-motion:reduce){*{animation:none!important;transition:none!important}}
+
+/* ---- address bar autocomplete ---- */
+#suggest{position:absolute;z-index:5;top:calc(100% + 4px);left:0;right:0;margin:0;padding:4px;list-style:none;max-height:min(380px,calc(100vh - 80px));overflow:auto;background:var(--bg);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 32px #0008;animation:tab-in .12s ease both;scrollbar-width:thin}
+#suggest[hidden]{display:none}
+#suggest li{display:flex;align-items:center;gap:10px;padding:7px 10px;border-radius:8px;cursor:pointer;min-width:0}
+#suggest li.on,#suggest li:hover{background:var(--hover)}
+#suggest li.on{box-shadow:inset 3px 0 0 var(--accent)}
+#suggest .sg-icon{flex:none;width:18px;text-align:center;opacity:.75}
+#suggest .sg-main{flex:1;min-width:0;display:flex;flex-direction:column}
+#suggest .sg-title,#suggest .sg-url{overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#suggest .sg-url{font-size:.82em;color:var(--muted)}
+#suggest mark{background:none;color:var(--accent);font-weight:600}

@@ -270,6 +270,7 @@ function embed(host, background) {
   let findResult = null;
   let asking = false;
   let modelMenu = false;
+  let suggestOpen = false; // the address bar's autocomplete list is showing
 
   const site = () => active?.view.webContents;
   let restoring = false;
@@ -299,7 +300,7 @@ function embed(host, background) {
     const top = (host.isFullScreen() ? 0 : TITLE) + shift;
     const pw = pageWidth(w);
     const bh = barHeight();
-    bar.setBounds({ x: 0, y: top, width: pw, height: panel || modelMenu ? Math.max(bh, h - top) : bh });
+    bar.setBounds({ x: 0, y: top, width: pw, height: panel || modelMenu || suggestOpen ? Math.max(bh, h - top) : bh });
     for (const t of tabs) {
       if (t === active) t.view.setBounds({ x: 0, y: top + bh, width: pw, height: Math.max(0, h - top - bh) });
       else t.view.setBounds({ x: 0, y: top + bh, width: 0, height: 0 });
@@ -451,7 +452,7 @@ function embed(host, background) {
     const visited = () => {
       const s = readStore();
       s.history = addVisit(s.history, { url: wc.getURL(), title: wc.getTitle() });
-      saveStore(); sendState();
+      saveStore(); sendState(); sendLists(); // autocomplete sees the new visit
     };
     wc.on('did-navigate', () => { tab.favicon = ''; tab.url = wc.getURL(); visited(); saveSession(); });
     wc.on('page-title-updated', visited);
@@ -545,13 +546,14 @@ function embed(host, background) {
     else if (action === 'stop') wc?.stop();
     else if (action === 'close') b.close();
     else if (action === 'external') { const u = wc?.getURL(); if (web(u)) void shell.openExternal(u); }
-    else if (action === 'go' && typeof value === 'string') { load(active, addressToUrl(value)); panel = false; layout(); }
+    else if (action === 'go' && typeof value === 'string') { load(active, addressToUrl(value)); panel = false; suggestOpen = false; layout(); }
     else if (action === 'ask' && typeof value === 'string') {
       const opts = extra && typeof extra === 'object' ? extra : {};
       void ask(value, { selection: opts.mode === 'selection', image: opts.mode === 'image' && web(opts.src) ? opts.src : null });
     }
     else if (action === 'quick' && typeof value === 'string' && QUICK[value]) void ask(QUICK[value]());
     else if (action === 'modelMenu') { modelMenu = !!value; layout(); }
+    else if (action === 'suggest') { if (suggestOpen !== !!value) { suggestOpen = !!value; layout(); } }
     else if (action === 'model' && typeof value === 'string') {
       const client = host.clientContents;
       if ((modelsFor.get(host)?.models || []).includes(value) && client && !client.isDestroyed()) {

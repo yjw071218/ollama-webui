@@ -11,9 +11,187 @@ let state = {};
 let lists = { bookmarks: [], history: [] };
 let askExtra = null; // a question about the selection or one picture, from the right-click menu
 
+/* ---- address bar autocomplete ----
+   Suggestions come from the bookmarks and history the main process already
+   sends for the panel (browser:lists). The best URL match is also completed
+   inline, Chrome-style: the rest of it is typed in and left selected, so
+   carrying on typing replaces it and Backspace removes it. */
+const suggestBox = $('#suggest');
+let suggestions = [];
+let suggestAt = -1;
+let typed = '';          // what the user actually typed, without the inline completion
+let suppressInline = false;
+const strip = (u) => String(u || '').replace(/^https?:\/\/(www\.)?/i, '').replace(/\/$/, '');
+const looksLikeUrl = (v) => /^[a-z][\w+.-]*:\/\//i.test(v)
+  || /^(localhost|\d{1,3}(\.\d{1,3}){3})(:\d+)?(\/|$)/i.test(v)
+  || /^[^\s]+\.[a-z]{2,}(:\d+)?(\/\S*)?$/i.test(v);
+const ESC = { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' };
+const escapeHtml = (t) => String(t).replace(/[&<>"']/g, (c) => ESC[c]);
+const highlight = (text, q) => {
+  const src = String(text || '');
+  const i = q ? src.toLowerCase().indexOf(q.toLowerCase()) : -1;
+  if (i < 0) return escapeHtml(src);
+  return escapeHtml(src.slice(0, i)) + '<mark>' + escapeHtml(src.slice(i, i + q.length)) + '</mark>' + escapeHtml(src.slice(i + q.length));
+};
+const buildSuggestions = (q) => {
+  const query = q.trim().toLowerCase();
+  if (!query) return [];
+  const seen = new Map();
+  const add = (x, kind, base) => {
+    if (!x?.url) return;
+    const url = x.url;
+    const s = strip(url).toLowerCase();
+    const title = String(x.title || '').toLowerCase();
+    let score;
+    if (s.startsWith(query)) score = 100;
+    else if (host(url).replace(/^www\./, '').toLowerCase().startsWith(query)) score = 90;
+    else if (s.split(/[./?#=&_-]/).some(w => w.startsWith(query))) score = 60;
+    else if (title.split(/\s+/).some(w => w.startsWith(query))) score = 50;
+    else if (s.includes(query)) score = 35;
+    else if (title.includes(query)) score = 25;
+    else return;
+    score += base;
+    if (x.at) score += Math.max(0, 10 - (Date.now() - x.at) / 86400000); // recent visits first
+    score -= Math.min(10, s.length / 20); // shorter, more general addresses first
+    const prev = seen.get(url);
+    if (!prev || prev.score < score) seen.set(url, { url, title: x.title || '', kind, score });
+  };
+  for (const b of lists.bookmarks || []) add(b, 'bookmark', 15);
+  for (const h of lists.history || []) add(h, 'history', 0);
+  if (seen.size < 3) for (const h of POPULAR) add({ url: `https://${h}/`, title: h }, 'popular', -20);
+  const out = [...seen.values()].sort((a, b) => b.score - a.score).slice(0, 8);
+  // What was typed, as itself: open it if it is an address, search for it otherwise.
+  const raw = q.trim();
+  const isUrl = looksLikeUrl(raw);
+  const own = { url: raw, title: isUrl ? tr('주소로 이동', 'Go to address') : tr('검색', 'Search'), kind: isUrl ? 'go' : 'search' };
+  const rest = out.filter(x => strip(x.url).toLowerCase() !== strip(raw).toLowerCase());
+  return isUrl || !out.length || out[0].score < 100 ? [own, ...rest] : [...rest, own];
+};
+const setExpanded = (open) => {
+  address.setAttribute('aria-expanded', String(open));
+  if (suggestBox.hidden === !open) return;
+  suggestBox.hidden = !open;
+  api.action('suggest', open); // the bar grows over the page so the list is not cut off
+};
+const closeSuggest = () => {
+  suggestions = [];
+  suggestAt = -1;
+  setExpanded(false);
+  address.removeAttribute('aria-activedescendant');
+};
+const markActive = () => {
+  suggestBox.querySelectorAll('li').forEach((li, idx) => {
+    li.classList.toggle('on', idx === suggestAt);
+    li.setAttribute('aria-selected', String(idx === suggestAt));
+  });
+  if (suggestAt >= 0) {
+    address.setAttribute('aria-activedescendant', `sg-${suggestAt}`);
+    suggestBox.children[suggestAt]?.scrollIntoView({ block: 'nearest' });
+  }
+};
+const pick = (x, opts) => {
+  closeSuggest();
+  if (opts?.newTab && (x.kind === 'history' || x.kind === 'bookmark')) api.action('open', x.url, { newTab: true });
+  else api.action('go', x.url);
+  address.blur();
+};
+const renderSuggest = () => {
+  if (!suggestions.length || !editing) { closeSuggest(); return; }
+  suggestBox.replaceChildren(...suggestions.map((x, idx) => {
+    const li = document.createElement('li');
+    li.id = `sg-${idx}`;
+    li.setAttribute('role', 'option');
+    const icon = x.kind === 'search' ? '🔍' : x.kind === 'go' ? '🌐' : x.kind === 'bookmark' ? '★' : '🕘';
+    const main = x.kind === 'search' || x.kind === 'go'
+      ? `<span class="sg-title">${highlight(x.url, typed)}</span><span class="sg-url">${escapeHtml(x.title)}</span>`
+      : `<span class="sg-title">${highlight(x.title || strip(x.url), typed)}</span><span class="sg-url">${highlight(strip(x.url), typed)}</span>`;
+    li.innerHTML = `<span class="sg-icon">${icon}</span><span class="sg-main">${main}</span>`;
+    // mousedown, not click: by the time a click arrives the input has blurred and closed the list.
+    li.addEventListener('mousedown', (e) => { e.preventDefault(); pick(x, { newTab: e.ctrlKey || e.metaKey || e.button === 1 }); });
+    li.addEventListener('mousemove', () => { if (suggestAt !== idx) { suggestAt = idx; markActive(); } });
+    return li;
+  }));
+  setExpanded(true);
+  markActive();
+};
+/* Completes to the site first ("you" -> "youtube.com"), the way Chrome does:
+   a deep link such as a watch page is almost never what is meant. A full path
+   is used only once the typed text already goes past the host. */
+const POPULAR = ['youtube.com', 'google.com', 'naver.com', 'github.com', 'chatgpt.com', 'claude.ai', 'namu.wiki', 'daum.net', 'wikipedia.org', 'reddit.com', 'x.com', 'instagram.com', 'coupang.com', 'netflix.com', 'huggingface.co', 'civitai.com', 'stackoverflow.com', 'gmail.com', 'chzzk.naver.com', 'twitch.tv'];
+const completionFor = (q) => {
+  const hosts = new Map(); // host -> visit count
+  const paths = [];
+  for (const x of [...(lists.bookmarks || []), ...(lists.history || [])]) {
+    if (!x?.url) continue;
+    const h = host(x.url).replace(/^www\./i, '').toLowerCase();
+    if (h.startsWith(q)) hosts.set(h, (hosts.get(h) || 0) + 1);
+    const full = strip(x.url);
+    if (full.toLowerCase().startsWith(q)) paths.push(full);
+  }
+  if (!q.includes('/')) {
+    if (hosts.size) return [...hosts.entries()].sort((a, b) => b[1] - a[1] || a[0].length - b[0].length)[0][0];
+    const pop = POPULAR.find(h => h.startsWith(q));
+    if (pop) return pop;
+  }
+  return paths.sort((a, b) => a.length - b.length)[0] || '';
+};
+const inlineComplete = () => {
+  if (suppressInline || !typed || /\s/.test(typed) || /^[a-z][\w+.-]*:\/\//i.test(typed)) return;
+  const full = completionFor(typed.toLowerCase().replace(/^www\./, ''));
+  if (!full || full.length <= typed.length || !full.toLowerCase().startsWith(typed.toLowerCase())) return;
+  address.value = typed + full.slice(typed.length);
+  address.setSelectionRange(typed.length, address.value.length);
+};
+const updateSuggest = () => {
+  typed = address.value;
+  suggestions = buildSuggestions(typed);
+  suggestAt = suggestions.length ? 0 : -1;
+  renderSuggest();
+  inlineComplete();
+};
+// Deleting must not be undone by completing the same text straight back in.
+address.addEventListener('beforeinput', (e) => { suppressInline = /^delete/.test(e.inputType || ''); });
+address.addEventListener('input', updateSuggest);
+address.addEventListener('keydown', (e) => {
+  const open = !suggestBox.hidden && suggestions.length > 0;
+  if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+    e.preventDefault();
+    if (!open) { if (address.value.trim()) { suppressInline = true; updateSuggest(); } return; }
+    suggestAt = (suggestAt + (e.key === 'ArrowDown' ? 1 : -1) + suggestions.length) % suggestions.length;
+    address.value = suggestions[suggestAt].url;
+    markActive();
+  } else if (e.key === 'Tab' && open && address.selectionStart !== address.selectionEnd) {
+    // Accept the inline completion and keep editing.
+    e.preventDefault();
+    address.setSelectionRange(address.value.length, address.value.length);
+    typed = address.value;
+  } else if (e.key === 'Escape' && open) {
+    e.preventDefault();
+    e.stopPropagation();
+    address.value = typed;
+    closeSuggest();
+  } else if (e.key === 'Delete' && e.shiftKey && open && suggestions[suggestAt]?.kind === 'history') {
+    // Shift+Delete forgets the highlighted history entry, as in Chrome.
+    e.preventDefault();
+    const gone = suggestions[suggestAt].url;
+    api.action('removeHistory', gone);
+    lists.history = (lists.history || []).filter(h => h.url !== gone);
+    address.value = typed;
+    suppressInline = true;
+    updateSuggest();
+  }
+});
+
 address.addEventListener('focus', () => { editing = true; address.select(); });
-address.addEventListener('blur', () => { editing = false; });
-$('#go').addEventListener('submit', (e) => { e.preventDefault(); api.action('go', address.value); address.blur(); });
+address.addEventListener('blur', () => { editing = false; closeSuggest(); });
+$('#go').addEventListener('submit', (e) => {
+  e.preventDefault();
+  // Whatever is in the box -- the inline completion or the row picked with the arrows -- is where to go.
+  const value = address.value;
+  closeSuggest();
+  api.action('go', value);
+  address.blur();
+});
 
 const setMode = (extra) => {
   askExtra = extra;

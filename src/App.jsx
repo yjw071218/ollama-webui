@@ -1,4 +1,4 @@
-import { flushSync } from 'react-dom';
+import { flushSync, createPortal } from 'react-dom';
 import { resumableChatReader } from './chatStream.js';
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, useCallback, lazy, Suspense } from 'react';
 import { jankPhase } from './jankWatch.js';
@@ -200,6 +200,8 @@ import { deriveScope, ownerOfScope } from './profileScope.js';
 import { applyLiveSettings } from './liveSettings.js';
 import { NewbieGuide, guideSeen } from './NewbieGuide.jsx';
 import { stamped, conversationTime } from './sessionEdit.js';
+import { foldNewerFields } from '../server/chatMerge.js';
+import { observeChats } from './logicalClock.js';
 import { writeJournal, takeJournal, withJournal } from './unloadJournal.js';
 import { fileMarker, indexedMarker, pathMarker, webpageMarker, webpageAgainMarker, pageAlreadySent, extractAttachments, stripAttachments, splitForEdit, joinEdited } from './attachMarkers.js';
 import { forHistory, isToolResult, turnStart, wireText } from './wireHistory.js';
@@ -293,6 +295,7 @@ import {
 } from './session.jsx';
 import { confirmDialog, alertDialog, ConfirmDialogHost } from './ConfirmDialog.jsx';
 import { lazyPanel, preloadWhenIdle } from './lazyPanel.jsx';
+import { AppBoundary, SafeBoundary, safely, installGlobalCrashLog } from './crashGuard.jsx';
 import {
   findLegacyData, wasOffered, markOffered, importLegacyBucket, alreadyImported,
   purgeLegacyCredentials,
@@ -1589,7 +1592,6 @@ function App() {
      the model picker and a new-chat button. */
   const [browserDocked, setBrowserDocked] = useState(false);
   const browserDockedRef = useRef(false);
-  useEffect(() => { if (browserDocked && isSidebarOpen) setIsSidebarOpen(false); }, [browserDocked, isSidebarOpen]);
   /* Moving between places cross-fades through the View Transitions API where
    * the browser has it; elsewhere, and under reduced motion, it just switches.
    * flushSync makes React paint the new place inside the transition's
@@ -1598,13 +1600,11 @@ function App() {
     const reduced = document.documentElement.dataset.motion === 'reduced'
       || (document.documentElement.dataset.motion !== 'full'
         && window.matchMedia?.('(prefers-reduced-motion: reduce)').matches);
-    if (browserDockedRef.current && (typeof next === 'function' ? next(sidebarPlaceRef.current) : next) !== 'home') return;
     if (!document.startViewTransition || reduced || document.hidden) {
       setSidebarPlaceNow(next);
       return;
     }
     const target = typeof next === 'function' ? next(sidebarPlaceRef.current) : next;
-    if (browserDockedRef.current && target !== 'home') return;
     if (target === sidebarPlaceRef.current) return;
     try {
       document.startViewTransition(() => { flushSync(() => setSidebarPlaceNow(target)); });
@@ -2926,11 +2926,10 @@ function App() {
    * store: one receives a reply, the other is still showing what it read at
    * mount.
    */
+  /* Which chat a reply is streaming into, for the re-read below. Kept in a ref
+     because the re-read runs from timers and sync callbacks. */
+  const generatingIdRef = useRef(null);
   const refreshChatsFromStorage = async () => {
-    // A reply still streaming lives in state and is not in storage yet.
-    // Re-reading would throw away the half of it that has arrived.
-    if (isGeneratingRef.current) return false;
-    const beforeRead = sessionsRef.current;
     const readKey = storageKeyRef.current;
     let saved;
     try {
@@ -2938,38 +2937,52 @@ function App() {
     } catch (e) {
       return false;
     }
-    if (isGeneratingRef.current || sessionsRef.current !== beforeRead || storageKeyRef.current !== readKey) return false;
+    if (storageKeyRef.current !== readKey) return false;
     if (!saved || saved.length === 0) return false;
+    observeChats(saved);
 
-    /* Storage is the truth about conversations and knows nothing about
-       drafts, which live only here until something is said in them. So a
-       re-read has to carry them across rather than replace them away.
+    /* It used to stand down entirely while a reply streamed, so for the whole
+       of a long answer nothing another device did -- a pin, a rename, a new
+       chat, a deletion -- reached this screen until the answer ended (and on a
+       PC that is running an agent, that is most of the time). Now only the
+       chat being streamed into keeps its on-screen messages; every other chat
+       is taken from storage as usual, and even the streaming chat takes the
+       fields another device changed later (a pin, a title).
 
-       Without this, switching to another browser tab and back moved you
-       off the blank chat you were about to type in and onto whatever you
-       last had a conversation in -- because the id being looked for was
-       not in the list that came back, and the fallback picked the most
-       recent. The draft was not stale; it was never going to be there. */
-    const drafts = (sessionsRef.current || []).filter(isDraft);
-    const held = new Set(drafts.map(d => String(d.id)));
-    /* Storage can be behind the screen. An answer that has just finished is
-       written by the save timer a moment later, and a sync landing in that
-       moment (the end of a turn is exactly when one runs) re-read the older
-       stored copy over it: part of the answer vanished, and came back only if
-       a later write happened to carry it. A chat on screen with a newer stamp
-       than its stored copy is kept. */
-    const onScreen = new Map((sessionsRef.current || []).map(x => [String(x.id), x]));
-    const merged = saved.filter(x => !held.has(String(x.id))).map((x) => {
-      const mine = onScreen.get(String(x.id));
-      return mine && (mine.updatedAt || 0) > (x.updatedAt || 0) ? mine : x;
+       Merged inside the state update, against the list as it is at that
+       moment, rather than against a copy read before the await: the stream
+       changes the list several times a second, and a check-then-write would
+       either never run or overwrite tokens that arrived in between.
+
+       Storage knows nothing about drafts, which live only here until something
+       is said in them, so they are carried across rather than replaced away.
+       And storage can be behind the screen -- an answer that has just finished
+       is written by the save timer a moment later -- so a chat on screen with
+       a newer stamp keeps its copy, folding in only the fields storage
+       changed later (src/sessionEdit.js, server/chatMerge.js). */
+    const live = isGeneratingRef.current && generatingIdRef.current != null ? String(generatingIdRef.current) : null;
+    setSessions(prev => {
+      const drafts = (prev || []).filter(isDraft);
+      const held = new Set(drafts.map(d => String(d.id)));
+      const onScreen = new Map((prev || []).map(x => [String(x.id), x]));
+      const merged = saved.filter(x => !held.has(String(x.id))).map((x) => {
+        const id = String(x.id);
+        const mine = onScreen.get(id);
+        if (!mine) return x;
+        if (id === live || (mine.updatedAt || 0) > (x.updatedAt || 0)) return foldNewerFields(mine, x);
+        return foldNewerFields(x, mine);
+      });
+      // A reply streaming into a chat storage has not been given yet.
+      if (live && !held.has(live) && !saved.some(x => String(x.id) === live) && onScreen.has(live)) merged.unshift(onScreen.get(live));
+      return [...drafts, ...merged];
     });
-    setSessions([...drafts, ...merged]);
 
-    // Where you were is where you stay: a draft you are holding counts as
-    // much as a conversation storage can confirm.
-    setCurrentSessionId(id => (
-      held.has(String(id)) || saved.some(x => x.id === id) ? id : pickRestoredId(saved)
-    ));
+    // Where you were is where you stay: a draft you are holding, or the chat
+    // being answered, counts as much as a conversation storage can confirm.
+    setCurrentSessionId(id => {
+      const draftIds = new Set((sessionsRef.current || []).filter(isDraft).map(d => String(d.id)));
+      return draftIds.has(String(id)) || String(id) === live || saved.some(x => x.id === id) ? id : pickRestoredId(saved);
+    });
     return true;
   };
 
@@ -3112,6 +3125,7 @@ function App() {
    * chat is concerned, nothing is.
    */
   const [generatingSessionId, setGeneratingSessionId] = useState(null);
+  generatingIdRef.current = generatingSessionId;
   const generationStorageKey = `chatGeneration:${profileScope || 'guest'}`;
 
   const rememberGeneration = (sessionId, startedAt, jobId, messageIndex = null, prefix = '', model = '') => {
@@ -4930,7 +4944,7 @@ function App() {
     let tries = 0;
     const place = () => {
       frame = 0;
-      const bar = document.querySelector('.message-row.actions-open .msg-hover-actions');
+      const bar = document.querySelector('.msg-actions-portal .msg-hover-actions');
       if (!bar) return;
       /* Measured still: the entry animation's own transform skewed the first
          look, and correcting it a moment later made the capsule jump. It is
@@ -5414,6 +5428,7 @@ function App() {
     list = persistable(list).map(withoutPictureBytes).map(dedupeSession);
     let stored = [];
     try { stored = (await localforage.getItem(key)) || []; } catch (e) { stored = []; }
+    observeChats(stored);
 
     const merged = new Map();
     for (const chat of stored) {
@@ -5423,8 +5438,13 @@ function App() {
     for (const chat of list) {
       if (chat?.id == null || removed.has(String(chat.id))) continue;
       const held = merged.get(String(chat.id));
-      // Same chat on both sides: the later edit is the one to keep.
-      if (!held || (chat.updatedAt || 0) >= (held.updatedAt || 0)) merged.set(String(chat.id), chat);
+      /* Same chat on both sides: the later edit is the one to keep -- but a
+         field the other copy changed later (a pin that arrived from another
+         device, or one made here just before a pull) is kept from it, so
+         neither side's edit is lost with the copy that lost on time. */
+      if (!held) merged.set(String(chat.id), chat);
+      else if ((chat.updatedAt || 0) >= (held.updatedAt || 0)) merged.set(String(chat.id), foldNewerFields(chat, held));
+      else merged.set(String(chat.id), foldNewerFields(held, chat));
     }
 
     const next = [...merged.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
@@ -9203,7 +9223,29 @@ function App() {
       next.set(i, c);
       return c.out;
     }
-    const out = build();
+    /* A row that cannot be built or drawn stands alone: it shows a one-line
+       notice and the rest of the conversation is untouched (src/crashGuard.jsx).
+       `resetKey` retries by itself when the message changes -- the next sync
+       or the next token may well have fixed it. */
+    const failed = (error) => (
+      <div className="message-row safe-boundary-row" data-message-index={i}>
+        <div className="safe-boundary" role="alert"><span>{t('msg.renderFailed')}</span></div>
+      </div>
+    );
+    const built = safely(`row:${i}`, build, failed);
+    const out = (
+      <SafeBoundary key={i} name={`row:${i}`} resetKey={deps[deps.length - 1]}
+        fallback={(error, retry) => (
+          <div className="message-row safe-boundary-row" data-message-index={i}>
+            <div className="safe-boundary" role="alert">
+              <span>{t('msg.renderFailed')}</span>
+              <button type="button" onClick={retry}>{t('msg.renderRetry')}</button>
+            </div>
+          </div>
+        )}>
+        {built}
+      </SafeBoundary>
+    );
     next.set(i, { deps, out, sid: currentSessionId, hs: historyStart, starred: starredOnly });
     return out;
   };
@@ -9888,6 +9930,7 @@ function App() {
   const sidebarBeforeDockRef = useRef(null);
   nativeActions.current = {
     newChat: () => { createNewSession(); setTimeout(() => textareaRef.current?.focus(), 60); },
+    voice: () => { createNewSession(); setTimeout(() => { try { startListening(); } catch { textareaRef.current?.focus(); } }, 400); },
     browserModel: (model) => { if (models.some(m => m.name === model)) { setSelectedModel(model); noteHandPick(model); } },
     /* A question asked from the in-app browser (native/desktop/browser.mjs),
        with the page it was asked about. Sent straight away unless an answer
@@ -9908,8 +9951,22 @@ function App() {
         setTimeout(() => setIsSidebarOpen(was && !window.matchMedia?.(NARROW_QUERY).matches), 200);
       }
     },
-    ask: ({ text = '', page = null }) => {
+    ask: ({ text = '', page = null, chat = '' }) => {
       if (!text) return;
+      /* A reply from a notification: go to that chat first, and ask there once
+         it is the open one (an app opened cold has no chats loaded yet). */
+      if (chat && String(currentSessionIdRef.current) !== String(chat)) {
+        window.__ollamaOpenChat = chat;
+        window.dispatchEvent(new CustomEvent('ollama-native-open-chat', { detail: { chat } }));
+        const startedAt = Date.now();
+        const wait = () => {
+          if (String(currentSessionIdRef.current) === String(chat)) nativeActions.current.ask({ text, page });
+          else if (Date.now() - startedAt < 8000) setTimeout(wait, 150);
+          else nativeActions.current.ask({ text, page });
+        };
+        setTimeout(wait, 150);
+        return;
+      }
       /* The page rides as an attachment: its whole text goes into the message
          as a marker the transcript draws as one chip, and its pictures go to
          the model without being drawn (hiddenImages). */
@@ -9935,6 +9992,7 @@ function App() {
   };
   useEffect(() => listenNative({
     newChat: () => nativeActions.current.newChat(),
+    voice: () => nativeActions.current.voice(),
     share: (payload) => nativeActions.current.share(payload),
     ask: (payload) => nativeActions.current.ask(payload),
     browserDock: (docked) => nativeActions.current.browserDock(docked),
@@ -9950,7 +10008,12 @@ function App() {
   }, [models, selectedModel]);
   // The apps keep the screen on (Android) or show progress on the taskbar
   // (Windows) while an answer is being written.
-  useEffect(() => { tellNativeBusy(isGenerating); }, [isGenerating]);
+  useEffect(() => {
+    const chatId = generatingSessionId ?? lastTurnChatRef.current ?? currentSessionId;
+    const chat = sessionsRef.current.find(session => String(session.id) === String(chatId));
+    tellNativeBusy(isGenerating, { chat: chatId ?? '', title: chat?.title || '' });
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isGenerating]);
 
   const handleDrop = async (e, target = 'composer') => {
     e.preventDefault();
@@ -15609,16 +15672,6 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         )}
         {/* Top Navigation */}
         <div className={`main-header${browserDocked ? ' is-browser-docked' : ''}`} ref={measureHeader}>
-          {browserDocked ? (
-            <button
-              className="icon-btn bordered browser-dock-new"
-              title={t('sidebar.newChat')}
-              aria-label={t('sidebar.newChat')}
-              onClick={() => { createNewSession(); setTimeout(() => textareaRef.current?.focus(), 60); haptic('light'); }}
-            >
-              <Plus size={16} />
-            </button>
-          ) : (
           <button
             className="toggle-sidebar"
             aria-label={isSidebarOpen ? t('sidebar.close') : t('sidebar.open')}
@@ -15627,7 +15680,6 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           >
             <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><line x1="3" y1="12" x2="21" y2="12"></line><line x1="3" y1="6" x2="21" y2="6"></line><line x1="3" y1="18" x2="21" y2="18"></line></svg>
           </button>
-          )}
 
           <div className="header-tools">
             {showSystemStrip && <SystemStrip onOpen={() => setShowSystemMonitor(true)} inHeader />}
@@ -17507,7 +17559,13 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   )}
 
                   {/* Hover Actions */}
-                  {editingMessageIndex !== i && (
+                  {/* The open capsule is portalled to <body>: inside the row an
+                      ancestor's transform/contain made `fixed` relative to it,
+                      so it was drawn in one place (moved by `translate`) and
+                      hit-tested in another. At the body, fixed is the screen. */}
+                  {editingMessageIndex !== i && ((node) => (openActionsIndex === i && typeof document !== 'undefined'
+                    ? createPortal(<div className={`msg-actions-portal ${isTapUi ? 'is-tap' : 'is-click'}`}>{node}</div>, document.body)
+                    : node))(
                     <div className="msg-hover-actions">
                       {msg.role === 'user' ? (
                         <>
@@ -21495,15 +21553,17 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
   );
 }
 
+installGlobalCrashLog();
+
 export default function AppWithErrorBoundary() {
   return (
-    <ErrorBoundary>
+    <AppBoundary>
       <I18nProvider>
         <App />
         {/* Outside <App/> so a question asked from the sign-in screen, or
             while App is between renders, still has somewhere to appear. */}
         <ConfirmDialogHost />
       </I18nProvider>
-    </ErrorBoundary>
+    </AppBoundary>
   );
 }

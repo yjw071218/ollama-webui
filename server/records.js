@@ -25,7 +25,7 @@
 
 import { database, transaction } from './db.js';
 import { packPayload, unpackPayload } from './recordHistory.js';
-import { mergeChats } from './chatMerge.js';
+import { mergeChats, foldNewerFields } from './chatMerge.js';
 
 /** The kinds a client may sync. Anything else is refused rather than stored. */
 export const KINDS = new Set([
@@ -283,6 +283,22 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
         // late — a phone that was offline, a tab that was asleep — must not
         // overwrite a newer one; it is simply not applied, and the newer record
         // travels back to that device in the same response.
+        /* Older as a whole, but it may carry a field changed after the account's
+           copy -- a pin made on a device whose upload was overtaken. That field
+           is folded into the account's copy instead of being thrown away with
+           the rest (server/chatMerge.js `foldNewerFields`). */
+        if (record.kind === 'chat' && !record.deleted && current && !current.deleted && current.updated_at > record.updatedAt) {
+          try {
+            const held = JSON.parse(current.payload);
+            const folded = foldNewerFields(held, JSON.parse(record.payload));
+            if (folded !== held) {
+              const updatedAt = current.updated_at + 1;
+              record = { ...record, updatedAt, payload: JSON.stringify({ ...folded, updatedAt }) };
+              lost.push(record);
+            }
+          } catch { /* unreadable: the plain rule below */ }
+        }
+
         if (current && current.updated_at > record.updatedAt) { rejected++; lost.push(record); continue; }
 
         // A tie is resolved in favour of the deletion. The alternative is a

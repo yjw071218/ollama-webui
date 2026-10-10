@@ -1,3 +1,4 @@
+import { nextStamp, observeStamp } from './logicalClock.js';
 // Settings that belong to an account.
 //
 // Two things used to be wrong here and they compounded.
@@ -153,8 +154,13 @@ const writeStamps = (scope, stamps) => {
  * otherwise every download would look like the newest edit and win every
  * subsequent conflict.
  */
-export const stampSetting = (scope, key, at = Date.now()) => {
+export const stampSetting = (scope, key, at) => {
   const stamps = settingStamps(scope);
+  /* A local edit is stamped by the logical clock (src/logicalClock.js), never
+     below the stamp it replaces; a stamp that travelled from another device
+     is kept as it is and remembered by the clock. */
+  if (at === undefined) at = nextStamp(stamps[key] || 0);
+  else observeStamp(at);
   stamps[key] = at;
   writeStamps(scope, stamps);
 };

@@ -125,6 +125,65 @@ export const uniqueMessages = (list) => {
   return out;
 };
 
+/* ------------------------------------------------------- the other fields
+ *
+ * Everything that is not the message list -- pinned, title, folder, model,
+ * archived, persona... -- used to come from whichever device uploaded, whole.
+ * So a pin made on the PC was undone by a phone that, not yet in step, merely
+ * streamed a reply into the same chat: the phone's copy said `pinned: false`
+ * and its fields won. A lost update, field by field.
+ *
+ * Now each field is its own last-writer-wins register. A device stamps the
+ * fields an edit changed (`_fieldAt`, src/sessionEdit.js); of two copies the
+ * field with the later stamp stands, whoever uploaded. Fields without stamps
+ * (older clients) fall back to the three-way rule: the side that changed it
+ * since the common copy wins; with no common copy, the uploading device's. */
+const META = new Set(['messages', 'updatedAt', '_fieldAt']);
+const sameValue = (a, b) => a === b || JSON.stringify(a) === JSON.stringify(b);
+export const fieldStampsOf = (chat) => (chat && chat._fieldAt && typeof chat._fieldAt === 'object' ? chat._fieldAt : {});
+
+/** The non-message fields of two copies, merged field by field. */
+export const mergeFields = (server, mine, base = null) => {
+  const fs = fieldStampsOf(server), fm = fieldStampsOf(mine);
+  const out = {};
+  const stamps = { ...fs };
+  for (const [key, at] of Object.entries(fm)) stamps[key] = Math.max(Number(stamps[key]) || 0, Number(at) || 0);
+  const keys = new Set([...Object.keys(server || {}), ...Object.keys(mine || {})]);
+  for (const key of keys) {
+    if (META.has(key)) continue;
+    const ts = Number(fs[key]) || 0, tm = Number(fm[key]) || 0;
+    let useMine;
+    if (ts || tm) useMine = tm > ts || (tm === ts && (!base || !sameValue(mine?.[key], base?.[key])));
+    else if (base) useMine = !sameValue(mine?.[key], base?.[key]) || sameValue(server?.[key], base?.[key]);
+    else useMine = true;
+    const from = useMine ? mine : server;
+    if (from && key in from) out[key] = from[key];
+  }
+  // Sorted, so the same merge in either order is the same bytes (convergence).
+  if (Object.keys(stamps).length) out._fieldAt = Object.fromEntries(Object.entries(stamps).sort(([x], [y]) => (x < y ? -1 : x > y ? 1 : 0)));
+  return out;
+};
+
+/**
+ * `winner` stands, except for fields `loser` changed later (by their own
+ * stamps). Used where one whole copy wins on time -- a stale upload, a pull
+ * landing on a device with an unsent edit -- so that the edit inside the
+ * losing copy is not lost with it.
+ */
+export const foldNewerFields = (winner, loser) => {
+  if (!winner || !loser) return winner;
+  const fw = fieldStampsOf(winner), fl = fieldStampsOf(loser);
+  let out = null;
+  for (const [key, at] of Object.entries(fl)) {
+    if (META.has(key)) continue;
+    if ((Number(at) || 0) <= (Number(fw[key]) || 0)) continue;
+    out ??= { ...winner, _fieldAt: { ...fw } };
+    if (key in loser) out[key] = loser[key]; else delete out[key];
+    out._fieldAt[key] = Number(at);
+  }
+  return out || winner;
+};
+
 /**
  * `server` and `mine` are chat payloads; `base` is the copy `mine` was edited
  * from, when the server still has it. Returns the merged chat, or null when
@@ -160,15 +219,16 @@ export const mergeChats = (server, mine, base = null) => {
   // Nothing of mine beyond what the server has: only my other fields could be news.
   if (!myTail.length) {
     const messages = uniqueMessages([...prefix, ...serverTail]);
-    const { messages: _ignored, updatedAt: _a, ...myFields } = mine;
+    const fields = mergeFields(server, mine, base);
     const { messages: _ignored2, updatedAt: _b, ...serverFields } = server;
-    const sameFields = JSON.stringify(myFields) === JSON.stringify(serverFields);
+    const keys = new Set([...Object.keys(fields), ...Object.keys(serverFields)]);
+    const sameFields = [...keys].every(key => sameValue(fields[key], serverFields[key]));
     const sameMessages = JSON.stringify(messages) === JSON.stringify(server.messages || []);
     if (sameFields && sameMessages) return null;
-    return { ...server, ...mine, messages };
+    return { ...fields, messages };
   }
   const messages = uniqueMessages(serverTail.length
     ? [...prefix, ...interleave(serverTail, myTail)]
     : [...prefix, ...myTail]);
-  return { ...server, ...mine, messages };
+  return { ...mergeFields(server, mine, base), messages };
 };

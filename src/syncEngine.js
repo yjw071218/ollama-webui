@@ -23,6 +23,8 @@ import { jankPhase } from './jankWatch.js';
 // get a shadow table of their own (see settingsStore.js) rather than being
 // compared by value.
 
+import { foldNewerFields } from '../server/chatMerge.js';
+import { observeStamp, nextStamp } from './logicalClock.js';
 import localforage from 'localforage';
 import { api, ApiError, currentTabSession } from './session.jsx';
 import { ownerOfScope } from './profileScope.js';
@@ -397,7 +399,24 @@ export const applyLocal = async (scope, records) => {
       }
       // A malformed server response must not erase a valid local record.
       if (record.payload === null || record.payload === undefined) continue;
+      observeStamp(record.updatedAt);
       const current = map.get(record.id);
+      /* Chats are maps of per-field registers (src/sessionEdit.js): whichever
+         copy wins on time, a field the other changed later is kept. Without
+         this a pin made here a moment before a pull was overwritten by the
+         pulled copy and never uploaded -- a lost update on this side. A copy
+         that took a field from here is re-stamped, so it goes up next sync. */
+      if (kind === 'chat' && current && record.payload && typeof record.payload === 'object') {
+        if ((current[stamp] || 0) > record.updatedAt) {
+          const kept = foldNewerFields(current, record.payload);
+          if (kept !== current) { map.set(record.id, { ...kept, [stamp]: nextStamp(current[stamp]) }); applied[counter]++; }
+          continue;
+        }
+        const taken = foldNewerFields(record.payload, current);
+        map.set(record.id, taken === record.payload ? taken : { ...taken, [stamp]: nextStamp(record.updatedAt) });
+        applied[counter]++;
+        continue;
+      }
       // The record only wins if it is genuinely newer. An older copy arriving
       // late — another device catching up — must not undo a local edit.
       if (current && (current[stamp] || 0) > record.updatedAt) continue;

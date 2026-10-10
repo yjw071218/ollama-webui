@@ -1,3 +1,4 @@
+import { SafeBoundary } from './crashGuard.jsx';
 import React, { Suspense } from 'react';
 
 /**
@@ -38,12 +39,34 @@ const loadChunk = async (load) => {
 export const lazyPanel = (load, name = 'default') => {
   let pending = null;
   const preload = () => (pending ||= loadChunk(load).catch(e => { pending = null; throw e; }));
-  const Inner = React.lazy(() => preload().then(m => ({ default: m[name] })));
-  const Panel = (props) => (
-    <Suspense fallback={<div className="lazy-panel-loading" aria-busy="true" />}>
-      <Inner {...props} />
-    </Suspense>
-  );
+  /* React.lazy remembers a failed load for good, so "try again" needs a new
+     lazy component; `attempt` makes one. And a failure stays inside the panel
+     (SafeBoundary): a chunk that could not be fetched -- the server was just
+     updated and the old file is gone -- used to take the whole app down to
+     "React Crashed!". */
+  const make = () => React.lazy(() => preload().then(m => ({ default: m[name] })));
+  let Inner = make();
+  const Panel = (props) => {
+    const [attempt, setAttempt] = React.useState(0);
+    return (
+      <SafeBoundary name={`panel:${name}`} resetKey={attempt}
+        fallback={(error, retry) => (
+          <div className="safe-boundary" role="alert">
+            <span>{/^ko/i.test(navigator.language || '') ? '이 화면을 불러오지 못했습니다.' : 'This panel could not be loaded.'}</span>
+            <button type="button" onClick={() => { pending = null; Inner = make(); setAttempt(n => n + 1); retry(); }}>
+              {/^ko/i.test(navigator.language || '') ? '다시 시도' : 'Try again'}
+            </button>
+            <button type="button" onClick={() => window.location.reload()}>
+              {/^ko/i.test(navigator.language || '') ? '새로고침' : 'Reload'}
+            </button>
+          </div>
+        )}>
+        <Suspense fallback={<div className="lazy-panel-loading" aria-busy="true" />}>
+          <Inner {...props} />
+        </Suspense>
+      </SafeBoundary>
+    );
+  };
   Panel.displayName = `Lazy(${name === 'default' ? 'Panel' : name})`;
   Panel.preload = preload;
   return Panel;

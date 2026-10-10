@@ -3,4 +3,7 @@
     <string name="shortcut_new_chat">New chat</string>
     <string name="shortcut_new_chat_long">Start a new chat</string>
     <string name="share_label">Ollama WebUI</string>
+    <string name="process_text_label">Ask Ollama WebUI</string>
+    <string name="widget_description">Ask a question, by voice or in a new chat</string>
+    <string name="tile_label">Ask AI</string>
 </resources>

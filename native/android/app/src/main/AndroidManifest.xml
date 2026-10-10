@@ -30,9 +30,25 @@
                 <category android:name="android.intent.category.DEFAULT"/>
                 <data android:mimeType="*/*"/>
             </intent-filter>
+            <!-- Selected text in any app: "AI에게 묻기" in the selection menu. -->
+            <intent-filter android:label="@string/process_text_label">
+                <action android:name="android.intent.action.PROCESS_TEXT"/>
+                <category android:name="android.intent.category.DEFAULT"/>
+                <data android:mimeType="text/plain"/>
+            </intent-filter>
             <!-- Press and hold the launcher icon: a new chat. -->
             <meta-data android:name="android.app.shortcuts" android:resource="@xml/shortcuts"/>
         </activity>
+        <!-- Home-screen widget: new chat, voice question, last chat. -->
+        <receiver android:name=".ChatWidget" android:exported="false" android:label="Ollama WebUI">
+            <intent-filter><action android:name="android.appwidget.action.APPWIDGET_UPDATE"/></intent-filter>
+            <meta-data android:name="android.appwidget.provider" android:resource="@xml/widget_chat"/>
+        </receiver>
+        <!-- Quick-settings tile: a voice question from the notification shade. -->
+        <service android:name=".ChatTile" android:exported="true" android:label="@string/tile_label"
+            android:icon="@drawable/ic_widget_mic" android:permission="android.permission.BIND_QUICK_SETTINGS_TILE">
+            <intent-filter><action android:name="android.service.quicksettings.action.QS_TILE"/></intent-filter>
+        </service>
         <service android:name=".CaptureService" android:exported="false" android:foregroundServiceType="mediaProjection"/>
         <provider android:name="androidx.core.content.FileProvider" android:authorities="${applicationId}.files" android:exported="false" android:grantUriPermissions="true">
             <meta-data android:name="android.support.FILE_PROVIDER_PATHS" android:resource="@xml/share_paths"/>

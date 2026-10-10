@@ -1,0 +1,14 @@
+<!doctype html><html lang="ko"><meta charset="utf-8"><meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'self'; style-src 'self'; img-src 'self'"><title>Ollama WebUI</title><link rel="stylesheet" href="quickask.css">
+<main>
+  <header><img src="icons/app.png" alt=""><strong data-en="Ask about the selection">선택한 내용에 대해 묻기</strong><span class="space"></span><kbd>Esc</kbd></header>
+  <blockquote id="excerpt" hidden></blockquote>
+  <p id="empty" hidden data-en="No text was selected. Type a question.">선택된 텍스트가 없습니다. 질문을 입력해 주세요.</p>
+  <nav id="actions">
+    <button data-kind="summarize"><span>📝</span><b data-en="Summarise">요약</b></button>
+    <button data-kind="translate"><span>🌐</span><b data-en="Translate">번역</b></button>
+    <button data-kind="explain"><span>💡</span><b data-en="Explain">설명</b></button>
+    <button data-kind="fix"><span>✏️</span><b data-en="Proofread">다듬기</b></button>
+  </nav>
+  <form id="ask"><input id="question" autocomplete="off" spellcheck="false" placeholder="직접 질문하기… (Enter)" data-en-placeholder="Ask your own question… (Enter)"><button type="submit" aria-label="보내기">↑</button></form>
+</main>
+<script src="quickask-ui.mjs" type="module"></script></html>

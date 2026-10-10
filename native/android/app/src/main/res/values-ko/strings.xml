@@ -3,4 +3,7 @@
     <string name="shortcut_new_chat">새 대화</string>
     <string name="shortcut_new_chat_long">새 대화 시작</string>
     <string name="share_label">Ollama WebUI</string>
+    <string name="process_text_label">AI에게 묻기</string>
+    <string name="widget_description">음성이나 새 대화로 바로 질문하기</string>
+    <string name="tile_label">AI에게 묻기</string>
 </resources>

@@ -1,4 +1,5 @@
-import { app, BrowserWindow, Menu, Tray, nativeImage, globalShortcut, ipcMain, session, shell, desktopCapturer, screen, clipboard } from 'electron';
+import { app, BrowserWindow, Menu, Tray, nativeImage, globalShortcut, ipcMain, session, shell, desktopCapturer, screen, clipboard, crashReporter } from 'electron';
+import { appendFileSync, statSync, renameSync } from 'node:fs';
 import { menuItems } from './contextMenu.mjs';
 import { readFile, writeFile } from 'node:fs/promises';
 import { fileURLToPath, pathToFileURL } from 'node:url';
@@ -21,6 +22,7 @@ import { createRunner } from './runner.mjs';
 import { localPath } from './localPath.mjs';
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { createExtras, attachArgs, SELECTION_KEY } from './nativeExtras.mjs';
 const codeCli = () => {
   const local = process.env.LOCALAPPDATA, pf = process.env.ProgramFiles;
   return [local && path.join(local, 'Programs', 'Microsoft VS Code', 'bin', 'code.cmd'), pf && path.join(pf, 'Microsoft VS Code', 'bin', 'code.cmd')].find(f => f && existsSync(f)) || null;
@@ -37,6 +39,26 @@ const openWithCode = (file) => new Promise((resolve) => {
 const showError = (title, message) => appDialog(clientWindow && !clientWindow.isDestroyed() ? clientWindow : setupWindow, { title, message });
 
 const directory = path.dirname(fileURLToPath(import.meta.url));
+
+/* ---------------------------------------------------------- when it fails
+   The app closed itself twice in a week with nothing to say why: a hang
+   (Windows ended it) and a fail-fast exit (0xc0000409) with no dump, because
+   none was being kept. Now a crash leaves a minidump in userData/Crashpad (kept
+   here, never uploaded) and a line in userData/crash.log, and an error thrown
+   in the main process is written down instead of taking every window with it. */
+try { crashReporter.start({ uploadToServer: false, compress: true }); } catch { /* */ }
+const crashLog = (what, detail = '') => {
+  try {
+    const file = path.join(app.getPath('userData'), 'crash.log');
+    try { if (statSync(file).size > 1024 * 1024) renameSync(file, file + '.old'); } catch { /* none yet */ }
+    appendFileSync(file, `${new Date().toISOString()} ${what} ${typeof detail === 'string' ? detail : JSON.stringify(detail)}
+`);
+  } catch { /* nowhere to write */ }
+};
+process.on('uncaughtException', (error) => { crashLog('main:uncaughtException', String(error?.stack || error)); });
+process.on('unhandledRejection', (reason) => { crashLog('main:unhandledRejection', String(reason?.stack || reason)); });
+app.on('child-process-gone', (_event, details) => { if (details.reason !== 'clean-exit') crashLog('child-process-gone', details); });
+app.on('render-process-gone', (_event, contents, details) => { if (details.reason !== 'clean-exit') crashLog('render-process-gone', { url: contents?.getURL?.(), ...details }); });
 const setupURL = pathToFileURL(path.join(directory, 'setup.html')).href;
 const smoke = process.argv.includes('--native-smoke');
 const smokeProfile = process.argv.find(value => value.startsWith('--smoke-profile='));
@@ -90,6 +112,9 @@ async function external(url, owner) {
 }
 let updater = null;
 let runner = null;
+/** Selection questions, clipboard offers, done notifications, Explorer menu (nativeExtras.mjs). */
+let extras = null;
+let lastBusyInfo = {};
 const UPDATE_EVERY = 6 * 60 * 60 * 1000;
 /** In-app update: check, download with progress, verify and install (updater.mjs). */
 function notifyUpdate(manual = false) {
@@ -140,8 +165,9 @@ function validClient(event) {
 
 /* --------------------------------------------------- the taskbar while busy */
 let busy = false;
-function setBusy(value) {
+function setBusy(value, info = {}) {
   const win = liveClient();
+  if (value && info && (info.chat || info.title)) lastBusyInfo = info;
   if (!win || value === busy) return;
   busy = value;
   // Indeterminate progress on the taskbar button while an answer is written.
@@ -149,6 +175,12 @@ function setBusy(value) {
   tray?.setToolTip(busy ? tr('Ollama WebUI · 답변 작성 중…', 'Ollama WebUI · writing an answer…') : 'Ollama WebUI');
   // It ended while the reader was elsewhere: the button flashes until they come back.
   if (!busy && (!win.isFocused() || !win.isVisible())) win.flashFrame(true);
+  if (!busy) { extras?.finished({ ...lastBusyInfo, ...(info && (info.chat || info.title) ? info : {}) }); lastBusyInfo = {}; }
+}
+
+function setBusyFrom(value) {
+  const info = value && typeof value === 'object' ? value : { busy: !!value };
+  setBusy(!!info.busy, { chat: String(info.chat || '').slice(0, 200), title: String(info.title || '').slice(0, 200) });
 }
 
 /* ------------------------------------------------------------- page zoom */
@@ -321,6 +353,9 @@ async function connect(value) {
     watchConnection(win, server);
     setupWindow?.close();
     if (wantNewChat) { wantNewChat = false; setTimeout(newChat, 1500); }
+    extras?.watchFocus(win);
+    win.clientContents.on('did-finish-load', () => setTimeout(() => extras?.flush(), 800));
+    setTimeout(() => extras?.flush(), 2000);
     if (smoke) {
       const result = await win.clientContents.executeJavaScript('({secure:isSecureContext,media:!!navigator.mediaDevices?.getUserMedia,clipboard:!!navigator.clipboard,node:typeof process,native:window.ollamaNative?.platform||""})');
       console.log('NATIVE_SMOKE ' + JSON.stringify(result));
@@ -354,6 +389,16 @@ function watchConnection(win, server) {
   /* The page's process ended (out of memory, a GPU fault): the window used to
      stay blank until F5. Reloaded on its own -- unless it keeps happening,
      when the reader is asked rather than caught in a loop. */
+  /* The page stopped answering (a runaway render, a huge chat): Windows
+     would otherwise offer to end the whole app. Given fifteen seconds to come
+     back, then reloaded -- the chats are in storage and on the account. */
+  let hangTimer = null;
+  win.clientContents.on('unresponsive', () => {
+    crashLog('page:unresponsive', win.clientContents.getURL());
+    clearTimeout(hangTimer);
+    hangTimer = setTimeout(() => { if (!win.isDestroyed() && !win.clientContents.isDestroyed()) { crashLog('page:reloaded-after-hang'); win.clientContents.forcefullyCrashRenderer(); win.clientContents.reload(); } }, 15000);
+  });
+  win.clientContents.on('responsive', () => { clearTimeout(hangTimer); hangTimer = null; });
   let crashes = [];
   win.clientContents.on('render-process-gone', async (_event, details) => {
     if (win.isDestroyed() || details.reason === 'clean-exit') return;
@@ -392,16 +437,22 @@ function createTray() {
   const icon = nativeImage.createFromPath(path.join(directory, 'icons/app.png')).resize({ width: 16, height: 16 });
   tray = new Tray(icon);
   tray.setToolTip('Ollama WebUI');
+  createTrayMenu();
+  tray.on('click', reveal);
+}
+function createTrayMenu() {
+  if (!tray) return;
   tray.setContextMenu(Menu.buildFromTemplate([
     { label: tr('열기', 'Open'), click: reveal },
     { label: tr('새 대화', 'New chat'), click: newChat },
+    { label: tr('선택한 글에 대해 묻기 (Ctrl+Shift+Q)', 'Ask about the selection (Ctrl+Shift+Q)'), click: () => extras?.askAboutSelection() },
+    { label: tr('클립보드 감지', 'Watch the clipboard'), type: 'checkbox', checked: !!settings.clipboardWatch, click: item => { settings.clipboardWatch = item.checked; save(); extras?.applyClipboardWatch(); buildMenu(); } },
     { type: 'separator' },
     { label: tr('서버 주소 변경', 'Change server'), click: openSetup },
     { label: tr('업데이트 확인', 'Check for updates'), click: () => notifyUpdate(true) },
     { type: 'separator' },
     { label: tr('종료', 'Quit'), click: () => { quitting = true; app.quit(); } },
   ]));
-  tray.on('click', reveal);
 }
 const GLOBAL_KEY = 'CommandOrControl+Shift+Space';
 /** Ctrl+Shift+Space from anywhere: the app comes forward, or goes back if it already is. */
@@ -439,6 +490,13 @@ function buildMenu() {
         if (item.checked && !applyGlobalShortcut()) showError(tr('단축키', 'Shortcut'), tr('다른 프로그램이 Ctrl+Shift+Space를 쓰고 있어 등록하지 못했습니다.', 'Another program is using Ctrl+Shift+Space.'));
         if (!item.checked) applyGlobalShortcut();
       } },
+      { label: tr('Ctrl+Shift+Q로 선택한 글에 대해 묻기', 'Ctrl+Shift+Q asks about the selected text'), type: 'checkbox', checked: settings.selectionShortcut !== false, click: item => {
+        settings.selectionShortcut = item.checked; save();
+        if (!extras?.applySelectionKey() && item.checked) showError(tr('단축키', 'Shortcut'), tr('다른 프로그램이 Ctrl+Shift+Q를 쓰고 있어 등록하지 못했습니다.', 'Another program is using Ctrl+Shift+Q.'));
+      } },
+      { label: tr('클립보드 감지 (이미지·긴 글 복사 시 첨부 제안)', 'Watch the clipboard (offer copied pictures and long text)'), type: 'checkbox', checked: !!settings.clipboardWatch, click: item => { settings.clipboardWatch = item.checked; save(); extras?.applyClipboardWatch(); buildMenu(); createTrayMenu(); } },
+      { label: tr('창이 뒤에 있을 때 답변 완료 알림', 'Notify when an answer finishes in the background'), type: 'checkbox', checked: settings.doneNotify !== false, click: item => { settings.doneNotify = item.checked; save(); } },
+      { label: tr('탐색기 우클릭·보내기 메뉴에 추가', 'Add to Explorer right-click and Send To'), type: 'checkbox', checked: settings.explorerMenu !== false, click: item => { settings.explorerMenu = item.checked; save(); void extras?.applyExplorer(); } },
       { type: 'separator' },
       { label: tr('종료', 'Quit'), click: () => { quitting = true; app.quit(); } },
     ] },
@@ -464,7 +522,8 @@ else {
      minimized or hidden, rather than seeming to do nothing. From the jump
      list it also opens a new chat. */
   app.on('second-instance', (_event, argv) => {
-    if (argv.includes('--new-chat')) newChat(); else reveal();
+    if (argv.includes('--new-chat')) newChat();
+    else if (!extras?.takeAttach(attachArgs(argv))) reveal();
   });
   app.whenReady().then(async () => {
     setLanguage(app.getLocale());
@@ -526,10 +585,13 @@ else {
         return one ? [one] : [];
       } catch { return []; }
     });
+    // Errors the page caught (its error boundary, window.onerror), kept beside the crashes.
+    ipcMain.on('client:error', (event, value) => { if (validClient(event)) crashLog('page:error', String(value || '').slice(0, 4000)); });
     ipcMain.handle('client:changeServer', event => { if (!validClient(event)) throw new Error('Forbidden'); openSetup(); return true; });
     ipcMain.handle('client:checkUpdates', event => { if (!validClient(event)) throw new Error('Forbidden'); notifyUpdate(true); return true; });
     ipcMain.handle('client:openBrowser', (event, url) => { if (!validClient(event)) throw new Error('Forbidden'); showInAppBrowser({ parent: liveClient(), background: settings.pageBackground, url: /^https?:\/\//i.test(String(url || '')) ? String(url) : '' }); return true; });
-    ipcMain.on('client:busy', (event, value) => { if (validClient(event)) setBusy(!!value); });
+    // `value` is { busy, chat, title } from client-preload.cjs, or a bare boolean from an older page.
+    ipcMain.on('client:busy', (event, value) => { if (validClient(event)) setBusyFrom(value); });
     ipcMain.on('client:browserModels', (event, value) => { const win = liveClient(); if (win && validClient(event)) setBrowserModels(win, value); });
     // Running a project on this PC (runner.mjs), for the page's Run workspace.
     const folderKey = dir => path.resolve(dir).toLowerCase();
@@ -541,9 +603,14 @@ else {
       allow: dir => { settings.runFolders = [...new Set([...(settings.runFolders || []), folderKey(dir)])]; save(); },
       openBrowser: url => openInAppBrowser(url, { parent: liveClient(), background: settings.pageBackground }),
     });
+    extras = createExtras({ liveClient, reveal, getSettings: () => settings, save, directory, smoke });
     buildMenu();
     createTray();
     applyGlobalShortcut();
+    extras.applySelectionKey();
+    extras.applyClipboardWatch();
+    void extras.applyExplorer();
+    extras.takeAttach(attachArgs(process.argv));
     setJumpList();
     if (settings.server && !smoke) {
       try { await connect(settings.server); }

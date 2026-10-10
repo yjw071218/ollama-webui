@@ -69,10 +69,12 @@ check('the Windows app calls back', fromDesk.length === 1);
 stopDesk();
 check('... and is told to stop', offCalled);
 
-let busy = null;
-tellNativeBusy(1, { ollamaNative: { busy: (b) => { busy = b; } } });
+let busy = null, busyInfo = null;
+tellNativeBusy(1, null, { ollamaNative: { busy: (b, i) => { busy = b; busyInfo = i; } } });
 check('the app is told when an answer is being written', busy === true);
-tellNativeBusy(true, {});
+tellNativeBusy(false, { chat: 7, title: 'T' }, { ollamaNative: { busy: (b, i) => { busy = b; busyInfo = i; } } });
+check('... and which chat it was', busy === false && busyInfo?.chat === '7' && busyInfo?.title === 'T');
+tellNativeBusy(true, null, {});
 check('a browser is not bothered', true);
 
 console.log(`\n${pass} passed, ${fail} failed`);

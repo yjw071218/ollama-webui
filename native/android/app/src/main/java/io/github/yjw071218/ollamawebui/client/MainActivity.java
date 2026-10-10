@@ -51,6 +51,11 @@ public class MainActivity extends Activity {
     private static final int MEDIA = 41, FILE = 42, SAVE = 43, CAPTURE = 44, NOTIFY = 45, AUTH = 46, CAMERA_FOR_FILE = 47;
     private static final String EXTRA_CHAT = "chat";
     static final String ACTION_NEW_CHAT = "io.github.yjw071218.ollamawebui.client.NEW_CHAT";
+    /** A new chat that starts listening: the home-screen widget's microphone. */
+    static final String ACTION_VOICE = "io.github.yjw071218.ollamawebui.client.VOICE";
+    /** "Reply" typed straight into a finished-answer notification. */
+    static final String ACTION_REPLY = "io.github.yjw071218.ollamawebui.client.REPLY";
+    static final String KEY_REPLY = "reply";
     /** A share from another app: 20 MB a file, 25 MB in all, ten files. */
     private static final int SHARE_FILE_MAX = 20 * 1024 * 1024, SHARE_TOTAL_MAX = 25 * 1024 * 1024, SHARE_FILES_MAX = 10;
     private static final int RECENT_MAX = 6;
@@ -165,15 +170,75 @@ public class MainActivity extends Activity {
     /** What an intent asks for: a notification's chat, a new chat (launcher shortcut), or a share. */
     private void takeIntent(Intent intent) {
         if (intent == null) return;
-        if (takeChat(intent)) deliverChat();
         String action = intent.getAction();
+        if (ACTION_REPLY.equals(action)) { takeReply(intent); return; }
+        if (takeChat(intent)) deliverChat();
         if (ACTION_NEW_CHAT.equals(action)) {
             intent.setAction(Intent.ACTION_MAIN);
             queueAction("{\"type\":\"new-chat\"}");
+        } else if (ACTION_VOICE.equals(action)) {
+            intent.setAction(Intent.ACTION_MAIN);
+            queueAction("{\"type\":\"voice\"}");
+        } else if (Intent.ACTION_PROCESS_TEXT.equals(action)) {
+            CharSequence picked = intent.getCharSequenceExtra(Intent.EXTRA_PROCESS_TEXT);
+            intent.setAction(Intent.ACTION_MAIN);
+            if (picked != null && picked.toString().trim().length() > 0) askAboutText(picked.toString());
         } else if (Intent.ACTION_SEND.equals(action) || Intent.ACTION_SEND_MULTIPLE.equals(action)) {
             intent.setAction(Intent.ACTION_MAIN);
             takeShare(intent);
         }
+    }
+    /** What a notification's reply field said: asked in the chat that notification was about. */
+    private void takeReply(Intent intent) {
+        intent.setAction(Intent.ACTION_MAIN);
+        Bundle results = RemoteInput.getResultsFromIntent(intent);
+        CharSequence said = results == null ? null : results.getCharSequence(KEY_REPLY);
+        String chat = intent.getStringExtra(EXTRA_CHAT);
+        String tag = intent.getStringExtra("tag");
+        if (tag != null) getSystemService(NotificationManager.class).cancel(tag.hashCode());
+        if (said == null || said.toString().trim().isEmpty()) { if (takeChat(intent)) deliverChat(); return; }
+        intent.removeExtra(EXTRA_CHAT);
+        try {
+            JSONObject ask = new JSONObject().put("type", "ask").put("text", said.toString().trim());
+            if (chat != null && !chat.isEmpty()) ask.put("chat", chat);
+            queueAction(ask.toString());
+        } catch (JSONException ignored) { }
+    }
+    /**
+     * Text selected in another app and "Ollama WebUI에게 묻기" picked from the
+     * selection menu: what to do with it, then a new question in the app.
+     */
+    private void askAboutText(String text) {
+        final String quoted = "\n\n\"\"\"\n" + (text.length() > 60000 ? text.substring(0, 60000) : text).trim() + "\n\"\"\"";
+        final String[] labels = {
+            L.t("📝 요약", "📝 Summarise"), L.t("🌐 번역", "🌐 Translate"), L.t("💡 쉽게 설명", "💡 Explain"),
+            L.t("✏️ 맞춤법·문장 다듬기", "✏️ Proofread"), L.t("💬 직접 질문하기…", "💬 Ask your own question…") };
+        final String[] prompts = {
+            L.t("다음 내용을 핵심만 간결하게 요약해 줘.", "Summarise the following briefly, keeping only what matters."),
+            L.t("다음 내용을 번역해 줘. 한국어면 영어로, 그 밖의 언어면 한국어로 옮겨 줘.", "Translate the following. Into English if it is Korean, otherwise into Korean."),
+            L.t("다음 내용을 쉽게 풀어서 설명해 줘.", "Explain the following in plain words."),
+            L.t("다음 글의 맞춤법과 문장을 자연스럽게 다듬어 줘. 고친 글만 보여 줘.", "Proofread and smooth the following. Show only the corrected text."), "" };
+        String preview = text.trim().replaceAll("\\s+", " ");
+        if (preview.length() > 90) preview = preview.substring(0, 90) + "…";
+        dialog().setTitle(L.t("선택한 글에 대해 묻기", "Ask about the selection")).setItems(labels, (d, which) -> {
+            if (which < 4) { sendAsk(prompts[which] + quoted); return; }
+            EditText input = new EditText(this);
+            input.setHint(L.t("무엇이 궁금한가요?", "What would you like to know?"));
+            input.setSingleLine(false); input.setMinLines(2);
+            FrameLayout box = new FrameLayout(this); box.setPadding(dp(20), dp(8), dp(20), 0); box.addView(input);
+            dialog().setTitle(L.t("직접 질문하기", "Ask your own question")).setView(box)
+                .setNegativeButton(L.t("취소", "Cancel"), null)
+                .setPositiveButton(L.t("보내기", "Send"), (d2, w2) -> {
+                    String q = input.getText().toString().trim();
+                    sendAsk((q.isEmpty() ? L.t("다음 내용에 대해 알려 줘.", "Tell me about the following.") : q) + quoted);
+                }).show();
+            input.requestFocus();
+        }).setNegativeButton(L.t("취소", "Cancel"), null).show();
+        Toast.makeText(this, preview, Toast.LENGTH_SHORT).show();
+    }
+    private void sendAsk(String text) {
+        try { queueAction("{\"type\":\"new-chat\"}"); queueAction(new JSONObject().put("type", "ask").put("text", text).toString()); }
+        catch (JSONException ignored) { }
     }
     /** A notification's chat, held until the page is there to open it. */
     private boolean takeChat(Intent intent) {
@@ -826,11 +891,21 @@ public class MainActivity extends Activity {
                     Intent target = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
                     if (!chat.isEmpty()) target.putExtra(EXTRA_CHAT, chat);
                     PendingIntent open = PendingIntent.getActivity(this, tag.hashCode(), target, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
-                    manager.notify(tag.hashCode(), new Notification.Builder(this, "jobs")
+                    Notification.Builder note = new Notification.Builder(this, "jobs")
                         .setSmallIcon(R.drawable.ic_notification).setColor(Color.rgb(217, 119, 87))
                         .setContentTitle(request.optString("title"))
                         .setContentText(request.optString("body")).setStyle(new Notification.BigTextStyle().bigText(request.optString("body")))
-                        .setContentIntent(open).setAutoCancel(true).build());
+                        .setContentIntent(open).setAutoCancel(true);
+                    // Answer straight from the notification: the reply is asked in that chat.
+                    Intent replyTarget = new Intent(this, MainActivity.class).setAction(ACTION_REPLY).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP)
+                        .putExtra("tag", tag);
+                    if (!chat.isEmpty()) replyTarget.putExtra(EXTRA_CHAT, chat);
+                    int mutable = Build.VERSION.SDK_INT >= 31 ? PendingIntent.FLAG_MUTABLE : 0;
+                    PendingIntent replyIntent = PendingIntent.getActivity(this, ("reply:" + tag).hashCode(), replyTarget, mutable | PendingIntent.FLAG_UPDATE_CURRENT);
+                    RemoteInput field = new RemoteInput.Builder(KEY_REPLY).setLabel(L.t("이어서 질문하기…", "Ask a follow-up…")).build();
+                    note.addAction(new Notification.Action.Builder(android.graphics.drawable.Icon.createWithResource(this, R.drawable.ic_shortcut_chat), L.t("답장", "Reply"), replyIntent)
+                        .addRemoteInput(field).setAllowGeneratedReplies(true).build());
+                    manager.notify(tag.hashCode(), note.build());
                     reply(reply, id, true, null); break;
                 }
                 case "busy":
