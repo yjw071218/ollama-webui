@@ -17,7 +17,7 @@ import { setLanguage, tr } from './i18n.mjs';
 import { addRecent, forgetRecent } from './recent.mjs';
 import { validColor } from './theme.mjs';
 import { clampZoom, zoomStep } from './zoom.mjs';
-import { openInAppBrowser, showInAppBrowser, setBrowserModels, restoreInAppBrowser } from './browser.mjs';
+import { openInAppBrowser, showInAppBrowser, setBrowserModels } from './browser.mjs';
 import { createRunner } from './runner.mjs';
 import { localPath } from './localPath.mjs';
 import { spawn } from 'node:child_process';
@@ -287,8 +287,9 @@ async function connect(value) {
     win.once('closed', () => ipcMain.removeListener('client:chrome', onChrome));
     // The zoom this server was last read at, and Ctrl+wheel to change it.
     win.clientContents.on('did-finish-load', () => {
-      // The pages that were open in the in-app browser last time.
-      if (!smoke) restoreInAppBrowser(win, { background: settings.pageBackground });
+      /* The in-app browser is not reopened at start-up any more: the app opens
+         on the chat. Its tabs are still saved, and come back when the browser
+         button is pressed (showInAppBrowser). */
       const factor = settings.zoom?.[key];
       if (Number.isFinite(factor)) win.clientContents.setZoomFactor(clampZoom(factor));
       showZoom(win, win.clientContents.getZoomFactor());

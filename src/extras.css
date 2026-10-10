@@ -11465,6 +11465,7 @@ body:has(.msg-actions-portal) .scroll-nudge { opacity: 0; pointer-events: none; 
    Below this width the CPU/GPU chips took the room the model picker needed
    and squeezed it to "clau…". The GPU is the one that matters while a model
    runs, so it alone stays; the picker keeps its width. */
-@media (max-width: 720px) {
-  .sys-strip.in-header .sys-chip:not(.sys-chip--gpu) { display: none; }
+@container mainpane (max-width: 700px) {
+  .main-header .sys-strip.in-header .sys-chip:not(.sys-chip--gpu) { display: none !important; }
+  .main-header .sys-strip.in-header .sys-chip--gpu { display: inline-flex !important; }
 }
