@@ -2196,7 +2196,7 @@ html.caret-off .markdown-body.is-streaming > :last-child::after { opacity: 0; }
 }
 .message-row.user .message-time { inset-inline-start: auto; inset-inline-end: 0; }
 /* Keep the timestamp inside the paint containment used for long histories. */
-.messages-wrapper > .message-row:has(> .message-time) { padding-bottom: 1.4rem; }
+:is(.messages-wrapper, .virtual-message) > .message-row:has(> .message-time) { padding-bottom: 1.4rem; }
 
 /* =========================================================
    System monitor
@@ -10293,7 +10293,7 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 /* Message history is already windowed in React. Keep mounted rows painted:
    content-visibility's paint containment could leave text clipped until the
    next scroll repainted the row. Sidebar and gallery optimizations stay local. */
-.messages-wrapper > .message-row {
+:is(.messages-wrapper, .virtual-message) > .message-row {
   content-visibility: visible;
   contain: none;
 }
@@ -10375,7 +10375,7 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 @media (hover: none), (max-width: 640px) {
   .message-row.actions-open { padding-bottom: 0; }
   /* A fixed box inside a contained one is placed against it, not the screen. */
-  .messages-wrapper > .message-row.actions-open { content-visibility: visible; contain: none; }
+  :is(.messages-wrapper, .virtual-message) > .message-row.actions-open { content-visibility: visible; contain: none; }
   .message-row.actions-open .msg-hover-actions,
   .message-row.actions-open:hover .msg-hover-actions {
     position: fixed;
@@ -10682,7 +10682,7 @@ html:has(.studio-place:not([hidden]) .studio-footer) .commands-dock { --dock-bot
 .device-ask-card .server-offline-actions > button { flex: 1; }
 
 /* ==== The same capsule on a PC, opened by clicking a message (App.jsx) ==== */
-.messages-wrapper > .message-row.click-capsule { content-visibility: visible; contain: none; }
+:is(.messages-wrapper, .virtual-message) > .message-row.click-capsule { content-visibility: visible; contain: none; }
 .message-row.click-capsule .msg-hover-actions,
 .message-row.click-capsule:hover .msg-hover-actions {
   position: fixed; top: auto; right: 0; left: 0;
@@ -10908,7 +10908,7 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 .mermaid-block { position: relative; margin: 1rem 0; border: 1px solid var(--border-color, #ffffff1a); border-radius: 12px; background: var(--bg-secondary, #0f141b); overflow: hidden; }
 .mermaid-stage { position: relative; overflow: hidden; min-height: 120px; max-height: 560px; padding: 2.6rem 1rem 1rem; cursor: grab; touch-action: pan-y; user-select: none; }
 .mermaid-stage:active { cursor: grabbing; }
-.mermaid-canvas { display: flex; justify-content: center; transform-origin: center top; transition: transform .18s ease; }
+.mermaid-canvas { display: flex; justify-content: center; transform-origin: center top; transition: none; backface-visibility: hidden; }
 .mermaid-block.is-fit .mermaid-canvas svg { max-width: min(100%, 720px) !important; max-height: 480px; width: auto; height: auto; }
 .mermaid-canvas svg { font-size: 14px; }
 .mermaid-canvas svg, .mermaid-canvas svg text, .mermaid-canvas svg foreignObject div, .mermaid-canvas svg span {
@@ -10932,7 +10932,7 @@ body:has(.message-row.click-capsule) .scroll-nudge { opacity: 0; pointer-events:
 .mermaid-block.is-sized .mermaid-canvas svg,
 .mermaid-block.is-sized.is-fit .mermaid-canvas svg { width: var(--mmd-w) !important; height: var(--mmd-h) !important; max-width: none !important; max-height: none; flex: none; }
 .mermaid-block.is-sized .mermaid-stage { max-height: 720px; padding: 2.8rem 1.25rem 1.5rem; }
-.mermaid-block.is-overflow .mermaid-stage { overflow-x: auto; overflow-y: hidden; touch-action: pan-x pan-y; }
+.mermaid-block.is-overflow .mermaid-stage { overflow: hidden; touch-action: pan-y; }
 .mermaid-block.is-overflow .mermaid-canvas { justify-content: flex-start; width: max-content; }
 .mermaid-block.is-sized { background: radial-gradient(120% 90% at 50% 0%, color-mix(in srgb, var(--text-primary, #fff) 4%, transparent), transparent 70%), var(--bg-secondary, #0f141b); }
 .mermaid-hint { position: absolute; left: 1rem; top: .85rem; z-index: 2; font-size: .72rem; color: var(--text-tertiary, #8b949e); pointer-events: none; }
@@ -11524,3 +11524,10 @@ body .main-header .header-tools > .model-selector-container:not(.header-secondar
   body .main-header:not(.search-roomy) .header-tools > .model-selector-container:not(.header-secondary) { flex: 1 1 auto !important; max-width: none !important; }
   body .main-header:not(.search-roomy) .header-tools > .model-selector-container:not(.header-secondary) > .dropdown-trigger { width: 100% !important; justify-content: space-between; }
   body .main-header:not(.search-roomy) .header-tools > .model-selector-container:not(.header-secondary) .model-name { max-width: none !important; flex: 1 1 auto; text-align: start; }
+
+.pdf-reader { width: 100%; overflow: auto; text-align: center; }
+.pdf-reader nav { position: sticky; top: 0; z-index: 1; display: flex; justify-content: center; align-items: center; gap: 1rem; padding: .7rem; background: var(--bg-main); }
+.pdf-reader canvas { max-width: 100%; height: auto; background: white; }
+.virtual-message { min-width: 0; flex-shrink: 0; }
+.sync-recovery-notice { position: fixed; bottom: 16px; left: 16px; right: 16px; z-index: 19000; background: var(--bg-primary, white); color: var(--text-primary); padding: 12px; border: 1px solid #d97757; border-radius: 8px; }
+.sync-recovery-notice button { margin-inline-start: 12px; }

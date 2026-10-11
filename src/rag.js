@@ -53,7 +53,7 @@ export const isEmbeddingModel = (m) => {
    ========================================================================= */
 
 /** pdf.js needs its worker; bundle it rather than reaching for a CDN. */
-const loadPdfjs = async () => {
+export const loadPdfjs = async () => {
   const pdfjs = await import('pdfjs-dist');
   const workerUrl = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url);
   pdfjs.GlobalWorkerOptions.workerSrc = workerUrl.toString();
@@ -73,7 +73,7 @@ const loadPdfjs = async () => {
  * The files are copied into public/ by scripts/pdf-assets.mjs, which the dev
  * and build scripts run first. They are URLs rather than imports because
  * pdf.js picks one of 169 by name at run time. */
-const PDF_ASSETS = {
+export const PDF_ASSETS = {
   cMapUrl: '/pdfjs/cmaps/',
   cMapPacked: true,
   standardFontDataUrl: '/pdfjs/standard_fonts/',

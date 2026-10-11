@@ -1,11 +1,24 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync } from 'node:fs';
+import vm from 'node:vm';
 
 const src = f => readFileSync(new URL('../android/app/src/main/' + f, import.meta.url), 'utf8');
 const pkg = 'java/io/github/yjw071218/ollamawebui/client/';
 const main = src(pkg + 'MainActivity.java');
 const manifest = src('AndroidManifest.xml');
+
+test('busy bridge sends the chat identity and resets progress on completion', () => {
+  const calls = [];
+  const definition = src('assets/native.js').match(/busy: (\(value, info\) => \{[^\n]+\}),/)[1];
+  const busy = vm.runInNewContext(`(${definition})`, { call: (method, data) => { calls.push({ method, ...data }); return Promise.resolve(); } });
+  busy(true, { chat: 42, title: '대화' });
+  busy(false);
+  assert.deepEqual(calls, [
+    { method: 'busy', value: true, chat: '42', title: '대화' },
+    { method: 'busy', value: false, chat: '', title: '' },
+  ]);
+});
 
 test('other apps can share text, pictures and files into the app', () => {
   assert.match(manifest, /android\.intent\.action\.SEND"\/>[\s\S]{0,200}mimeType="\*\/\*"/);
@@ -47,7 +60,7 @@ test('the network coming back reconnects on its own', () => {
 });
 
 test('the screen stays on while an answer is written', () => {
-  assert.match(src('assets/native.js'), /busy: value => \{ call\('busy'/);
+  assert.match(src('assets/native.js'), /busy: \(value, info\) => \{ call\('busy'/);
   assert.match(main, /case "busy":[\s\S]{0,200}FLAG_KEEP_SCREEN_ON/);
 });
 

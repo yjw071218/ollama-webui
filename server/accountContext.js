@@ -26,14 +26,14 @@ const PASSAGES = 5;
 const PASSAGE_CHARS = 1200;
 
 const payloads = (owner, kind) => database()
-  .prepare('SELECT id, payload FROM records WHERE user_id = ? AND kind = ? AND deleted = 0')
+  .prepare('SELECT id, payload FROM readable_records WHERE user_id = ? AND kind = ? AND deleted = 0')
   .all(String(owner), kind)
   .map((row) => { try { return JSON.parse(row.payload); } catch (e) { return null; } })
   .filter(Boolean);
 
 export const readSetting = (owner, key) => {
   const row = database()
-    .prepare("SELECT payload FROM records WHERE user_id = ? AND kind = 'setting' AND id = ? AND deleted = 0")
+    .prepare("SELECT payload FROM readable_records WHERE user_id = ? AND kind = 'setting' AND id = ? AND deleted = 0")
     .get(String(owner), key);
   if (!row) return null;
   try { const v = JSON.parse(row.payload); return typeof v === 'string' ? v : null; } catch (e) { return null; }
@@ -57,7 +57,7 @@ const indexCache = new Map();
 
 const libraryIndex = (owner) => {
   const stamp = database()
-    .prepare("SELECT COUNT(*) AS n, COALESCE(MAX(rev), 0) AS rev FROM records WHERE user_id = ? AND kind = 'document'")
+    .prepare("SELECT COUNT(*) AS n, COALESCE(MAX(rev), 0) AS rev FROM readable_records WHERE user_id = ? AND kind = 'document'")
     .get(String(owner));
   const key = `${stamp.n}:${stamp.rev}`;
   const cached = indexCache.get(owner);

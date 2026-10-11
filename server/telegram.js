@@ -25,7 +25,7 @@
 
 import crypto from 'node:crypto';
 import { database } from './db.js';
-import { applyChanges } from './records.js';
+import { applyChanges, currentRev } from './records.js';
 import { publishRev } from './liveSync.js';
 import { runServerTurn } from './turns.js';
 import { accountContext, accountDefaultModel } from './accountContext.js';
@@ -70,7 +70,7 @@ export const unlink = (userId, tgChatId) => Number(database()
 export const newChat = (userId, title, now = Date.now()) => {
   const id = now;
   const payload = { id, title, messages: [], createdAt: now, updatedAt: now, source: 'telegram' };
-  const result = applyChanges(userId, { records: [{ kind: 'chat', id: String(id), updatedAt: now, payload }] });
+  const result = applyChanges(userId, { since: currentRev(userId), records: [{ kind: 'chat', id: String(id), updatedAt: now, payload }] });
   if (result.applied > 0) publishRev(userId, result.rev, 'server');
   return String(id);
 };

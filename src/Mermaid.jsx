@@ -104,7 +104,7 @@ export default function Mermaid({ source, live = false }) {
   const [showCode, setShowCode] = useState(false);
   const [copied, setCopied] = useState(false);
   const [fit, setFit] = useState(true);
-  const [view, setView] = useState({ scale: 1, x: 0, y: 0 });
+  const [view, commitView] = useState({ scale: 1, x: 0, y: 0 });
   const [natural, setNatural] = useState(null);
   const [stageWidth, setStageWidth] = useState(0);
   const drag = useRef(null);
@@ -113,7 +113,15 @@ export default function Mermaid({ source, live = false }) {
   const canvas = useRef(null);
   const [full, setFull] = useState(false);
   const viewRef = useRef(view);
-  viewRef.current = view;
+  const viewFrame = useRef(0);
+  const setView = next => {
+    viewRef.current = typeof next === 'function' ? next(viewRef.current) : next;
+    if (!viewFrame.current) viewFrame.current = requestAnimationFrame(() => {
+      viewFrame.current = 0;
+      commitView(viewRef.current);
+    });
+  };
+  useEffect(() => () => cancelAnimationFrame(viewFrame.current), []);
   const seq = useRef(0);
   const stage = useRef(null);
   const [badge, setBadge] = useState(false);
@@ -183,6 +191,9 @@ export default function Mermaid({ source, live = false }) {
   useLayoutEffect(() => {
     const root = canvas.current;
     if (!root || !svg) return;
+    // Keep this SVG subtree alive during pan/zoom: its entrance animation,
+    // foreignObject labels and colour adjustments must not restart on movement.
+    root.innerHTML = svg;
     const lum = (c) => {
       const m = /rgba?\(\s*([\d.]+)[ ,]+([\d.]+)[ ,]+([\d.]+)(?:[ ,/]+([\d.]+))?/.exec(c || '');
       if (!m || (m[4] !== undefined && Number(m[4]) < 0.25)) return null;
@@ -314,6 +325,7 @@ export default function Mermaid({ source, live = false }) {
   const onUp = (e) => {
     if (e.pointerType === 'mouse') { drag.current = null; return; }
     const tp = touches.current.get(e.pointerId);
+    if (!tp) return;
     touches.current.delete(e.pointerId);
     const g = gesture.current;
     if (g?.kind === 'pinch') {
@@ -369,13 +381,12 @@ export default function Mermaid({ source, live = false }) {
         onPointerMove={onMove}
         onPointerUp={onUp}
         onPointerCancel={onUp}
+        onLostPointerCapture={onUp}
         onDoubleClick={(e) => { if (lastPointer.current !== 'mouse' || e.target.closest('button')) return; reset(); }}
       >
         <div className={`mermaid-zoom${badge || view.scale !== 1 ? ' is-on' : ''}${badge ? ' is-flash' : ''}`} role="status" aria-live="polite">{Math.round(view.scale * 100)}%</div>
         {overflows && !full && <div className="mermaid-hint">← 밀어서 보기 · 두 손가락으로 확대 →</div>}
-        <div ref={canvas} className="mermaid-canvas" style={{ ...svgStyle, transformOrigin: '0 0', transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.scale})` }}
-          // Rendered by mermaid with securityLevel "strict" (sanitised, no scripts or click handlers).
-          dangerouslySetInnerHTML={{ __html: svg }} />
+        <div ref={canvas} className="mermaid-canvas" style={{ ...svgStyle, transformOrigin: '0 0', transform: `translate3d(${view.x}px, ${view.y}px, 0) scale(${view.scale})` }} />
         <div className="mermaid-pad" role="group" aria-label="다이어그램 이동·확대">
           <span />
           <button type="button" className="mermaid-btn" aria-label="위로" onClick={() => move(0, STEP)}><ChevronUp size={15} /></button>

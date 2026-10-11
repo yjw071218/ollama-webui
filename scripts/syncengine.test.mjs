@@ -753,5 +753,22 @@ on(laptop);
   check('large recovery is split below the request limit', JSON.stringify(E.uploadBatch(moderate).batch).length < 9 * 1024 * 1024);
 }
 
+{
+  const browser = makeBrowser(); on(browser);
+  await current.forage.setItem(CHATS, [{ id: 'retired-copy', updatedAt: 9, messages: [{ content: 'offline draft' }] }]);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => ({ ok: true, status: 200, json: async () =>
+    options.method === 'POST'
+      ? { success: true, ownerId: 'abc', resetRequired: true, floor: 10, records: [], rev: 0 }
+      : { success: true, ownerId: 'abc', complete: true, rev: 10, records: [{kind:'chat', id:'kept', updatedAt:10, payload:{id:'kept', updatedAt:10, messages:[]}}] }
+  });
+  const result = await E.syncOnce(SCOPE, { full: true });
+  const chats = await current.forage.getItem(CHATS);
+  check('expired cursor reconciles a full snapshot before any upload', result.sent === 0 && chats.length === 1 && chats[0].id === 'kept');
+  const copies = [...browser.raw.stores.get('default')].filter(([key]) => key.startsWith('sync-recovery:'));
+  check('local work missing from the snapshot survives in recovery storage', copies.length === 1 && copies[0][1].records[0].payload.messages[0].content === 'offline draft');
+  globalThis.fetch = originalFetch;
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

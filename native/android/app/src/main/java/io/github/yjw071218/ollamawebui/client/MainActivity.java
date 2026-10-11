@@ -912,6 +912,19 @@ public class MainActivity extends Activity {
                     // The screen stays on while an answer is being written, and only then.
                     if (request.optBoolean("value")) getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
                     else getWindow().clearFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+                    NotificationManager progressManager = getSystemService(NotificationManager.class);
+                    int progressId = 0x574542;
+                    if (request.optBoolean("value") && notificationAllowed && notificationsAllowedBySystem()) {
+                        progressManager.createNotificationChannel(new NotificationChannel("progress", L.t("진행 상황", "Progress"), NotificationManager.IMPORTANCE_LOW));
+                        Intent progressTarget = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP);
+                        progressTarget.putExtra(EXTRA_CHAT, request.optString("chat", ""));
+                        PendingIntent progressOpen = PendingIntent.getActivity(this, progressId, progressTarget, PendingIntent.FLAG_IMMUTABLE | PendingIntent.FLAG_UPDATE_CURRENT);
+                        progressManager.notify(progressId, new Notification.Builder(this, "progress")
+                            .setSmallIcon(R.drawable.ic_notification).setContentTitle("Ollama WebUI · " + L.t("답변 작성 중", "Writing an answer"))
+                            .setContentText(request.optString("title", "")).setProgress(0, 0, true)
+                            .setOngoing(true).setOnlyAlertOnce(true).setUsesChronometer(true)
+                            .setContentIntent(progressOpen).build());
+                    } else progressManager.cancel(progressId);
                     reply(reply, id, true, null); break;
                 case "changeServer":
                     confirmChangeServer(() -> reply(reply, requestId, false, null)); break;

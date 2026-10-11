@@ -156,7 +156,7 @@ export const createShare = (userId, { chatId, title, snapshot, picture, expiresI
 
   return transaction((db) => {
     const live = db.prepare(
-      'SELECT COUNT(*) AS n FROM shares WHERE user_id = ? AND revoked = 0',
+      'SELECT COUNT(*) AS n FROM readable_shares WHERE user_id = ? AND revoked = 0',
     ).get(userId)?.n ?? 0;
     if (live >= MAX_SHARES_PER_USER) {
       throw new ShareError('You already have the maximum number of share links.', 429, 'too-many');
@@ -185,7 +185,7 @@ export const createShare = (userId, { chatId, title, snapshot, picture, expiresI
  */
 export const readShare = (token) => {
   if (!token) return null;
-  const row = one('SELECT * FROM shares WHERE token_hash = ?', hashToken(token));
+  const row = one('SELECT * FROM readable_shares WHERE token_hash = ?', hashToken(token));
   if (!row || row.revoked) return null;
   if (row.expires_at && row.expires_at < Date.now()) return null;
 
@@ -231,7 +231,7 @@ export const readShare = (token) => {
 export const listShares = (userId) => {
   if (!userId) return [];
   return query(
-    'SELECT * FROM shares WHERE user_id = ? ORDER BY created_at DESC',
+    'SELECT * FROM readable_shares WHERE user_id = ? ORDER BY created_at DESC',
     userId,
   ).map(toSummary);
 };

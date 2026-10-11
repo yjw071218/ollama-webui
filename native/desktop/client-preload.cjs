@@ -11,10 +11,12 @@
  *
  * Every message is checked in main.mjs against the page's origin.
  */
-const { contextBridge, ipcRenderer } = require('electron');
+const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('ollamaNative', {
   platform: 'desktop',
+  quickAnswer: value => ipcRenderer.send('client:quickAnswer', value),
+  pathForFile: file => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
   openInEditor: value => ipcRenderer.invoke('client:openInEditor', value),
   openLocalPath: value => ipcRenderer.invoke('client:openLocalPath', value),
   // Full paths of files/folders copied in Explorer (Ctrl+C), for pasting a folder as its path.

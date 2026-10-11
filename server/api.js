@@ -10,6 +10,9 @@ import fs from 'fs';
 import path from 'path';
 import { spawn, execFile } from 'child_process';
 import os from 'os';
+import { searchRecords } from './recordSearch.js';
+import { acknowledgeSync, maintainTombstones } from './syncRetention.js';
+import { convertOffice } from './officeConvert.js';
 import {
   parseNewsFeed, newsFeedUrl, looksLikeNewsQuery, newsTopic,
   sortByRecency, withinHours, formatNews,
@@ -35,7 +38,7 @@ import { verifyGoogleIdToken } from './social.js';
 import { createGoogleHandoffs, nativeGooglePage } from './nativeGoogle.js';
 import { googleNativeRedirect, nativeGoogleDirectPage, nativeGoogleCallbackPage, createRedirectProbe, GOOGLE_LOOPBACK_REDIRECT } from './nativeGoogleDirect.js';
 import {
-  changesSince, applyChanges, accountStats, currentRev, sweepTombstones,
+  changesSince, applyChanges, accountStats, currentRev,
   OwnerMismatch, MAX_RECORD_BYTES, MAX_BATCH_RECORDS,
 } from './records.js';
 import { listRevisions, readRevision, recordsWithHistory } from './recordHistory.js';
@@ -1446,6 +1449,23 @@ export const createApiRoutes = (env = {}, options = {}) => {
       }
     });
 
+    route('/api/auth/office/convert', async (req, res) => {
+      const auth = guard(req, res, { methods: ['POST'] });
+      if (!auth) return;
+      try { sendJson(res, { success: true, ...await convertOffice(await jsonBody(req, 70 * 1024 * 1024)) }); }
+      catch (error) { sendJson(res, { success: false, error: error.message }, 422); }
+    });
+
+    route('/api/auth/records/search', async (req, res) => {
+      const auth = authenticate(req);
+      if (!auth.user) return sendJson(res, { success: false, error: 'Not signed in.' }, 401);
+      if (req.method !== 'GET') return sendJson(res, { success: false }, 405);
+      try {
+        const params = new URL(req.url, 'http://x').searchParams;
+        sendJson(res, { success: true, ...searchRecords(auth.user.id, params.get('q'), { offset: Math.max(0, Number(params.get('offset')) || 0) }) });
+      } catch (error) { sendJson(res, { success: false, error: error.message }, 500); }
+    });
+
     route('/api/auth/sync', async (req, res) => {
       const auth = req.method === 'GET'
         ? (() => {
@@ -1467,12 +1487,13 @@ export const createApiRoutes = (env = {}, options = {}) => {
         }
 
         const body = await jsonBody(req, MAX_RECORD_BYTES * 4);
+        acknowledgeSync(auth.user.id, deviceIdOf(req) || `session:${sessionIdOf(auth.session.key)}`, body.since);
         const result = applyChanges(auth.user.id, body);
 
         /* Tombstones are swept occasionally rather than on a timer: this is
            the only code that runs regularly, and a sweep on every write would
            be a full table scan per sync. */
-        if (result.applied > 0 && Math.random() < 0.02) sweepTombstones(auth.user.id);
+        if (!result.resetRequired) maintainTombstones(auth.user.id);
         // Anything listening on this account is told there is something new.
         // Labelled with the tab that rang it: a device hears its own bell
         // too, and needs to know it was its own.

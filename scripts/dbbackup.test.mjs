@@ -32,8 +32,10 @@ try {
     result.integrity === 'ok' && result.foreignKeys === 0);
 
   const copy = new DatabaseSync(result.file);
+  const stored = copy.prepare('SELECT payload FROM records WHERE id = ?').get('chat-1')?.payload;
+  check('the backup does not expose plaintext', !!stored && !stored.includes('kept'));
   check('the backup contains the committed record',
-    copy.prepare('SELECT payload FROM records WHERE id = ?').get('chat-1')?.payload
+    db.prepare('SELECT webui_decrypt(?) AS payload').get(stored).payload
       === '{"id":"chat-1","title":"kept"}');
   copy.close();
 } finally {

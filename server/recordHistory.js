@@ -54,7 +54,7 @@ export const packPayload = (handle, payload) => {
 /** The payload as it was stored, with every marker replaced by its string. */
 export const unpackPayload = (handle, payload) => {
   if (payload == null || !payload.includes('webui-blob:sha256:')) return payload;
-  const get = handle.prepare('SELECT data FROM history_blobs WHERE hash = ?');
+  const get = handle.prepare('SELECT data FROM readable_history_blobs WHERE hash = ?');
   return JSON.stringify(JSON.parse(payload), (key, value) => {
     if (typeof value !== 'string' || !value.startsWith(BLOB_MARK)) return value;
     const row = get.get(value.slice(BLOB_MARK.length));
@@ -77,7 +77,7 @@ export const packExistingHistory = ({ batch = 50 } = {}) => {
   for (;;) {
     const done = transaction((handle) => {
       const rows = handle.prepare(`
-        SELECT rowid, payload FROM record_history
+        SELECT rowid, payload FROM readable_record_history
          WHERE rowid > ? AND payload IS NOT NULL AND LENGTH(payload) >= ?
            AND instr(payload, 'webui-blob:sha256:') = 0
          ORDER BY rowid
@@ -100,13 +100,13 @@ export const collectBlobs = () => transaction((handle) => {
   const referenced = new Set();
   const mark = /webui-blob:sha256:([0-9a-f]{64})/g;
   for (const row of handle.prepare(
-    "SELECT payload FROM record_history WHERE instr(payload, 'webui-blob:sha256:') > 0"
+    "SELECT payload FROM readable_record_history WHERE instr(payload, 'webui-blob:sha256:') > 0"
   ).iterate()) {
     for (const m of row.payload.matchAll(mark)) referenced.add(m[1]);
   }
   const del = handle.prepare('DELETE FROM history_blobs WHERE hash = ?');
   let removed = 0;
-  for (const { hash } of handle.prepare('SELECT hash FROM history_blobs').all()) {
+  for (const { hash } of handle.prepare('SELECT hash FROM readable_history_blobs').all()) {
     if (!referenced.has(hash)) removed += Number(del.run(hash).changes);
   }
   return removed;
@@ -150,7 +150,7 @@ export const pruneRecordHistory = ({
   return transaction((handle) => {
     const before = handle.prepare(
       `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(payload)), 0) AS bytes
-         FROM record_history ${userId ? 'WHERE user_id = ?' : ''}`
+         FROM readable_record_history ${userId ? 'WHERE user_id = ?' : ''}`
     ).get(...(userId ? [userId] : []));
 
     const result = handle.prepare(`
@@ -177,7 +177,7 @@ export const pruneRecordHistory = ({
 
     const after = handle.prepare(
       `SELECT COUNT(*) AS n, COALESCE(SUM(LENGTH(payload)), 0) AS bytes
-         FROM record_history ${userId ? 'WHERE user_id = ?' : ''}`
+         FROM readable_record_history ${userId ? 'WHERE user_id = ?' : ''}`
     ).get(...(userId ? [userId] : []));
 
     return {
@@ -264,7 +264,7 @@ export const listRevisions = (userId, kind, id, limit = 200) =>
     SELECT rev, updated_at AS updatedAt, deleted, LENGTH(payload) AS bytes,
            json_extract(payload, '$.title') AS title,
            json_array_length(payload, '$.messages') AS messages
-      FROM record_history
+      FROM readable_record_history
      WHERE user_id = ? AND kind = ? AND id = ?
      ORDER BY rev DESC
      LIMIT ?
@@ -275,7 +275,7 @@ export const listRevisions = (userId, kind, id, limit = 200) =>
 export const readRevision = (userId, kind, id, rev) => {
   const handle = database();
   const row = handle.prepare(`
-    SELECT rev, updated_at, deleted, payload FROM record_history
+    SELECT rev, updated_at, deleted, payload FROM readable_record_history
      WHERE user_id = ? AND kind = ? AND id = ? AND rev = ?
   `).get(userId, kind, String(id), Number(rev));
   if (!row) return null;
@@ -291,7 +291,7 @@ export const readRevision = (userId, kind, id, rev) => {
 export const recordsWithHistory = (userId, kind, limit = 200) =>
   database().prepare(`
     SELECT id, COUNT(*) AS revisions, MAX(updated_at) AS lastAt
-      FROM record_history
+      FROM readable_record_history
      WHERE user_id = ? AND kind = ?
      GROUP BY id
      ORDER BY lastAt DESC

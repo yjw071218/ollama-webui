@@ -68,7 +68,7 @@ const owner = 'user-turns';
 database().prepare("INSERT OR IGNORE INTO users (id, email, name, created_at) VALUES (?,?,?,?)")
   .run(owner, 'turns@example.com', 'Turns', Date.now());
 const putChat = (id, payload, at = Date.now()) => R.applyChanges(owner, { records: [{ kind: 'chat', id, updatedAt: at, payload }] });
-const getChat = (id) => JSON.parse(database().prepare("SELECT payload FROM records WHERE user_id = ? AND kind = 'chat' AND id = ?").get(owner, id).payload);
+const getChat = (id) => JSON.parse(database().prepare("SELECT payload FROM readable_records WHERE user_id = ? AND kind = 'chat' AND id = ?").get(owner, id).payload);
 
 {
   putChat('c1', { id: 'c1', title: 'News', lastModel: 'qwen3:30b', messages: [{ role: 'user', content: 'hi' }] }, 1000);

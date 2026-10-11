@@ -26,6 +26,7 @@
 import { database, transaction } from './db.js';
 import { packPayload, unpackPayload } from './recordHistory.js';
 import { mergeChats, foldNewerFields } from './chatMerge.js';
+import { collectTombstones, syncFloor } from './syncRetention.js';
 
 /** The kinds a client may sync. Anything else is refused rather than stored. */
 export const KINDS = new Set([
@@ -109,7 +110,7 @@ const pageOf = (rows, limit, maxBytes = PAGE_BYTES) => {
    unevenly (a chat edited a hundred times holds one record at its latest
    revision) and made the bar leap from 0% to 87%. */
 const remainingAbove = (handle, userId, cursor) =>
-  handle.prepare('SELECT COUNT(*) AS n FROM records WHERE user_id = ? AND rev > ?').get(userId, cursor)?.n ?? 0;
+  handle.prepare('SELECT COUNT(*) AS n FROM readable_records WHERE user_id = ? AND rev > ?').get(userId, cursor)?.n ?? 0;
 
 /**
  * Everything that changed above `since`.
@@ -126,7 +127,7 @@ const remainingAbove = (handle, userId, cursor) =>
 export const changesSince = (userId, since = 0, limit = 500, maxBytes = PAGE_BYTES) => {
   const rows = database().prepare(`
     SELECT kind, id, rev, updated_at, deleted, payload
-      FROM records
+      FROM readable_records
      WHERE user_id = ? AND rev > ?
      ORDER BY rev ASC
      LIMIT ?
@@ -156,6 +157,7 @@ const validate = (record) => {
   }
 
   const payload = record.deleted ? null : JSON.stringify(record.payload);
+  if (payload?.startsWith('{"$webuiEncrypted":1,')) throw new Error('Reserved storage envelope cannot be uploaded as a record.');
   if (!record.deleted && (payload === undefined || payload === 'null')) {
     throw new Error('A live record needs a serializable payload.');
   }
@@ -181,6 +183,9 @@ const validate = (record) => {
  */
 export const applyChanges = (userId, { since = 0, records = [], ownerId = null, limit = 500, maxBytes = PAGE_BYTES } = {}) => {
   if (ownerId && ownerId !== userId) throw new OwnerMismatch(userId, ownerId);
+  if (!Number.isSafeInteger(since) || since < 0) throw new Error('Invalid sync cursor.');
+  const floor = syncFloor(userId);
+  if (since < floor) return { resetRequired: true, floor, records: [], applied: 0, rejected: 0, rev: since, complete: false };
   if (!Array.isArray(records)) throw new Error('Changes must be a list.');
   if (records.length > MAX_BATCH_RECORDS) {
     throw new Error(`Send at most ${MAX_BATCH_RECORDS} records at a time.`);
@@ -219,10 +224,10 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
 
     if (clean.length) {
       const existing = handle.prepare(
-        'SELECT rev, updated_at, deleted, payload FROM records WHERE user_id = ? AND kind = ? AND id = ?'
+        'SELECT rev, updated_at, deleted, payload FROM readable_records WHERE user_id = ? AND kind = ? AND id = ?'
       );
       const baseOf = handle.prepare(`
-        SELECT payload FROM record_history
+        SELECT payload FROM readable_record_history
          WHERE user_id = ? AND kind = ? AND id = ? AND updated_at = ? AND deleted = 0
          ORDER BY rev DESC LIMIT 1
       `);
@@ -350,7 +355,7 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
     // was rejected in favour of a newer one.
     const rows = handle.prepare(`
       SELECT kind, id, rev, updated_at, deleted, payload
-        FROM records
+        FROM readable_records
        WHERE user_id = ? AND rev > ?
        ORDER BY rev ASC
        LIMIT ?
@@ -373,7 +378,7 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
     if (lost.length) {
       const inPage = new Set(page.map(r => `${r.kind}:${r.id}`));
       const winner = handle.prepare(
-        'SELECT kind, id, rev, updated_at, deleted, payload FROM records WHERE user_id = ? AND kind = ? AND id = ?'
+        'SELECT kind, id, rev, updated_at, deleted, payload FROM readable_records WHERE user_id = ? AND kind = ? AND id = ?'
       );
       for (const record of lost) {
         const key = `${record.kind}:${record.id}`;
@@ -413,7 +418,7 @@ export const accountStats = (userId) => {
   for (const row of rows) { counts[row.kind] = row.n; bytes += row.bytes || 0; }
 
   const last = database().prepare(
-    'SELECT MAX(updated_at) AS at FROM records WHERE user_id = ?'
+    'SELECT MAX(updated_at) AS at FROM readable_records WHERE user_id = ?'
   ).get(userId);
 
   return {
@@ -435,10 +440,7 @@ export const accountStats = (userId) => {
  * back. Thirty days is longer than any plausible gap between opening the app on
  * a second device.
  */
-export const sweepTombstones = (userId, olderThanMs = 30 * 24 * 60 * 60 * 1000) =>
-  database().prepare(
-    'DELETE FROM records WHERE user_id = ? AND deleted = 1 AND updated_at < ?'
-  ).run(userId, Date.now() - olderThanMs).changes;
+export const sweepTombstones = collectTombstones;
 
 /** Drop everything an account holds. Used when the account is deleted. */
 export const dropRecords = (userId) =>

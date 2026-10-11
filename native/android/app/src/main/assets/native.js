@@ -31,7 +31,7 @@
     changeServer: () => call('changeServer'),
     checkUpdates: () => call('checkUpdates'),
     // An answer is being written: the screen stays on until it is done (src/nativeEvents.js).
-    busy: value => { call('busy', { value: !!value }).catch(() => {}); },
+    busy: (value, info) => { call('busy', { value: !!value, chat: String(info?.chat || ''), title: String(info?.title || '') }).catch(() => {}); },
     captureScreen: async () => {
       const value = await call('capture');
       if (!value) return null;

@@ -53,6 +53,7 @@ export const CanvasPanel = ({
   onClose,
   onPersist,
   onToast,
+  onOffice,
 }) => {
   const { t } = useI18n();
 
@@ -216,6 +217,7 @@ export const CanvasPanel = ({
           <button className="variant-btn" onClick={download} title={t('canvas.download')}>
             <Download size={14} />
           </button>
+          {onOffice && <button className="variant-btn" onClick={() => onOffice(text)} title="PPTX·한글 문서로 제작">문서 제작</button>}
           <button className="variant-btn" onClick={onClose} title={t('canvas.close')}>
             <X size={14} />
           </button>

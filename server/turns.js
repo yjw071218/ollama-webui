@@ -31,7 +31,7 @@
  */
 
 import { database } from './db.js';
-import { applyChanges } from './records.js';
+import { applyChanges, currentRev } from './records.js';
 import { publishRev } from './liveSync.js';
 import { stripAttachments } from '../src/attachMarkers.js';
 import { stripThinking } from '../src/codeAware.js';
@@ -48,7 +48,7 @@ const THINK_WIRE = { auto: undefined, off: false, low: 'low', medium: 'medium', 
 
 const readRecord = (owner, kind, id) => {
   const row = database()
-    .prepare('SELECT payload, deleted FROM records WHERE user_id = ? AND kind = ? AND id = ?')
+    .prepare('SELECT payload, deleted FROM readable_records WHERE user_id = ? AND kind = ? AND id = ?')
     .get(String(owner), kind, String(id));
   if (!row || row.deleted || !row.payload) return null;
   try { return JSON.parse(row.payload); } catch (e) { return null; }
@@ -220,7 +220,7 @@ export const runServerTurn = async ({
   const payload = withAnswer(latest, {
     prompt, answer, thinking: String(data?.message?.thinking || '').trim(), model: request.model, metrics, at, origin,
   });
-  const result = applyChanges(owner, { records: [{ kind: 'chat', id: String(chatId), updatedAt: at, payload }] });
+  const result = applyChanges(owner, { since: currentRev(owner), records: [{ kind: 'chat', id: String(chatId), updatedAt: at, payload }] });
   if (result.applied > 0) publishRev(owner, result.rev, 'server');
   // The answer itself goes back too, for callers that deliver it somewhere
   // (Telegram) as well as writing it into the chat.

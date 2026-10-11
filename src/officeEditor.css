@@ -1,0 +1,26 @@
+.office-overlay{position:fixed;inset:0;z-index:20000;background:#0008;display:grid;place-items:center;padding:16px}
+.office-editor{width:min(1200px,100%);height:min(900px,96dvh);background:var(--bg-main,#fff);color:var(--text-primary,#202630);border-radius:16px;display:flex;flex-direction:column;box-shadow:0 12px 70px #0005;overflow:hidden}
+.office-editor header,.office-editor nav{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:12px 16px;border-bottom:1px solid #8884}
+.office-editor header input{flex:1;min-width:120px}
+.office-editor button,.office-editor input,.office-editor textarea{font:inherit;color:inherit;border:1px solid #8886;border-radius:8px;padding:8px;background:transparent}
+.office-editor button{cursor:pointer}.office-editor button:disabled{opacity:.5;cursor:default}
+.office-editor button[aria-pressed=true],.office-editor .active{background:#d9775720;border-color:#d97757}
+.office-content{display:flex;flex:1;min-height:0}.office-content aside{width:190px;overflow:auto;flex-shrink:0;padding:12px;display:flex;flex-direction:column;gap:8px}.office-content aside small{display:block;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}.office-content main{flex:1;overflow:auto;min-width:0;padding:24px;background:#8493aa15}
+.office-slide{background:#f5f7fb;color:#172b4d;aspect-ratio:16/9;padding:5%;display:flex;flex-direction:column;box-shadow:0 4px 24px #0002}.office-slide input{font-size:clamp(18px,2.5vw,30px);font-weight:700}.office-slide textarea{flex:1;min-height:160px;margin-top:20px;resize:none;font-size:20px}
+.office-paper{width:100%;min-height:100%;background:white!important;color:#202630!important;line-height:1.8;resize:vertical;padding:32px!important}.office-fields{display:grid;gap:12px}.office-fields label{display:flex;flex-direction:column;gap:4px}.office-fields textarea{min-height:70px;background:var(--bg-main,#fff)}
+.office-note,.office-error{margin:0;padding:10px 16px;font-size:13px}.office-error{color:#c33}.sync-recovery-notice{position:fixed;bottom:16px;left:16px;right:16px;z-index:19000;background:var(--bg-main,#fff);padding:12px;border:1px solid #d97757;border-radius:8px}.sync-recovery-notice button{margin-left:12px}
+@media(max-width:650px){.office-overlay{padding:0}.office-editor{height:100dvh;border-radius:0}.office-content aside{width:110px;padding:6px}.office-content main{padding:10px}.office-slide{aspect-ratio:auto;min-height:400px}.office-editor header strong{width:100%}}
+.office-editor select{font:inherit;color:inherit;background:var(--bg-main,#fff);border:1px solid #8886;border-radius:8px;padding:8px}
+.office-content{border:0;padding:0;margin:0;min-inline-size:0}
+.office-ai{display:flex;align-items:center;flex-wrap:wrap;gap:8px;padding:10px 16px;border-bottom:1px solid #8884}
+.office-ai label{font-weight:600}.office-ai textarea{flex:1;min-width:220px;min-height:60px;max-height:160px;resize:vertical}.office-ai [role=status]{font-size:12px;opacity:.8}
+.office-slide-preview{width:100%;height:auto;display:block;box-shadow:0 4px 24px #0002;border-radius:8px}
+.office-slide-editor .office-fields{margin-top:18px;grid-template-columns:repeat(2,minmax(0,1fr))}.office-fields label{min-width:0}.office-fields textarea{width:100%;box-sizing:border-box}
+.office-proposal{padding:12px 16px;border-bottom:1px solid #8884}.office-proposal>span,.office-proposal>button,.office-proposal>small{margin-inline-start:12px}
+.office-proposal-preview{display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;max-height:260px;overflow:auto;margin:8px 0}.office-proposal-preview pre{white-space:pre-wrap;overflow-wrap:anywhere;max-height:240px}
+.office-grid-scroll{overflow:auto;max-height:60vh}.office-sheet table{border-collapse:collapse;width:max-content}.office-sheet th,.office-sheet td{border:1px solid #8884;padding:0}.office-sheet th{padding:5px 10px;background:var(--bg-main,#fff);position:sticky;top:0}.office-sheet td input{border:0;border-radius:0;width:145px;box-sizing:border-box}.office-sheet input[type=number]{width:90px}
+@media(max-width:650px){.office-editor{overflow:auto}.office-content{flex:1 0 400px}.office-ai{padding:8px}.office-ai textarea{min-width:100%}.office-slide-editor .office-fields{grid-template-columns:1fr}.office-editor nav{padding:8px;gap:5px}.office-editor button{font-size:12px}.office-proposal-preview{max-height:220px}}
+.office-editor,.office-editor *{box-sizing:border-box}
+.office-editor input,.office-editor textarea,.office-editor select{max-width:100%}
+.office-ai textarea{min-width:0}
+@media(max-width:650px){.office-ai textarea{flex-basis:100%;width:100%;min-width:0}}

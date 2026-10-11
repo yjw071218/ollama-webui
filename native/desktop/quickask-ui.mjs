@@ -30,3 +30,11 @@ $('#ask').addEventListener('submit', (e) => {
   window.quickAsk.choose('ask', text, q);
 });
 document.title = tr('선택한 내용에 대해 묻기', 'Ask about the selection');
+
+window.quickAsk.answer(data => {
+  $('#answer').hidden = false;
+  $('#answer').textContent = data.text || '';
+  $('#status').hidden = false;
+  $('#status').textContent = data.error || (data.done ? tr('답변 완료', 'Done') : tr('답변 작성 중…', 'Writing…'));
+  document.querySelectorAll('#actions button, #ask button').forEach(button => { button.disabled = !data.done; });
+});

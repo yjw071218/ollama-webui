@@ -1,3 +1,12 @@
+# 2.0.1
+
+- 대화에서 PPT·Excel·Word·한글 문서 제작 및 다운로드, AI 슬라이드 디자인을 지원합니다.
+- 구형 PPT, Word·Excel·ODF 변환과 PDF 출력을 추가했습니다. 서버에 LibreOffice가 필요하며 HWP 변환에는 Windows 한/글이 필요합니다.
+- 다이어그램 이동·확대 중 깜빡임, 모바일 PDF 표시와 모델 선택 메뉴를 개선했습니다.
+- Windows 폴더 드롭 경로와 플로팅 질문, Android 답변 진행 알림을 개선했습니다.
+- 서버 DB 본문 암호화·검색 인덱스·삭제 기록 정리와 메시지 가상화·백그라운드 저장을 추가했습니다.
+- DB 복원에는 기존 암호화 키가 필요합니다. 자세한 지원 범위는 docs/office-suite.ko.md 및 docs/storage-office-status.ko.md를 확인하세요.
+
 # 2.0.0
 - 서버와 Windows·Android 클라이언트 버전을 2.0.0으로 통일했습니다.
 - 기기 간 동기화 병합 및 오류 복구 개선을 포함합니다.

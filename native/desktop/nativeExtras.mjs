@@ -146,6 +146,16 @@ export function createExtras({ liveClient, reveal, getSettings, save, directory,
     return text.trim();
   };
   let popup = null;
+  let quickModel = '', quickRequest = 0;
+  ipcMain.on('client:browserModels', (event, value) => {
+    const client = ready()?.clientContents;
+    if (event.sender === client && event.senderFrame === client.mainFrame) quickModel = String(value?.selected || '');
+  });
+  ipcMain.on('client:quickAnswer', (event, value) => {
+    const client = ready()?.clientContents;
+    if (event.sender !== client || event.senderFrame !== client.mainFrame || value?.id !== quickRequest || !popup || popup.isDestroyed()) return;
+    popup.webContents.send('quickask:answer', { text: String(value.text || '').slice(0, 1000000), error: String(value.error || '').slice(0, 1000), done: !!value.done });
+  });
   const openPopup = (text) => {
     if (popup && !popup.isDestroyed()) popup.close();
     const point = screen.getCursorScreenPoint();
@@ -162,16 +172,56 @@ export function createExtras({ liveClient, reveal, getSettings, save, directory,
     win.setMenu(null);
     win.webContents.on('will-navigate', e => e.preventDefault());
     win.webContents.setWindowOpenHandler(() => ({ action: 'deny' }));
-    win.on('blur', () => { if (!win.isDestroyed()) win.close(); });
+    win.on('closed', () => {
+      quickRequest++;
+      ready()?.clientContents.executeJavaScript('window.__quickAskAbort?.abort()').catch(() => {});
+    });
     win.once('ready-to-show', () => { win.show(); win.focus(); });
     win.webContents.once('did-finish-load', () => win.webContents.send('quickask:data', { text, colors: (() => { try { return chromeColors(settings().pageBackground); } catch { return null; } })() }));
     win.loadFile(path.join(directory, 'quickask.html'));
   };
   ipcMain.on('quickask:choose', (event, kind, text, question) => {
     if (!popup || popup.isDestroyed() || event.sender !== popup.webContents) return;
-    popup.close();
     const prompt = selectionPrompt(String(kind || ''), String(text || '').slice(0, 60000), String(question || '').slice(0, 4000));
-    if (prompt.trim()) toPage({ type: 'ask', text: prompt });
+    if (!prompt.trim()) return;
+    const client = ready()?.clientContents;
+    if (!client || !quickModel) { popup.webContents.send('quickask:answer', { error: tr('앱에서 로그인하고 모델을 선택해 주세요.', 'Sign in and select a model in the app.'), done: true }); return; }
+    popup.setResizable(true);
+    popup.setSize(460, 600);
+    const id = ++quickRequest;
+    popup.webContents.send('quickask:answer', { text: '', done: false });
+    // Fetch in the signed-in first-party page; credentials never enter this popup.
+    const script = `(async () => {
+      window.__quickAskAbort?.abort();
+      const controller = window.__quickAskAbort = new AbortController();
+      let text = '';
+      const report = (done = false, error = '') => window.ollamaNative.quickAnswer({ id: ${id}, text, done, error });
+      try {
+        const response = await fetch('/api/chat', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          signal: controller.signal, body: JSON.stringify({ model: ${JSON.stringify(quickModel)}, messages: [{ role: 'user', content: ${JSON.stringify(prompt)} }], stream: true }) });
+        if (!response.ok) throw new Error('HTTP ' + response.status);
+        const reader = response.body.getReader(), decoder = new TextDecoder();
+        let buffer = '', last = 0;
+        const consume = line => {
+          if (!line.trim()) return;
+          const item = JSON.parse(line);
+          if (item.error) throw new Error(item.error);
+          text += item.message?.content || item.response || '';
+        };
+        for (;;) {
+          const part = await reader.read();
+          buffer += decoder.decode(part.value, { stream: !part.done });
+          const lines = buffer.split('\\n'); buffer = lines.pop();
+          for (const line of lines) consume(line);
+          if (Date.now() - last > 60) { report(); last = Date.now(); }
+          if (part.done) break;
+        }
+        consume(buffer); report(true);
+      } catch (e) { if (e.name !== 'AbortError') report(true, e.message); }
+    })()`;
+    client.executeJavaScript(script).catch(error => {
+      if (popup && !popup.isDestroyed() && id === quickRequest) popup.webContents.send('quickask:answer', { error: error.message, done: true });
+    });
   });
   ipcMain.on('quickask:close', (event) => { if (popup && !popup.isDestroyed() && event.sender === popup.webContents) popup.close(); });
   const askAboutSelection = async () => {

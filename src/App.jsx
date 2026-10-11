@@ -1,3 +1,13 @@
+import ChatOfficeCard from './ChatOfficeCard.jsx';
+import { CHAT_OFFICE_GUIDE } from './chatOffice.js';
+import StreamRow from './StreamRow.jsx';
+import VirtualMessage from './VirtualMessage.jsx';
+const OfficeEditor = lazy(() => import('./OfficeEditor.jsx'));
+import SyncRecoveryNotice from './SyncRecoveryNotice.jsx';
+import { useRecordSearch } from './useRecordSearch.js';
+import { publishStream, clearStream } from './streamState.js';
+import ModelMenu from './AnchoredMenu.jsx';
+import PdfReader from './PdfReader.jsx';
 import { flushSync, createPortal } from 'react-dom';
 import { resumableChatReader } from './chatStream.js';
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, useCallback, lazy, Suspense } from 'react';
@@ -1161,6 +1171,7 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
    * A block that does not parse falls through and is shown as the code it is.
    * A "could not draw this" box would hide what the model actually wrote,
    * which is the one thing that could say why. */
+  if (language === 'office') return <ChatOfficeCard source={codeContent} />;
   if (language === 'chart') {
     const drawn = <Chart source={codeContent} t={t} />;
     if (drawn && parseChart(codeContent)) return drawn;
@@ -1574,6 +1585,7 @@ function App() {
   const [isModelDropdownOpen, setIsModelDropdownOpen] = useState(false);
   const [isVisionDropdownOpen, setIsVisionDropdownOpen] = useState(false);
   const dropdownRef = useRef(null);
+  const modelMenuRef = useRef(null);
   const visionDropdownRef = useRef(null);
 
   /* The composer's own two menus.
@@ -1772,6 +1784,7 @@ function App() {
    * seconds apart during boot — and wrote chats into both.
    */
   const profileScope = deriveScope(user, 'ready');
+  const indexedSearch = useRecordSearch(parseTagQuery(sessionSearchQuery).text.trim().toLowerCase(), profileScope, !!user);
   const accountId = ownerOfScope(profileScope);
   /* The first sync of an account on this device. Until it finishes, the app
      is covered by a progress screen: tabs opened over a half-downloaded
@@ -2453,7 +2466,7 @@ function App() {
   /* Whether a finished generation is worth interrupting for. Off by default:
      a notification nobody asked for is the reason people turn notifications
      off. See src/notify.js for why it can be on and still show nothing. */
-  const [notifyWhenDone, setNotifyWhenDone] = useState(() => readStr('notifyWhenDone', 'false') === 'true');
+  const [notifyWhenDone, setNotifyWhenDone] = useState(() => readStr('notifyWhenDone', window.ollamaNative?.platform === 'android' ? 'true' : 'false') === 'true');
 
   useEffect(() => {
     setSetting('ttsEngine', ttsEngine);
@@ -3088,6 +3101,7 @@ function App() {
   /* The row for a message, drawn first if it is in the part not shown. `then`
      gets the element once it is on the page. */
   const withMessageRow = useCallback((index, then) => {
+    window.dispatchEvent(new CustomEvent('webui-reveal-row', { detail: { chat: currentSessionIdRef.current, index } }));
     const row = messageRefs.current[index];
     if (row && index >= historyStartRef.current) { then?.(row); return; }
     setHistoryWindow({ chat: currentSessionIdRef.current, from: index });
@@ -3681,7 +3695,7 @@ function App() {
   useEffect(() => { if (generatingSessionId) lastTurnChatRef.current = generatingSessionId; }, [generatingSessionId]);
 
   const announceFinished = (sessionId) => {
-    if (!notifyWhenDone || !unattended()) return;
+    if (!notifyWhenDone || (window.ollamaNative?.platform !== 'android' && !unattended())) return;
     const chat = sessionsRef.current.find(session => String(session.id) === String(sessionId));
     notify(t('notify.ready'), {
       // The chat's name is the whole of the useful detail: it says which of
@@ -4681,6 +4695,7 @@ function App() {
    * record of what was said, is never rewritten by editing. Two fields, two
    * meanings. See src/CanvasPanel.jsx. */
   const [canvasIndex, setCanvasIndex] = useState(null);
+  const [officeSeed, setOfficeSeed] = useState(null);
 
   /* Tools from MCP servers, if `mcp.json` names any.
    *
@@ -5076,7 +5091,7 @@ function App() {
         if (!previewable && !runnable && lineCount <= 15) return;
         if (!block.content.trim()) return;
         // Drawn in place (diagram, quiz, chart): not code to open beside the chat.
-        if (/^(mermaid|quiz|chart)$/i.test(String(block.language || '').trim())) return;
+        if (/^(mermaid|quiz|chart|office)$/i.test(String(block.language || '').trim())) return;
         results.push({
           id: `${messageIndex}:${blockIndex}`,
           version: results.length + 1,
@@ -5323,7 +5338,7 @@ function App() {
   // Close dropdown on outside click
   useEffect(() => {
     const handleClickOutside = (event) => {
-      if (dropdownRef.current && !dropdownRef.current.contains(event.target)) {
+      if (dropdownRef.current && !dropdownRef.current.contains(event.target) && !modelMenuRef.current?.contains(event.target)) {
         setIsModelDropdownOpen(false);
       }
       if (visionDropdownRef.current && !visionDropdownRef.current.contains(event.target)) {
@@ -9214,6 +9229,14 @@ function App() {
   const rowCacheRef = useRef(new Map());
   useLayoutEffect(() => { streamTickRef.current = false; });
   const cachedRow = (next, i, build) => {
+    const message = messages[i];
+    const toolResult = m => m?.role === 'user' && String(m.content || '').trim().startsWith('<TOOL_RESULT>') && String(m.content || '').trim().endsWith('</TOOL_RESULT>');
+    if (i < historyStart || message.continuation || toolResult(message) || (starredOnly && !message.starred)) return null;
+    if (message.role === 'assistant') {
+      let previous = i - 1;
+      while (previous >= 0 && toolResult(messages[previous])) previous--;
+      if (previous >= 0 && messages[previous].role === 'assistant') return null;
+    }
     let end = i + 1;
     while (end < messages.length && (messages[end]?.role === 'assistant'
       || (messages[end]?.role === 'user' && String(messages[end].content || '').trim().startsWith('<TOOL_RESULT>')))) end++;
@@ -9233,7 +9256,7 @@ function App() {
         <div className="safe-boundary" role="alert"><span>{t('msg.renderFailed')}</span></div>
       </div>
     );
-    const built = safely(`row:${i}`, build, failed);
+    const built = <StreamRow chat={currentSessionId} from={i} to={end} messages={messages} render={liveMessages => safely(`row:${i}`, () => build(liveMessages), failed)} />;
     const out = (
       <SafeBoundary key={i} name={`row:${i}`} resetKey={deps[deps.length - 1]}
         fallback={(error, retry) => (
@@ -9244,7 +9267,9 @@ function App() {
             </div>
           </div>
         )}>
-        {built}
+        <VirtualMessage chat={currentSessionId} index={i} pinned={end >= messages.length || !!chatSearchQuery.trim() || starredOnly}>
+          {built}
+        </VirtualMessage>
       </SafeBoundary>
     );
     next.set(i, { deps, out, sid: currentSessionId, hs: historyStart, starred: starredOnly });
@@ -10019,9 +10044,10 @@ function App() {
   const handleDrop = async (e, target = 'composer') => {
     e.preventDefault();
     setIsDragging(false);
-    const items = Array.from(e.dataTransfer?.items || []);
+    const items = Array.from(e.dataTransfer?.items || []).filter(it => it.kind === 'file');
     const entries = items.map(it => (it.kind === 'file' ? it.webkitGetAsEntry?.() : null));
     const all = Array.from(e.dataTransfer?.files || []);
+    const nativePaths = all.map(file => { try { return window.ollamaNative?.pathForFile?.(file) || ''; } catch { return ''; } });
     // A folder arrives as a zero-byte "file" too; it is not one to attach.
     const folders = entries.filter(en => en?.isDirectory);
     const files = all.filter((f, i) => !entries[i]?.isDirectory);
@@ -10041,15 +10067,21 @@ function App() {
       const caret = editField
         ? { start: editField.selectionStart ?? editField.value.length, end: editField.selectionEnd ?? editField.value.length }
         : composerCaret();
-      const wanted = await Promise.all(folders.map(async f => ({ kind: 'folder', name: f.name, children: await folderChildren(f) })));
-      const paths = await locatePaths(wanted);
+      const unresolved = folders.filter(f => !nativePaths[entries.indexOf(f)]);
+      const wanted = await Promise.all(unresolved.map(async f => ({ kind: 'folder', name: f.name, children: await folderChildren(f) })));
+      const paths = wanted.length ? await locatePaths(wanted) : [];
+      const resolved = new Map(unresolved.map((f, i) => [f, paths[i]]));
+      let missing = 0;
       const text = folders.map((f, i) => {
-        const p = paths[i] || f.name;
+        const p = nativePaths[entries.indexOf(f)] || resolved.get(f);
+        if (!p) { missing++; return ''; }
         return /\s/.test(p) ? `"${p}"` : p;
-      }).join(' ');
+      }).filter(Boolean).join(' ');
+      if (!text) { toast('폴더의 전체 경로를 확인하지 못했습니다. 탐색기에서 ‘경로로 복사’한 뒤 붙여 넣어 주세요.', 'error', 7000); return; }
       if (target === 'edit') insertIntoEdit(text, caret);
       else insertAtCaret(text, { sep: ' ', caret });
-      addLog(`Inserted ${folders.length} folder path(s).`, 'success');
+      addLog(`Inserted ${folders.length - missing} folder path(s).`, 'success');
+      if (missing) toast(`${missing}개 폴더의 전체 경로를 확인하지 못했습니다. 탐색기에서 ‘경로로 복사’한 뒤 붙여 넣어 주세요.`, 'error', 7000);
     }
   };
 
@@ -10575,6 +10607,7 @@ function App() {
        is what the chat remembers; `activeModel` is what actually answers,
        which a routing rule may change for this one message. Collapsing them
        would make a rule that fired once silently become the chat's model. */
+    if (e && notifyWhenDone && window.ollamaNative?.platform === 'android' && notifyState() === 'default') void askToNotify();
     const chosenModel = overrideModel || selectedModel;
     let activeModel = chosenModel;
     e?.preventDefault();
@@ -11762,6 +11795,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
         const finalSystemPrompt = [
           environmentPreamble(),
+          CHAT_OFFICE_GUIDE,
           /* Who is asking, before what is known about them: the profile is
              stated fact and the memories are things inferred from earlier
              conversations, and a model reading them in that order treats a
@@ -11965,12 +11999,16 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       /* Text after a drawing call waits for its picture -- see
          `holdAfterDrawing`. Released once the tools have had their say. */
       let holdDrawn = true;
-      const flushNow = () => {
+      let lastSessionCommit = 0;
+      const flushNow = (force = false) => {
         flushHandle = null;
         if (flushTimer !== null) { clearTimeout(flushTimer); flushTimer = null; }
         lastCommitAt = Date.now();
         streamTickRef.current = true;
         const committedContent = holdDrawn ? holdAfterDrawing(assistantContent) : assistantContent;
+        publishStream(currentSessionId, newMessageIndex, committedContent);
+        if (force !== true && Date.now() - lastSessionCommit < 500) return;
+        lastSessionCommit = Date.now();
         reviseSession(currentSessionId, s => {
           const msgs = [...s.messages];
           msgs[newMessageIndex] = { ...msgs[newMessageIndex], content: committedContent, isMcpFetching: false };
@@ -12011,13 +12049,14 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         cancelFlush();
         assistantContent = composeContent(true);
         holdDrawn = false;
-        flushNow();
+        flushNow(true);
+        clearStream(currentSessionId);
       };
       // Everything the model wrote, on screen: no drawing is going to run.
       const releaseHeld = () => {
         if (!holdDrawn) return;
         holdDrawn = false;
-        if (holdAfterDrawing(assistantContent) !== assistantContent) flushNow();
+        if (holdAfterDrawing(assistantContent) !== assistantContent) flushNow(true);
       };
 
       while (true) {
@@ -12246,7 +12285,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       // Commit it synchronously: a stream that ends without a `done` frame
       // would otherwise lose the last batch to the cancelled callback.
       // Metrics set by `done` survive because the flush only rewrites content.
-      flushNow();
+      flushNow(true);
+      clearStream(currentSessionId);
       flushPartial = null;
       addLog(`Received response`, 'success');
 
@@ -14342,7 +14382,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     const q = typedText.trim().toLowerCase();
     if (!q) return tagged;
 
-    const literal = tagged.filter(s => (
+    const literal = tagged.filter(s => indexedSearch && indexedSearch.stamps[`chat:${s.id}`] === s.updatedAt
+      ? indexedSearch.hits.has(String(s.id)) : (
       s.title.toLowerCase().includes(q)
       || s.messages.some(m => typeof m.content === 'string' && m.content.toLowerCase().includes(q))
     ));
@@ -15833,7 +15874,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 <ChevronDown size={14} />
               </button>
               {isModelDropdownOpen && (
-                <div className="dropdown-menu header-model-menu">
+                <ModelMenu anchor={dropdownRef} menuRef={modelMenuRef}>
                   <label className="model-find header-model-search">
                     <Search size={13} aria-hidden="true" />
                     <input type="search" value={modelQuery} onChange={e => setModelQuery(e.target.value)} placeholder={t('composer.modelFind')} aria-label={t('composer.modelFind')} />
@@ -15852,7 +15893,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                       {selectedModel === m.name && <Check size={14} className="check-icon" />}
                     </button>
                   ))}
-                </div>
+                </ModelMenu>
               )}
             </div>
 
@@ -16078,16 +16119,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 ) : viewingAttachment.type === 'video' ? (
                   <video src={viewingAttachment.preview} controls autoPlay loop playsInline className="attachment-viewer-video" />
                 ) : originalOf(viewingAttachment) && readableAsDocument(viewingAttachment) ? (
-                  /* The document as a document. Only a PDF, and only while
-                     this tab still holds the file it was attached from -- see
-                     `originals` and `readableAsDocument`. The browser has a PDF
-                     reader of its own and this is it; there is no reader here
-                     and there should not be one. */
-                  <iframe
-                    className="attachment-viewer-doc"
-                    src={originalOf(viewingAttachment)}
-                    title={viewingAttachment.name}
-                  />
+                  <PdfReader src={originalOf(viewingAttachment)} title={viewingAttachment.name} />
                 ) : (
                   <pre>{viewingAttachment.data || indexedPreview(viewingAttachment) || t('attach.nothingToShow')}</pre>
                 )}
@@ -16244,7 +16276,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               {historyStart > 0 && (
                 <HistorySentinel count={historyStart} onShow={() => showEarlier()} label={t('chat.showEarlier', { n: historyStart })} />
               )}
-              {typingOnlyList(() => { const nextRows = new Map(); const rows = messages.map((msg, i) => cachedRow(nextRows, i, () => {
+              {typingOnlyList(() => { const nextRows = new Map(); const rows = messages.map((originalMessage, i) => cachedRow(nextRows, i, (messages) => {
+                const msg = messages[i];
                 // Earlier than the part of a long chat being shown.
                 if (i < historyStart) return null;
                 const isPureToolResult = (m) => m && m.role === 'user' && m.content.trim().startsWith('<TOOL_RESULT>') && m.content.trim().endsWith('</TOOL_RESULT>');
@@ -17926,6 +17959,9 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 </button>
 
                 <Popover open={showAddMenu} onClose={() => setShowAddMenu(false)} className="composer-menu">
+                  <button type="button" className="composer-menu-item" onClick={() => { setShowAddMenu(false); setOfficeSeed({ text: '', title: '' }); }}>
+                    <FileText size={15} /><span className="composer-menu-label">오피스 · AI 제작<em>PPT · Word · Excel · 한글 열기·편집·제작</em></span>
+                  </button>
                   <button
                     type="button"
                     className="composer-menu-item"
@@ -20636,6 +20672,8 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
          * them appear in different places would make that harder to see rather
          * than easier. Only one is ever open: `openArtifact` closes this, and
          * this closes that. */}
+        <SyncRecoveryNotice scope={profileScope} />
+        {officeSeed && <Suspense fallback={<div role="status">문서 편집기를 불러오는 중…</div>}><OfficeEditor key={profileScope} scope={profileScope} seed={officeSeed} model={selectedModel} onClose={() => setOfficeSeed(null)} /></Suspense>}
         {canvasIndex !== null && messages[canvasIndex] && (
           <CanvasPanel
             /* Keyed by chat and message, so switching chats with the panel
@@ -20648,6 +20686,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             language={promptLanguageName(lang)}
             numCtx={numCtx}
             onClose={() => setCanvasIndex(null)}
+            onOffice={text => setOfficeSeed({ text, title: currentSession?.title || '' })}
             onToast={(message, kind) => toast(message, kind, 6000)}
             onPersist={(document) => {
               /* Written beside the answer, never over it. The transcript says

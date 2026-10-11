@@ -228,7 +228,7 @@ eq('a newer edit is applied',
 eq('the previous edit is retained in history',
   database().prepare(`
     SELECT json_extract(payload, '$.title') AS title
-      FROM record_history
+        FROM readable_record_history
      WHERE user_id = ? AND kind = 'chat' AND id = 'c1'
      ORDER BY rev DESC LIMIT 1
   `).get(alice.id).title, 'first');

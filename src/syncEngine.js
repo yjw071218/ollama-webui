@@ -25,7 +25,7 @@ import { jankPhase } from './jankWatch.js';
 
 import { foldNewerFields } from '../server/chatMerge.js';
 import { observeStamp, nextStamp } from './logicalClock.js';
-import localforage from 'localforage';
+import { syncStorage } from './syncStorage.js';
 import { api, ApiError, currentTabSession } from './session.jsx';
 import { ownerOfScope } from './profileScope.js';
 import { mergeJobs, trimJobs } from './studioTools.js';
@@ -36,7 +36,8 @@ import {
   settingStamps, stampSetting, forgetSettingStamp,
 } from './settingsStore.js';
 
-const named = (storeName) => localforage.createInstance({ name: 'ollama-webui', storeName });
+const named = (storeName) => syncStorage(storeName);
+const chatStorage = syncStorage();
 
 const SESSION_PREFIX = 'ollama-sessions';
 
@@ -142,6 +143,7 @@ const writeRev = (scope, rev) => {
  * not. It is a cache, not a source of truth — losing it costs one large upload,
  * not correctness, because the server resolves by timestamp anyway.
  */
+export const syncedRecords = (scope) => readSent(scope);
 const readSent = (scope) => {
   try { return JSON.parse(localStorage.getItem(sentKey(scope)) || '{}'); } catch (e) { return {}; }
 };
@@ -287,7 +289,7 @@ export const collectLocal = async (scope) => {
   const keys = keysFor(scope);
   const out = [];
 
-  const chats = (await localforage.getItem(keys.chats)) || [];
+  const chats = (await chatStorage.getItem(keys.chats)) || [];
   for (const chat of chats) {
     if (chat?.id == null) continue;
     // By address rather than by value -- see `withoutPictureBytes`.
@@ -428,7 +430,7 @@ export const applyLocal = async (scope, records) => {
     await store.setItem(key, next);
   };
 
-  await mergeList(localforage, keys.chats, 'chat', 'updatedAt', 'chats');
+  await mergeList(chatStorage, keys.chats, 'chat', 'updatedAt', 'chats');
   await mergeList(named('knowledge'), keys.knowledge, 'document', 'addedAt', 'documents');
   await mergeList(named('memory'), keys.memory, 'memory', 'createdAt', 'memories');
 
@@ -599,6 +601,35 @@ export const syncOnce = async (scope, { full = false, limit = 500, onPhase } = {
   // stops one person's chats being merged into another person's list.
   if (result.ownerId && result.ownerId !== ownerId) {
     throw new OwnerMismatch(ownerId, result.ownerId);
+  }
+
+  if (result.resetRequired) {
+    // Never re-upload a cache whose deletions have been collected. First stage
+    // a complete server snapshot; preserve absent local work in a recovery copy.
+    const snapshot = [];
+    let cursor = 0, page;
+    do {
+      page = await api(`/api/auth/sync?since=${cursor}`);
+      if (page.ownerId !== ownerId) throw new OwnerMismatch(ownerId, page.ownerId);
+      snapshot.push(...(page.records || []));
+      if (!page.complete && page.rev <= cursor) throw new Error('Sync snapshot did not advance.');
+      cursor = page.rev;
+    } while (!page.complete);
+    const keys = new Set(snapshot.filter(r => !r.deleted).map(r => `${r.kind}:${r.id}`));
+    const presentLocal = await collectLocal(scope);
+    const absent = presentLocal.filter(r => !r.deleted && !keys.has(`${r.kind}:${r.id}`));
+    if (absent.length) {
+      await chatStorage.setItem(`sync-recovery:${scope}:${Date.now()}`, { ownerId, records: absent, at: Date.now() });
+      globalThis.window?.dispatchEvent?.(new CustomEvent('webui-sync-recovery', { detail: { count: absent.length } }));
+    }
+    const recoveryCache = new Map();
+    const restored = await Promise.all(snapshot.map(async r => r.deleted ? r : { ...r, payload: await restorePayload(r.payload, recoveryCache) }));
+    const applied = await applyLocal(scope, [...absent.map(r => ({ ...r, deleted: true, payload: null, updatedAt: Math.max(Date.now(), r.updatedAt + 1) })), ...restored]);
+    writeSent(scope, Object.fromEntries(snapshot.filter(r => !r.deleted).map(r => [`${r.kind}:${r.id}`, r.updatedAt])));
+    writeRev(scope, cursor);
+    return { applied, sent: 0, rejected: 0, refused: [], refusedCount: 0, rev: cursor, complete: false,
+      received: snapshot.length, remaining: 0, changedLocally: applied.chats + applied.settings + applied.documents + applied.memories + applied.lists + applied.studio,
+      localCount: local.length, recovered: absent.length };
   }
 
   onPhase?.({ phase: 'applying', received: (result.records || []).length, remaining: result.remaining });

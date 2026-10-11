@@ -24,6 +24,8 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
+import { initialiseStorageSecurity } from './storageSecurity.js';
+import { initialiseSyncRetention } from './syncRetention.js';
 
 // Required rather than imported, and at first use rather than at load.
 //
@@ -413,6 +415,9 @@ export const database = () => {
   migrateRecordIntegrity();
   runMigrations();
   importLegacyJson();
+  try { initialiseStorageSecurity(db, DATA_DIR); }
+  catch (error) { db.close(); db = null; throw error; }
+  initialiseSyncRetention(db);
   return db;
 };
 
