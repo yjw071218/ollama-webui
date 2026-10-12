@@ -1,3 +1,6 @@
+import './downloadStatus.js';
+import './filePreview.css';
+import LocalAnswerFile from './LocalAnswerFile.jsx';
 import { remarkTableBreaks, SOURCE_GUIDE, CONTINUE_WORK_PROMPT } from './answerPresentation.js';
 import ChatOfficeCard from './ChatOfficeCard.jsx';
 import { CHAT_OFFICE_GUIDE } from './chatOffice.js';
@@ -1272,20 +1275,14 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
    chat again with remark/rehype/KaTeX, and remounted each code block because
    `components` was a new object each time. On a phone that was the lag. */
 const ANSWER_REMARK = [remarkGfm, remarkCjkFriendly, remarkMath, remarkTableBreaks];
-const isLocalAnswerPath = value => /^(?:[a-z]:[\\/]|file:\/\/)/i.test(value || '');
+const isLocalAnswerPath = value => /^(?:[a-z]:[\\/]|file:\/\/)/i.test(value || '') || /^\/(?!api\/)[^?#]+\.(?:pdf|pptx?|odp|docx?|odt|rtf|txt|md|tex|xlsx?|ods|csv|tsv|hwpx?|html?|svg|png|jpe?g|webp|json|zip)(?::\d+)?$/i.test(value || '');
 const answerUrlTransform = (url, key) => key === 'href' && isLocalAnswerPath(url) ? url : defaultUrlTransform(url);
 const AnswerLink = ({ node, ...props }) => {
-  const [error, setError] = useState('');
   if (!isLocalAnswerPath(props.href)) {
     const external = /^https?:\/\//i.test(props.href || '');
     return <a {...props} className={external ? 'source-chip' : props.className} title={external ? `${extractText(props.children)} · ${props.href}` : props.title} target="_blank" rel="noopener noreferrer">{external && <span className="source-chip-icon" aria-hidden="true">↗</span>}{props.children}</a>;
   }
-  return <><a {...props} onClick={async e => {
-    e.preventDefault(); e.stopPropagation(); setError('');
-    if (!window.ollamaNative?.openLocalPath) { setError('로컬 파일 열기는 업데이트된 PC 클라이언트에서 사용할 수 있습니다.'); return; }
-    try { await window.ollamaNative.openLocalPath(props.href); }
-    catch (err) { setError(String(err?.message || err)); }
-  }} />{error && <span role="alert"> {error}</span>}</>;
+  return <LocalAnswerFile {...props} />;
 };
 const AnswerMarkdown = memo(({ text, basePlugins, citations, onOpenArtifact, ageOf }) => {
   const openRef = useRef(onOpenArtifact);
@@ -7528,6 +7525,7 @@ function App() {
       <button className="cmd-item" onClick={() => { setShowProfileMenu(false); nativeApp.changeServer().catch(() => {}); }}>
         <ServerIcon size={15} /><span className="cmd-label">{t('app.changeServer')}</span>
       </button>
+      {typeof nativeApp.showQuickAskBubble === 'function' && <button className="cmd-item" onClick={()=>{setShowProfileMenu(false);nativeApp.showQuickAskBubble().catch(()=>{});}}><span aria-hidden="true">✦</span><span className="cmd-label">AI 플로팅 버튼 켜기</span></button>}
       {typeof nativeApp.checkUpdates === 'function' && (
         <button className="cmd-item" onClick={() => { setShowProfileMenu(false); nativeApp.checkUpdates().catch(() => {}); }}>
           <Download size={15} /><span className="cmd-label">{t('app.checkUpdates')}</span>

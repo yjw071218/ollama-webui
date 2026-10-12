@@ -61,11 +61,14 @@ try{
  assert.equal(await evaluate('localStorage.length'),0);
  await send('Page.reload');await until('!!document.getElementById("model")?.value');
  assert.equal(await evaluate('document.querySelectorAll(".answer").length'),0);
- mode='error';await evaluate(`document.querySelector('[data-prompt]').click()`);await until('document.getElementById("send").textContent === "보내기"');
+ mode='error';await evaluate(`document.getElementById('input').value='오류 뒤에도 남는 질문';document.getElementById('form').requestSubmit()`);await until('document.getElementById("send").textContent === "보내기"');
  assert.match(await evaluate('document.getElementById("status").textContent'),/test failure/);
+ assert.equal(await evaluate('document.getElementById("input").value'),'오류 뒤에도 남는 질문');
  mode='hold';await evaluate(`document.querySelector('[data-prompt]').click()`);await until('document.getElementById("send").textContent === "중지"');
  await evaluate('document.getElementById("form").requestSubmit()');await until('document.getElementById("send").textContent === "보내기"');
  assert.match(await evaluate('document.getElementById("status").textContent'),/중지/);
+ mode='ok';await evaluate(`document.getElementById('form').requestSubmit()`);await until('document.getElementById("send").textContent === "보내기"');
+ assert.equal(await evaluate('document.getElementById("input").value'),'');
  mode='ok';await send('Page.reload');await until('!!document.getElementById("model")?.value');
  await evaluate(`window.__ollamaNative=[{type:'selection',text:'선택한 글을 요약하거나 번역하고, 궁금한 점을 물어보세요.'}];window.dispatchEvent(new Event('ollama-native-action'))`);
  assert.equal(await evaluate('document.documentElement.scrollWidth <= innerWidth'),true);

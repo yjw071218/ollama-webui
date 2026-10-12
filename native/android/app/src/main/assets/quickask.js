@@ -11,6 +11,7 @@
     $('send').disabled = !ready && !controller;
     $('send').textContent = controller ? '중지' : '보내기';
     $('model').disabled = !!controller || !ready;
+    $('input').disabled = !!controller;
     actions.forEach(button => { button.disabled = !!controller || !ready; });
   }
   function consumeActions() {
@@ -24,14 +25,19 @@
   }
   window.addEventListener('ollama-native-action', consumeActions);
   consumeActions();
+  async function sessionHeaders() {
+    const response = await fetch('/api/auth/session', {cache:'no-store', headers:auth['X-Session-Id']?{'X-Session-Id':auth['X-Session-Id']}:{}, signal:AbortSignal.timeout(15000)});
+    if (!response.ok) throw new Error('로그인 연결을 확인해 주세요.');
+    const session = await response.json();
+    if (session.anyAccounts && !session.user) { $('open').hidden = false; throw new Error('로그인이 만료되었습니다. 앱에서 로그인한 뒤 다시 열어 주세요.'); }
+    if (session.pendingDevice) throw new Error('메인 앱에서 기기 승인을 완료해 주세요.');
+    return {...(session.sessionId ? {'X-Session-Id':session.sessionId}:{}), ...(session.csrfToken ? {'X-CSRF-Token':session.csrfToken}:{})};
+  }
   async function models() {
     $('retry').hidden = true; $('open').hidden = true;
     status('모델 불러오는 중…');
     try {
-      const sessionResponse = await fetch('/api/auth/session', { cache: 'no-store', signal: AbortSignal.timeout(15000) });
-      if (!sessionResponse.ok) { $('open').hidden = false; throw new Error('클라이언트의 서버 연결과 로그인을 확인해 주세요.'); }
-      const session = await sessionResponse.json();
-      auth = { ...(session.sessionId ? { 'X-Session-Id': session.sessionId } : {}), ...(session.csrfToken ? { 'X-CSRF-Token': session.csrfToken } : {}) };
+      auth = await sessionHeaders();
       const response = await fetch('/api/tags', { cache: 'no-store', headers: auth, signal: AbortSignal.timeout(15000) });
       if (response.status === 401 || response.status === 403) {
         $('open').hidden = false;
@@ -76,6 +82,7 @@
       done = !!value.done;
     };
     try {
+      auth = await sessionHeaders();
       const response = await fetch('/api/chat', {
         method: 'POST', signal: current.signal,
         headers: { ...auth, 'Content-Type': 'application/json', 'X-Chat-Ephemeral': '1', 'X-Cli-Tools': 'off' },
@@ -99,6 +106,7 @@
         if (chunk.done) { if (!done && buffer.trim()) frame(buffer); break; }
       }
       if (!done) throw new Error('연결이 끊겼습니다. 다시 질문해 주세요.');
+      $('input').value = '';
       history.push(message, { role: 'assistant', content });
       status('대화 기록에 저장하지 않습니다.');
       if (!content) answer.textContent = '텍스트 답변이 없습니다.';
@@ -117,7 +125,7 @@
     if (controller) { controller.abort(); return; }
     const question = $('input').value;
     if (!question.trim()) { $('input').focus(); return; }
-    $('input').value = ''; void ask(question);
+    void ask(question);
   });
   actions.forEach(button => button.addEventListener('click', () => void ask(button.dataset.prompt)));
   $('retry').addEventListener('click', () => void models());
@@ -128,6 +136,13 @@
   function dispose() { closed = true; controller?.abort(); history = []; selection = ''; lastAnswer = ''; }
   $('close').addEventListener('click', () => { dispose(); window.ollamaNative?.closeQuickAsk(); });
   $('open').addEventListener('click', () => { dispose(); window.ollamaNative?.openQuickAskApp(); });
+  $('bubble').addEventListener('click', async () => {
+    try { await window.ollamaNative?.showQuickAskBubble(); } catch(error) { status(error.message); }
+  });
+  $('input').addEventListener('keydown', event => {
+    if (event.key === 'Enter' && !event.shiftKey && !event.isComposing) { event.preventDefault(); $('form').requestSubmit(); }
+  });
+  window.addEventListener('pageshow', () => { closed = false; });
   window.addEventListener('pagehide', dispose);
   available(); void models();
 })();

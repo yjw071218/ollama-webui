@@ -1,3 +1,4 @@
+import {SlidePreview} from './SlidePreview.jsx';
 import React, { useEffect, useRef, useState } from 'react';
 import localforage from 'localforage';
 import { readOffice, editOfficeBytes, createPresentation, createHangul, createWord, createWorkbook, writeWorkbook, convertOfficeBytes, downloadOffice } from './officeEditing.js';
@@ -8,12 +9,8 @@ import './officeEditor.css';
 
 const store=localforage.createInstance({name:'ollama-webui',storeName:'officeDrafts'});
 const exportsFor={pptx:['pptx','ppt','odp','pdf'],docx:['docx','doc','odt','rtf','txt','pdf'],hwpx:['hwpx','hwp'],xlsx:['xlsx','xls','ods','csv','tsv','pdf']};
-const layoutNames={section:'섹션 표지',quote:'인용 강조',split:'비대칭 분할',metrics:'핵심 수치',closing:'마무리',title:'표지',body:'본문',columns:'비교',cards:'카드',chart:'차트',timeline:'타임라인'};
-export function SlidePreview({slide,index=0}) {
-  return <svg className="office-slide-preview" viewBox="0 0 1333.3 750" role="img" aria-label={`슬라이드 ${index+1} 디자인 미리보기`}>
-    {slideScene(slide,index+1).map((s,i)=>s.type==='rect'?<rect key={i} x={s.x*100} y={s.y*100} width={s.w*100} height={s.h*100} fill={'#'+s.fill}/>:<foreignObject key={i} x={s.x*100} y={s.y*100} width={s.w*100} height={s.h*100}><div xmlns="http://www.w3.org/1999/xhtml" style={{color:'#'+s.color,fontSize:s.size*100/72,fontWeight:s.bold?700:400,fontFamily:'맑은 고딕, sans-serif',lineHeight:1.2,whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{s.text}</div></foreignObject>)}
-  </svg>;
-}
+const layoutNames={poster:"포스터",editorial:"매거진",freeform:"자유 디자인",section:'섹션 표지',quote:'인용 강조',split:'비대칭 분할',metrics:'핵심 수치',closing:'마무리',title:'표지',body:'본문',columns:'비교',cards:'카드',chart:'차트',timeline:'타임라인'};
+export {SlidePreview} from './SlidePreview.jsx';
 export default function OfficeEditor({scope,seed={},model,onClose}) {
   const [name,setName]=useState(seed.title||'새 문서'),[mode,setMode]=useState('pptx');
   const [slides,setSlides]=useState([normaliseSlide({title:seed.title||'제목',body:seed.text||'',layout:'title'})]);

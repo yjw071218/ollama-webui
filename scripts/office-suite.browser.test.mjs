@@ -43,8 +43,14 @@ try {
  assert.match(result.wordText,/수정된 문단/);assert.match(result.wordText,/마지막 문단/);
  for(const [format,r] of Object.entries(result.formats)){assert.equal(r.value,42,format);if(['xlsx','xls','ods'].includes(format))assert.equal(r.formula,'SUM(B2:B3)',format);}
  for(const format of ['xls','ods']) assert.equal(result.formats[format].total,50,format+' calculated sum');
- assert.equal(result.slides,11);
- console.log('PASS DOCX editing, XLSX/XLS/ODS/CSV/TSV values, spreadsheet formulas and eleven editable slide designs');
+ assert.equal(result.slides,14);
+ const custom=await run(`(async()=>{const canvas=document.createElement('canvas');canvas.width=2;canvas.height=2;canvas.getContext('2d').fillRect(0,0,2,2);const bytes=await window.officeTest.createPresentation([{layout:'freeform',elements:[{type:'ellipse',x:1,y:1,w:2,h:2,fill:'AB12EF'},{type:'image',src:canvas.toDataURL('image/png'),x:5,y:1,w:2,h:2},{type:'text',x:1,y:4,w:8,h:1,text:'편집 가능한 디자인',size:32,color:'123456'}]}]);return window.officeTest.encode64(bytes);})()`);
+ const customFiles=unzipSync(Buffer.from(custom,'base64'));
+ assert.ok(Object.keys(customFiles).some(name=>name.startsWith('ppt/media/')&&name.endsWith('.png')));
+ assert.match(strFromU8(customFiles['ppt/slides/slide1.xml']),/ellipse/);
+ assert.match(strFromU8(customFiles['ppt/slides/slide1.xml']),/편집 가능한 디자인/);
+ console.log('PASS embedded image, ellipse and editable text exported in custom PPTX');
+ console.log('PASS DOCX editing, XLSX/XLS/ODS/CSV/TSV values, spreadsheet formulas and fourteen editable slide designs');
  if(process.argv.includes('--convert')) {
   for(const [from,to,data] of [['docx','doc',result.word],['docx','odt',result.word],['pptx','odp',result.deck]]) {
    const out=await convertOffice({from,to,data});const back=await convertOffice({from:to,to:from,data:out.data});const files=unzipSync(Buffer.from(back.data,'base64'));

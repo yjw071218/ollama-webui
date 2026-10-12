@@ -4,3 +4,5 @@
 .office-file-icon{display:grid;place-items:center;border-radius:12px;width:44px;height:48px;background:color-mix(in srgb,var(--accent-color,#d97757) 15%,transparent);color:var(--accent-color,#d97757);flex-shrink:0}
 .office-download{display:inline-flex;gap:8px;align-items:center;margin:18px 0 12px;border:0!important;border-radius:10px;padding:10px 15px!important;background:var(--accent-color,#b96346)!important;color:white!important;font-weight:600;cursor:pointer}.office-download:disabled{opacity:.6;cursor:wait}.chat-office-card details{font-size:.8rem;color:var(--text-secondary)}.chat-office-card summary{cursor:pointer;padding:5px 0}.chat-office-card details>div{border-top:1px solid var(--border-color,#45413b);padding:10px 0}.chat-office-card:not(:has(.office-cover)){grid-template-columns:1fr}
 @media(max-width:580px){.chat-office-card{grid-template-columns:1fr}.office-cover{max-height:190px;min-height:0;aspect-ratio:16/9}.office-card-content{padding:16px}}
+
+.office-preview-button{margin:6px;padding:9px 13px;border:1px solid var(--border-color,#777);border-radius:10px;color:inherit;background:transparent;cursor:pointer}

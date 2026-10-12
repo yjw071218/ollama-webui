@@ -259,7 +259,13 @@ async function connect(value) {
       } catch { callback({}); }
     });
     ses.removeAllListeners('will-download');
-    ses.on('will-download', (_event, item) => item.setSaveDialogOptions({ title: tr('파일 저장', 'Save file') }));
+    ses.on('will-download', (_event, item, contents) => {
+      item.setSaveDialogOptions({ title: tr('파일 저장', 'Save file') });
+      const id='download-'+Date.now()+'-'+Math.random();
+      const send=state=>{if(contents&&!contents.isDestroyed())contents.send('client:download',{id,name:item.getFilename(),state,received:item.getReceivedBytes(),total:item.getTotalBytes()});};
+      send('saving');item.on('updated',(_e,state)=>send(state==='interrupted'?'failed':'progress'));
+      item.once('done',(_e,state)=>send(state==='completed'?'completed':state==='cancelled'?'cancelled':'failed'));
+    });
     clientWindow = createClientWindow({ icon: path.join(directory, 'icons/app.png'), show: !smoke, ...savedBounds(), pageBackground: settings.pageBackground, minWidth: 420, minHeight: 500, title: 'Ollama WebUI Client',
       webPreferences: { session: ses, contextIsolation: true, nodeIntegration: false, sandbox: true, webSecurity: true, allowRunningInsecureContent: false } },
       { server: openSetup, updates: () => notifyUpdate(true), menu: win => Menu.getApplicationMenu()?.popup({window:win}), newChat, zoomReset: () => setZoom(1) });

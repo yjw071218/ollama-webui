@@ -1,3 +1,4 @@
+import FilePreview from '../../src/FilePreview.jsx';
 import React from 'react';
 import {createRoot} from 'react-dom/client';
 import ReactMarkdown from 'react-markdown';
@@ -17,3 +18,17 @@ const graphic={title:'자료 비교 · 예시 데이터',blocks:[
 ],sources:[{title:'출처 예시',url:'https://example.org'}]};
 window.presentationTest={render:()=>root.render(<I18nProvider><InfoBlocks source={JSON.stringify(graphic)}/><ReactMarkdown remarkPlugins={[remarkGfm,remarkTableBreaks]}>{'| 구분 | 설명 |\n|---|---|\n|줄바꿈|첫 줄<br>둘째 줄<BR />셋째 줄|\n|코드|`<br>`|'}</ReactMarkdown><ChatOfficeCard source={JSON.stringify({format:'pptx',title:'다음 장을 만드는 이야기',slides:[{title:'생각을\n경험으로 바꾸다',body:'프로젝트의 문제와 해결을 중심으로',kicker:'PORTFOLIO · 2026',layout:'title',theme:'forest'}]})}/></I18nProvider>),malformed:()=>root.render(<InfoBlocks source={'{"type":"stats","items":'}/>)};
 window.presentationTest.render();
+
+window.presentationTest.design=()=>root.render(<I18nProvider><ChatOfficeCard source={JSON.stringify({format:'pptx',title:'생각을 경험으로 바꾸다',slides:[{title:'생각을 경험으로 바꾸다',layout:'freeform',theme:'paper',elements:[
+{type:'rect',x:0,y:0,w:13.333,h:7.5,fill:'F4F0E8'},
+{type:'rect',x:8.6,y:0,w:4.733,h:7.5,fill:'6652C2'},
+{type:'ellipse',x:9.2,y:1.3,w:3.5,h:3.5,fill:'D1C4F6'},
+{type:'ellipse',x:10.1,y:2.2,w:1.7,h:1.7,fill:'6652C2'},
+{type:'text',x:.8,y:.65,w:7,h:.4,text:'CREATIVE REPORT  /  2026',size:12,color:'6652C2',bold:true},
+{type:'text',x:.8,y:2,w:7,h:2.5,text:'생각을\n경험으로 바꾸다',size:46,color:'252136',bold:true},
+{type:'rect',x:.8,y:5.1,w:1.15,h:.05,fill:'6652C2'},
+{type:'text',x:.8,y:5.5,w:6.5,h:.8,text:'작은 아이디어에서 시작하는 새로운 이야기',size:18,color:'706980'},
+{type:'text',x:9.2,y:6.5,w:3.4,h:.4,text:'OLLAMA WEBUI  ✦',size:14,color:'FFFFFF',bold:true}
+]}]})}/></I18nProvider>);
+
+window.presentationTest.pdf=async()=>{const bytes=new Uint8Array(await(await fetch('/native/artifacts/latex-preview.pdf')).arrayBuffer());root.render(<FilePreview file={{name:'한글 수식.pdf',bytes}} onClose={()=>window.presentationTest.render()}/>);};

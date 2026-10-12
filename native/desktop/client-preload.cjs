@@ -15,6 +15,7 @@ const { contextBridge, ipcRenderer, webUtils } = require('electron');
 
 contextBridge.exposeInMainWorld('ollamaNative', {
   platform: 'desktop',
+  onDownload: callback => {const handler=(_event,detail)=>callback(detail);ipcRenderer.on('client:download',handler);return ()=>ipcRenderer.removeListener('client:download',handler);},
   quickAnswer: value => ipcRenderer.send('client:quickAnswer', value),
   pathForFile: file => { try { return webUtils.getPathForFile(file); } catch { return ''; } },
   openInEditor: value => ipcRenderer.invoke('client:openInEditor', value),

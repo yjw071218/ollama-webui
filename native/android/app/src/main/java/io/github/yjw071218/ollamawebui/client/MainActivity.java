@@ -942,6 +942,10 @@ public class MainActivity extends Activity {
                             .setContentIntent(progressOpen).build());
                     } else progressManager.cancel(progressId);
                     reply(reply, id, true, null); break;
+                case "quickAskBubble":
+                    if (this instanceof QuickAskActivity) ((QuickAskActivity)this).minimizeToBubble();
+                    else startActivity(new Intent(this, QuickAskActivity.class).putExtra("enableBubble", true));
+                    reply(reply, id, true, null); break;
                 case "quickAskClose":
                     if (floatingAsk()) finish();
                     reply(reply, id, true, null); break;
@@ -972,6 +976,15 @@ public class MainActivity extends Activity {
         try { startActivityForResult(new Intent(Intent.ACTION_CREATE_DOCUMENT).addCategory(Intent.CATEGORY_OPENABLE)
             .setType(type == null || type.isEmpty() ? "application/octet-stream" : type).putExtra(Intent.EXTRA_TITLE, safeName(name)), SAVE); }
         catch (Exception e) { reply(saveReply, saveId, null, e.getMessage()); resetSave(); message(L.t("저장 위치를 선택할 수 없습니다.", "Could not choose where to save.")); }
+    }
+    private void downloadStatus(String id, String state, long received, long total) {
+        runOnUiThread(() -> {
+            if (web == null || isDestroyed()) return;
+            try {
+                JSONObject event = new JSONObject().put("id", id).put("name", L.t("파일 다운로드", "File download")).put("state", state).put("received", received).put("total", total);
+                web.evaluateJavascript("window.dispatchEvent(new CustomEvent('ollama-download',{detail:" + event + "}))", null);
+            } catch (JSONException ignored) { }
+        });
     }
     private void resetSave() { saveId = null; saveReply = null; saveBytes = null; downloadURL = null; }
     private static byte[] readBytes(InputStream in, int limit) throws IOException {
@@ -1021,6 +1034,8 @@ public class MainActivity extends Activity {
             Uri dest = intent.getData(); byte[] bytes = saveBytes; String url = downloadURL;
             String cookies = url == null ? null : CookieManager.getInstance().getCookie(url);
             JavaScriptReplyProxy callback = saveReply; String id = saveId; resetSave();
+            String transferId = "native-" + System.nanoTime();
+            downloadStatus(transferId, "progress", 0, bytes != null ? bytes.length : 0);
             io.execute(() -> {
                 try (OutputStream out = getContentResolver().openOutputStream(dest)) {
                     if (out == null) throw new IOException(L.t("저장 파일을 열 수 없습니다.", "Could not open the file to save into."));
@@ -1031,11 +1046,20 @@ public class MainActivity extends Activity {
                         if (cookies != null) connection.setRequestProperty("Cookie", cookies);
                         try {
                             if (connection.getResponseCode() != 200) throw new IOException(L.t("다운로드 HTTP ", "Download HTTP ") + connection.getResponseCode());
-                            try (InputStream in = connection.getInputStream()) { byte[] buffer = new byte[32768]; int n; while ((n = in.read(buffer)) != -1) out.write(buffer, 0, n); }
+                            try (InputStream in = connection.getInputStream()) {
+                                byte[] buffer = new byte[32768]; int n; long received = 0, last = 0, total = connection.getContentLengthLong();
+                                while ((n = in.read(buffer)) != -1) {
+                                    out.write(buffer, 0, n); received += n;
+                                    long now = System.currentTimeMillis();
+                                    if (now - last > 250) { downloadStatus(transferId, "progress", received, total); last = now; }
+                                }
+                            }
                         } finally { connection.disconnect(); }
                     }
+                    out.flush();
+                    downloadStatus(transferId, "completed", 0, 0);
                     runOnUiThread(() -> { reply(callback, id, true, null); Toast.makeText(this, L.t("저장했습니다.", "Saved."), Toast.LENGTH_SHORT).show(); });
-                } catch (Exception e) { runOnUiThread(() -> { reply(callback, id, null, e.getMessage()); message(L.t("저장 실패: ", "Could not save: ") + e.getMessage()); }); }
+                } catch (Exception e) { downloadStatus(transferId, "failed", 0, 0); runOnUiThread(() -> { reply(callback, id, null, e.getMessage()); message(L.t("저장 실패: ", "Could not save: ") + e.getMessage()); }); }
             });
         }
     }

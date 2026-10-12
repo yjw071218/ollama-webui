@@ -11,6 +11,21 @@ public final class QuickAskActivity extends MainActivity {
         super.onCreate(state);
         setFinishOnTouchOutside(true);
         resize();
+        if (getIntent().getBooleanExtra("enableBubble", false)) minimizeToBubble();
+    }
+    private static final int OVERLAY_PERMISSION = 3302;
+    public void minimizeToBubble() {
+        if (!android.provider.Settings.canDrawOverlays(this)) {
+            startActivityForResult(new android.content.Intent(android.provider.Settings.ACTION_MANAGE_OVERLAY_PERMISSION,
+                android.net.Uri.parse("package:" + getPackageName())), OVERLAY_PERMISSION);
+            return;
+        }
+        startForegroundService(new android.content.Intent(this, QuickAskBubbleService.class));
+        finish();
+    }
+    @Override protected void onActivityResult(int request, int result, android.content.Intent intent) {
+        super.onActivityResult(request, result, intent);
+        if (request == OVERLAY_PERMISSION && android.provider.Settings.canDrawOverlays(this)) minimizeToBubble();
     }
     private void resize() {
         android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();

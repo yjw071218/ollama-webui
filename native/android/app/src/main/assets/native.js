@@ -31,6 +31,8 @@
     capabilities: Object.freeze({ share: true, clipboard: true, screenCapture: true }),
     changeServer: () => call('changeServer'),
     checkUpdates: () => call('checkUpdates'),
+    showQuickAskBubble: () => call('quickAskBubble'),
+    saveFile: async (blob, name) => call('save', {name, type:blob.type, data:await base64(blob)}),
     closeQuickAsk: () => call('quickAskClose'),
     openQuickAskApp: () => call('quickAskOpenApp'),
     // An answer is being written: the screen stays on until it is done (src/nativeEvents.js).

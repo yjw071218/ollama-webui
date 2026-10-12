@@ -1,3 +1,5 @@
+import { compileLatex } from './latex.js';
+import { readAnswerFile } from './answerFiles.js';
 import { searchScholarly, academicQuery } from './scholarly.js';
 // The dev server and the production server expose the same API. It lives here
 // so that neither owns it: vite.config.js mounts these on its middleware stack,
@@ -1455,6 +1457,18 @@ export const createApiRoutes = (env = {}, options = {}) => {
       } catch (e) {
         sendJson(res, { success: false, error: e.message }, e.statusCode || 500);
       }
+    });
+
+    route('/api/auth/answer-file', async (req,res) => {
+      const auth=guard(req,res,{methods:['POST']}); if(!auth)return;
+      try {const body=await jsonBody(req);sendJson(res,{success:true,...readAnswerFile(database(),auth.user.id,body.path)});}
+      catch(error){sendJson(res,{success:false,error:error.code==='ENOENT'?'서버에서 파일을 찾지 못했습니다.':error.message},error.code==='ENOENT'?404:403);}
+    });
+
+    route('/api/auth/latex/compile', async (req,res)=>{
+      const auth=guard(req,res,{methods:['POST']});if(!auth)return;
+      try{const body=await jsonBody(req,1024*1024);sendJson(res,{success:true,...await compileLatex(body.source)});}
+      catch(error){sendJson(res,{success:false,error:error.message},422);}
     });
 
     route('/api/auth/office/convert', async (req, res) => {

@@ -42,6 +42,28 @@ try {
    assert.ok(await run('document.documentElement.scrollWidth<=innerWidth+1'),'no horizontal overflow '+name);
    const metrics=await send('Page.getLayoutMetrics');const size=metrics.result.cssContentSize;const shot=await send('Page.captureScreenshot',{format:'png',captureBeyondViewport:true,clip:{x:0,y:0,width:size.width,height:size.height,scale:1}});fs.writeFileSync(`native/artifacts/answer-presentation-${name}.png`,Buffer.from(shot.result.data,'base64'));
  }
+ await run(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='미리보기').click()`);
+ await until('!!document.querySelector(".file-preview-dialog")');
+ assert.ok(await run('!!document.querySelector(".file-slide svg")'));
+ await run(`document.querySelector('[aria-label="미리보기 닫기"]').click()`);
+ await until('!document.querySelector(".file-preview-dialog")');
+ await run(`window.ollamaNative={saveFile:async(blob,name)=>{window.savedDownload={size:blob.size,name};return true;}};document.querySelector('.office-download').click()`);
+ await until('!!window.savedDownload');
+ assert.ok(await run('window.savedDownload.size>1000'));
+ await until('document.querySelector(".download-tray")?.textContent.includes("저장 완료")');
+ console.log('PASS full slide preview, native save completion and download status');
+ await run('window.presentationTest.design()');
+ await until('!!document.querySelector(".office-cover ellipse")');
+ await run(`Array.from(document.querySelectorAll('button')).find(b=>b.textContent==='미리보기').click()`);
+ await until('!!document.querySelector(".file-slide ellipse")');
+ const designShot=await send('Page.captureScreenshot',{format:'png'});fs.writeFileSync('native/artifacts/document-design-preview.png',Buffer.from(designShot.result.data,'base64'));
+ if(fs.existsSync('native/artifacts/latex-preview.pdf')){
+   await run('window.presentationTest.pdf()');
+   await until('document.querySelector("canvas")?.width>300 && !!document.querySelector("nav")');
+   await delay(400);
+   const pdfShot=await send('Page.captureScreenshot',{format:'png'});fs.writeFileSync('native/artifacts/latex-mobile-preview.png',Buffer.from(pdfShot.result.data,'base64'));
+   console.log('PASS Korean LaTeX PDF canvas preview on mobile');
+ }
  await run('window.presentationTest.malformed()');await until('!!document.querySelector(".ig-pending")');
  assert.equal(await run('document.querySelectorAll(".artifact-card").length'),0);
  console.log('PASS infographic panels, media, charts, source links, table breaks, editable document preview, malformed streaming block and desktop/mobile layout');

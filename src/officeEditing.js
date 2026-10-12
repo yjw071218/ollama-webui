@@ -1,3 +1,4 @@
+import { reportDownload } from './downloadStatus.js';
 import { zipSync, strFromU8, strToU8 } from 'fflate';
 import { archiveFiles, archiveFormat } from './documentArchive.js';
 import { api } from './session.jsx';
@@ -88,7 +89,15 @@ export async function createPresentation(slides, title = '발표자료') {
     const slide = presentation.addSlide();
     for(const shape of slideScene(item,index+1)) {
       const {x,y,w,h}=shape;
-      if(shape.type==='rect') slide.addShape(presentation.ShapeType.rect,{x,y,w,h,line:{color:shape.fill,transparency:100},fill:{color:shape.fill}});
+      if(shape.type==='image') {
+        const response=await fetch(shape.src,{credentials:'omit',signal:AbortSignal.timeout(15000)});
+        if(!response.ok)throw new Error('슬라이드 이미지를 불러오지 못했습니다.');
+        const blob=await response.blob();
+        if(!/^image\/(png|jpeg|webp)$/.test(blob.type)||blob.size>10*1024*1024)throw new Error('PPT 이미지는 10 MB 이하 PNG/JPEG/WebP를 사용해 주세요.');
+        const data=await new Promise((resolve,reject)=>{const reader=new FileReader();reader.onload=()=>resolve(reader.result);reader.onerror=reject;reader.readAsDataURL(blob);});
+        slide.addImage({data,x,y,w,h});
+      }
+      else if(shape.type==='rect'||shape.type==='ellipse') slide.addShape(shape.type==='ellipse'?presentation.ShapeType.ellipse:presentation.ShapeType.rect,{x,y,w,h,line:{color:shape.fill,transparency:100},fill:{color:shape.fill}});
       else slide.addText(shape.text,{x,y,w,h,fontFace:'맑은 고딕',fontSize:shape.size,bold:shape.bold,color:shape.color,valign:'top',fit:'shrink',margin:0,breakLine:false});
     }
     if(normaliseSlide(item).notes) slide.addNotes(normaliseSlide(item).notes);
@@ -181,10 +190,15 @@ export async function asPpt(bytes) {
   const result = await api('/api/auth/office/convert', { method: 'POST', body: { from: 'pptx', to: 'ppt', data: encode64(bytes) } });
   return decode64(result.data);
 }
-export function downloadOffice(bytes, name, format) {
-  const types={pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',ppt:'application/vnd.ms-powerpoint',hwpx:'application/hwp+zip',hwp:'application/x-hwp',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',doc:'application/msword',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',xls:'application/vnd.ms-excel',odt:'application/vnd.oasis.opendocument.text',odp:'application/vnd.oasis.opendocument.presentation',ods:'application/vnd.oasis.opendocument.spreadsheet',pdf:'application/pdf',csv:'text/csv;charset=utf-8',tsv:'text/tab-separated-values;charset=utf-8',txt:'text/plain;charset=utf-8',rtf:'application/rtf'};
-  const url = URL.createObjectURL(new Blob([bytes], { type: types[format]||'application/octet-stream' }));
-  const link = document.createElement('a'); link.href = url;
-  link.download = `${String(name || '문서').replace(/[\\/:*?"<>|]/g, '_')}.${format}`;
-  link.click(); setTimeout(() => URL.revokeObjectURL(url), 60000);
+export async function downloadOffice(bytes, name, format) {
+  const types={html:'text/html;charset=utf-8',svg:'image/svg+xml',tex:'application/x-tex',md:'text/markdown;charset=utf-8',json:'application/json',pptx:'application/vnd.openxmlformats-officedocument.presentationml.presentation',ppt:'application/vnd.ms-powerpoint',hwpx:'application/hwp+zip',hwp:'application/x-hwp',docx:'application/vnd.openxmlformats-officedocument.wordprocessingml.document',doc:'application/msword',xlsx:'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',xls:'application/vnd.ms-excel',odt:'application/vnd.oasis.opendocument.text',odp:'application/vnd.oasis.opendocument.presentation',ods:'application/vnd.oasis.opendocument.spreadsheet',pdf:'application/pdf',csv:'text/csv;charset=utf-8',tsv:'text/tab-separated-values;charset=utf-8',txt:'text/plain;charset=utf-8',rtf:'application/rtf'};
+  const filename = `${String(name || '문서').replace(/[\\/:*?"<>|]/g, '_')}.${format}`;
+  const blob=new Blob([bytes], {type:types[format]||'application/octet-stream'});
+  const id=crypto.randomUUID(); reportDownload({id,name:filename,state:'saving'});
+  try {
+    if(window.ollamaNative?.saveFile){await window.ollamaNative.saveFile(blob,filename);reportDownload({id,name:filename,state:'completed'});return;}
+    const url=URL.createObjectURL(blob),link=document.createElement('a');link.href=url;link.download=filename;link.click();
+    setTimeout(()=>URL.revokeObjectURL(url),60000);
+    reportDownload({id,name:filename,state:'handedOff'});
+  } catch(error) {reportDownload({id,name:filename,state:'failed',error:error.message});throw error;}
 }

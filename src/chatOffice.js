@@ -1,6 +1,6 @@
 import { officePrompt, parseOfficeProposal } from './officeDesign.js';
 
-const modes = { pptx:'pptx', ppt:'pptx', odp:'pptx', xlsx:'xlsx', xls:'xlsx', ods:'xlsx', csv:'xlsx', tsv:'xlsx', docx:'docx', doc:'docx', odt:'docx', rtf:'docx', txt:'docx', hwpx:'hwpx', hwp:'hwpx' };
+const modes = { tex:'tex', pdf:'pdf', html:'html', svg:'svg', md:'md', json:'json', pptx:'pptx', ppt:'pptx', odp:'pptx', xlsx:'xlsx', xls:'xlsx', ods:'xlsx', csv:'xlsx', tsv:'xlsx', docx:'docx', doc:'docx', odt:'docx', rtf:'docx', txt:'docx', hwpx:'hwpx', hwp:'hwpx' };
 export function parseChatOffice(source) {
   if (source.length > 2000000) throw new Error('문서 내용이 너무 큽니다. 문서를 나누어 요청해 주세요.');
   const value = JSON.parse(source);
@@ -16,6 +16,7 @@ Use a top-level "format" field: pptx (default presentation), ppt, odp, xlsx (def
 Use the conversation and provided source material to build complete content. For revisions, return a complete replacement office block. Never invent factual figures; clearly label hypothetical examples.
 Presentation schema and design rules: ${officePrompt('pptx', '', '')[0].content}
 Spreadsheet schema and rules: ${officePrompt('xlsx', '', '')[0].content}
+Additional formats: tex (LaTeX source), pdf (LaTeX source beginning with \\documentclass or plain document text), html (self-contained designed report/poster, inline CSS, no scripts or remote resources), svg (vector artwork), md, json. Use {"format":"...","title":"...","text":"complete source"}. LaTeX PDF compilation uses a restricted safe subset: article/report/book/beamer, amsmath, amssymb, geometry, xcolor, graphicx, hyperref, booktabs, array, longtable, multicol, enumitem, fancyhdr, titlesec, fontspec, kotex. Do not use input/include, custom macro definitions, shell execution, file reads/writes or external graphics. For Korean use kotex and fontspec. Supply a separate tex block when source and PDF are requested. HTML posters/reports should have a deliberate visual identity, responsive layout, good contrast and print CSS. Never claim a PDF was created if compilation fails.
 Word/Hangul schema: {"format":"docx","title":"Document title","text":"Complete body with newline-separated paragraphs"}.
 The schemas above go INSIDE a fenced office block, not a json block. Include format in every block. Brief prose outside the block is allowed. Example:
 \`\`\`office
@@ -25,6 +26,14 @@ The schemas above go INSIDE a fenced office block, not a json block. Include for
 
 export async function buildChatOffice(document) {
   const office = await import('./officeEditing.js');
+  if(['tex','html','svg','md','json'].includes(document.format))return new TextEncoder().encode(document.text);
+  if(document.format==='pdf'){
+    if(document.text.trim().startsWith('\\documentclass')){
+      const {api}=await import('./session.jsx');const result=await api('/api/auth/latex/compile',{method:'POST',body:{source:document.text}});
+      return Uint8Array.from(atob(result.data),c=>c.charCodeAt(0));
+    }
+    return office.convertOfficeBytes(office.createWord(document.text,document.title),'docx','pdf');
+  }
   let bytes;
   if (document.mode === 'xlsx') return office.writeWorkbook(await office.createWorkbook(document.sheets), document.format);
   if (document.mode === 'pptx') bytes = await office.createPresentation(document.slides, document.title);
