@@ -278,6 +278,12 @@ process.stdin.on('end', () => {
     out({ type: 'result', subtype: 'error', is_error: true, result: "You've hit your limit · resets 3pm" });
     return;
   }
+  if (process.env.FAKE_CLAUDE === 'interrupted') {
+    out({ type: 'system', subtype: 'init', session_id: 'sess-interrupted' });
+    out({ type: 'stream_event', event: { type: 'content_block_delta', delta: { type: 'text_delta', text: 'Already edited file.' } } });
+    out({ type: 'result', subtype: 'error', is_error: true, result: 'Interrupted after tool execution' });
+    return;
+  }
   const said = JSON.parse(input.trim()).message.content[0].text;
   out({ type: 'system', subtype: 'init', session_id: 'sess-' + (process.argv.includes('--resume') ? 'again' : 'first') });
   out({ type: 'stream_event', event: { type: 'message_start', message: { usage: { input_tokens: 5 } } } });
@@ -315,6 +321,18 @@ const ask = async (env, body, headers = {}) => {
   return { passed, frames: chunks.join('').split('\n').filter(Boolean).map(l => JSON.parse(l)) };
 };
 const textOf = (frames) => frames.map(f => f.message?.content || '').join('');
+
+{
+  process.env.FAKE_CLAUDE = 'interrupted';
+  const headers = { 'x-chat-conversation':'interrupted-work' };
+  const first = await ask(ENV, { model:'claude-code:opus', messages:[{role:'user',content:'edit file'}] }, headers);
+  check('interrupted work offers continuation after a non-timeout error', first.frames.at(-1).cli_can_continue);
+  process.env.FAKE_CLAUDE = '';
+  const continued = await ask(ENV, { model:'claude-code:opus', messages:[{role:'user',content:'edit file'},{role:'assistant',content:'Already edited file.'},{role:'user',content:'continue remaining work'}] }, {...headers,'x-cli-continue':'on'});
+  check('continuation actually resumes the interrupted session', continued.frames.some(f=>f.cli_started?.continued));
+  const args = fs.readFileSync(argvLog,'utf8').trim().split('\n').map(line=>JSON.parse(line)).at(-1);
+  check('same session id is passed instead of repeating edits', args.includes('sess-interrupted') && args.includes('--resume'));
+}
 
 {
   process.env.FAKE_CLAUDE = 'limit';

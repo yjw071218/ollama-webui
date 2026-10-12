@@ -15,34 +15,18 @@
  *   funnel    items: [{ label, value? }]                     (widest first)
  *   callout   tone: info|tip|warn|success, title?, text
  *
- * A block that does not parse falls through and is shown as code (App.jsx).
+ * Incomplete blocks stay in place with an inspectable source until they parse.
  */
 import React from 'react';
 import './infoblocks.css';
 
-const TYPES = new Set(['stats', 'steps', 'timeline', 'compare', 'progress', 'cards', 'proscons', 'funnel', 'callout']);
-const str = (v) => (v === null || v === undefined ? '' : String(v));
-const list = (v) => (Array.isArray(v) ? v : []);
-
-const validBlock = (b) => {
-  if (!b || typeof b !== 'object' || !TYPES.has(String(b.type || '').toLowerCase())) return false;
-  const type = String(b.type).toLowerCase();
-  if (type === 'compare') return list(b.columns).length >= 2;
-  if (type === 'proscons') return list(b.pros).length + list(b.cons).length > 0;
-  if (type === 'callout') return !!str(b.text || b.title);
-  return list(b.items).length > 0;
-};
-
-export const parseInfoBlocks = (source) => {
-  let data;
-  try { data = JSON.parse(String(source || '').trim()); } catch { return null; }
-  if (!data || typeof data !== 'object') return null;
-  const blocks = Array.isArray(data.blocks) ? data.blocks : Array.isArray(data) ? data : [data];
-  const ok = blocks.filter(validBlock).map(b => ({ ...b, type: String(b.type).toLowerCase() }));
-  if (!ok.length) return null;
-  return { title: Array.isArray(data.blocks) ? str(data.title) : '', subtitle: Array.isArray(data.blocks) ? str(data.subtitle) : '', blocks: ok };
-};
-
+import { parseInfoBlocks, safeSourceUrl } from './infoBlockData.js';
+import { Chart } from './Chart.jsx';
+import { useI18n } from './i18n.jsx';
+export { parseInfoBlocks } from './infoBlockData.js';
+const str = v => v == null ? '' : typeof v === 'object' ? String(v.title || v.label || '') : String(v);
+const list = v => Array.isArray(v) ? v : [];
+const Sources = ({ sources }) => <div className="ig-sources">{list(sources).filter(s => s && safeSourceUrl(s.url)).map((s,i) => <a className="source-chip" href={safeSourceUrl(s.url)} target="_blank" rel="noopener noreferrer" key={i} title={s.title || s.url}><span aria-hidden="true">↗</span>{str(s.title) || new URL(s.url).hostname}</a>)}</div>;
 /* `**bold**` only. */
 const Rich = ({ text }) => {
   const parts = str(text).split(/(\*\*[^*]+\*\*)/g);
@@ -194,11 +178,16 @@ const Callout = ({ b }) => {
   );
 };
 
-const VIEW = { stats: Stats, steps: Steps, timeline: Timeline, compare: Compare, progress: Progress, cards: Cards, proscons: ProsCons, funnel: Funnel, callout: Callout };
+const Media = ({ b }) => <div className="ig-media">{list(b.items).map((it,i) => <article key={i}>{safeSourceUrl(it.image) ? <img src={safeSourceUrl(it.image)} alt={it.alt || it.title || ''} loading="lazy" referrerPolicy="no-referrer" onError={e => { e.currentTarget.hidden = true; }} /> : it.icon ? <span className="ig-media-icon">{str(it.icon)}</span> : null}<div><div className="ig-step-title"><Rich text={it.title} /></div><div className="ig-text"><Rich text={it.text} /></div><Sources sources={it.sources} /></div></article>)}</div>;
+const InlineChart = ({ b }) => { const { t } = useI18n(); return <Chart source={JSON.stringify(b.chart || { ...b, type:b.chartType || 'bar' })} t={t} />; };
+const Panel = ({ b }) => <div className="ig-panel">{b.blocks.map((block,i) => <Block b={block} key={i} />)}</div>;
+const Block = ({ b }) => { const View = VIEW[b.type]; return <section className={`ig-section ig-${b.type}-wrap`}>{b.type !== 'callout' && <Head b={b} />}<View b={b} />{b.note && <p className="ig-note"><Rich text={b.note} /></p>}<Sources sources={b.sources} /></section>; };
+
+const VIEW = { media: Media, chart: InlineChart, panel: Panel, stats: Stats, steps: Steps, timeline: Timeline, compare: Compare, progress: Progress, cards: Cards, proscons: ProsCons, funnel: Funnel, callout: Callout };
 
 export default function InfoBlocks({ source }) {
   const data = parseInfoBlocks(source);
-  if (!data) return null;
+  if (!data) return <figure className="infographic ig-pending"><p role="status">인포그래픽이 아직 완성되지 않았거나 지원하지 않는 형식입니다.</p><details><summary>원본 확인</summary><pre>{source}</pre></details></figure>;
   return (
     <figure className="infographic">
       {(data.title || data.subtitle) && (
@@ -207,16 +196,8 @@ export default function InfoBlocks({ source }) {
           {data.subtitle && <p className="ig-sub"><Rich text={data.subtitle} /></p>}
         </header>
       )}
-      {data.blocks.map((b, i) => {
-        const View = VIEW[b.type];
-        // A callout carries its own title inside the box.
-        return (
-          <section className={`ig-section ig-${b.type}-wrap`} key={i}>
-            {b.type !== 'callout' && <Head b={b} />}
-            <View b={b} />
-          </section>
-        );
-      })}
+      {data.blocks.map((b,i) => <Block b={b} key={i} />)}
+      <Sources sources={data.sources} />
     </figure>
   );
 }

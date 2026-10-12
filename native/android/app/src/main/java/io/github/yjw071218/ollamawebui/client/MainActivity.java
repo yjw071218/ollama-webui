@@ -211,6 +211,11 @@ public class MainActivity extends Activity {
      * selection menu: what to do with it, then a new question in the app.
      */
     private void askAboutText(String text) {
+        if (floatingAsk()) {
+            try { queueAction(new JSONObject().put("type", "selection").put("text", text.substring(0, Math.min(text.length(), 60000))).toString()); }
+            catch (JSONException ignored) { }
+            return;
+        }
         final String quoted = "\n\n\"\"\"\n" + (text.length() > 60000 ? text.substring(0, 60000) : text).trim() + "\n\"\"\"";
         final String[] labels = {
             L.t("📝 요약", "📝 Summarise"), L.t("🌐 번역", "🌐 Translate"), L.t("💡 쉽게 설명", "💡 Explain"),
@@ -457,6 +462,7 @@ public class MainActivity extends Activity {
         scroll.setBackgroundColor(background);
         applyChrome(background);
         scroll.setOnApplyWindowInsetsListener((v, insets) -> {
+            if (floatingAsk()) return insets;
             int[] b = bars(insets);
             layout.setPadding(dp(24) + b[0], Math.max(dp(40), b[1] + dp(16)), dp(24) + b[2], Math.max(dp(24), b[3] + dp(16)));
             return insets;
@@ -618,6 +624,7 @@ public class MainActivity extends Activity {
         layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
         setContentView(layout);
         layout.setOnApplyWindowInsetsListener((v, insets) -> {
+            if (floatingAsk()) return insets;
             int[] b = bars(insets);
             v.setPadding(b[0], b[1], b[2], b[3]); return insets;
         });
@@ -627,19 +634,6 @@ public class MainActivity extends Activity {
         notificationAllowed = prefs.getBoolean("notify:" + server, false) && notificationsAllowedBySystem();
         // No native button bar: reload and server change live in the page's own
         // account menu (window.ollamaNative.changeServer), so the app has no frame.
-        if (floatingAsk()) {
-            LinearLayout bar = new LinearLayout(this);
-            bar.setGravity(Gravity.CENTER_VERTICAL);
-            bar.setPadding(dp(10), 0, dp(6), 0);
-            TextView title = label(L.t("AI에게 묻기", "Ask AI"), 15);
-            bar.addView(title, new LinearLayout.LayoutParams(0, dp(48), 1));
-            Button open = button(L.t("앱 열기", "Open app"), false);
-            open.setOnClickListener(v -> { startActivity(new Intent(this, MainActivity.class)); finish(); });
-            bar.addView(open);
-            Button close = button(L.t("닫기", "Close"), false);
-            close.setOnClickListener(v -> finish()); bar.addView(close);
-            layout.addView(bar);
-        }
         web = new WebView(this); layout.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
         applyChrome(prefs.getInt("chrome", Color.rgb(26, 25, 22)));
         WebSettings s = web.getSettings();
@@ -649,6 +643,18 @@ public class MainActivity extends Activity {
         s.setMediaPlaybackRequiresUserGesture(true); s.setSupportMultipleWindows(false);
         CookieManager.getInstance().setAcceptThirdPartyCookies(web, false);
         web.setWebViewClient(new WebViewClient() {
+            @Override public WebResourceResponse shouldInterceptRequest(WebView view, WebResourceRequest request) {
+                if (floatingAsk() && local(request.getUrl().toString())) {
+                    String path = request.getUrl().getPath();
+                    String asset = "/__native/quickask".equals(path) ? "quickask.html"
+                        : "/__native/quickask.js".equals(path) ? "quickask.js" : null;
+                    if (asset != null) try {
+                        return new WebResourceResponse(asset.endsWith(".html") ? "text/html" : "application/javascript",
+                            "UTF-8", 200, "OK", Collections.singletonMap("Cache-Control", "no-store"), getAssets().open(asset));
+                    } catch (IOException ignored) { }
+                }
+                return null;
+            }
             @Override public boolean shouldOverrideUrlLoading(WebView view, WebResourceRequest request) {
                 String url = request.getUrl().toString();
                 if (local(url)) {
@@ -768,11 +774,6 @@ public class MainActivity extends Activity {
                 String js = new String(readBytes(in, 100000), StandardCharsets.UTF_8)
                     // The page learns at once that it may notify, before its first check.
                     .replace("static permission = 'default';", "static permission = '" + (notificationAllowed ? "granted" : "default") + "';");
-                if (floatingAsk()) {
-                    try (InputStream compact = getAssets().open("quickask.js")) {
-                        js += "\n" + new String(readBytes(compact, 100000), StandardCharsets.UTF_8);
-                    }
-                }
                 WebViewCompat.addDocumentStartJavaScript(web, js, Collections.singleton(proxy.origin));
             } catch (Exception e) { message(L.t("앱 확장 초기화 실패: ", "The app extension did not start: ") + e.getMessage()); }
         } else message(L.t("Android System WebView를 업데이트해야 화면 캡처·공유·알림 확장을 사용할 수 있습니다.", "Update Android System WebView to use screen capture, sharing and notifications."));
@@ -781,7 +782,7 @@ public class MainActivity extends Activity {
             if (saveId != null || downloadURL != null) { message(L.t("다른 저장 작업이 진행 중입니다.", "Another save is in progress.")); return; }
             downloadURL = url; chooseSave(URLUtil.guessFileName(url, disposition, type), type);
         });
-        web.loadUrl(proxy.origin + "/");
+        web.loadUrl(proxy.origin + (floatingAsk() ? "/__native/quickask" : "/"));
     }
     /* ------------------------------------------------------- file chooser */
     private static boolean wantsImages(WebChromeClient.FileChooserParams p) {
@@ -940,6 +941,12 @@ public class MainActivity extends Activity {
                             .setOngoing(true).setOnlyAlertOnce(true).setUsesChronometer(true)
                             .setContentIntent(progressOpen).build());
                     } else progressManager.cancel(progressId);
+                    reply(reply, id, true, null); break;
+                case "quickAskClose":
+                    if (floatingAsk()) finish();
+                    reply(reply, id, true, null); break;
+                case "quickAskOpenApp":
+                    if (floatingAsk()) { startActivity(new Intent(this, MainActivity.class)); finish(); }
                     reply(reply, id, true, null); break;
                 case "changeServer":
                     confirmChangeServer(() -> reply(reply, requestId, false, null)); break;

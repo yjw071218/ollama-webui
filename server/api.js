@@ -1,3 +1,4 @@
+import { searchScholarly, academicQuery } from './scholarly.js';
 // The dev server and the production server expose the same API. It lives here
 // so that neither owns it: vite.config.js mounts these on its middleware stack,
 // and server/index.js dispatches to them directly.
@@ -1862,6 +1863,16 @@ export const createApiRoutes = (env = {}, options = {}) => {
        today, and whether it is resting after a CAPTCHA. Starts nothing. */
     route('/api/browser-search/status', (req, res) => sendJson(res, { success: true, ...browserSearchStatus(env) }));
 
+    route('/api/research/papers', async (req, res) => {
+      if (req.method !== 'POST') return sendJson(res, { success:false, error:'POST required' }, 405);
+      try {
+        const { query, limit } = await jsonBody(req);
+        if (typeof query !== 'string' || !query.trim() || query.length > 2000) return sendJson(res, { success:false, error:'A query of 1–2000 characters is required' }, 400);
+        const results = await searchScholarly(query, { limit });
+        return sendJson(res, { success:true, results, provider:'Crossref', note:'Bibliographic metadata checked; relevance and full-text claims require reading the source.' });
+      } catch (error) { return sendJson(res, { success:false, error:error.message }, 502); }
+    });
+
     route('/mcp/search',(req, res) => {
       let body = '';
       req.setEncoding('utf8');
@@ -1877,6 +1888,12 @@ export const createApiRoutes = (env = {}, options = {}) => {
           const { query, limit, language } = JSON.parse(body || '{}');
           if (!query || !String(query).trim()) return json({ success: false, error: 'A query is required' }, 400);
 
+          if (academicQuery(query)) {
+            try {
+              const results = await searchScholarly(query, { limit });
+              if (results.length) return json({ success:true, query, results, provider:'Crossref', attempts:[], note:'Metadata only; verify findings in the original paper.' });
+            } catch { /* ordinary web results remain explicitly unverified */ }
+          }
           const { results, provider, attempts } = await searchWeb(
             String(query).trim(),
             Number(limit) > 0 ? Number(limit) : 5,

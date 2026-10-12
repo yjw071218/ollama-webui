@@ -1,3 +1,4 @@
+import { remarkTableBreaks, SOURCE_GUIDE, CONTINUE_WORK_PROMPT } from './answerPresentation.js';
 import ChatOfficeCard from './ChatOfficeCard.jsx';
 import { CHAT_OFFICE_GUIDE } from './chatOffice.js';
 import StreamRow from './StreamRow.jsx';
@@ -222,7 +223,7 @@ import { Logo } from './Logo.jsx';
 import { Chart } from './Chart.jsx';
 import { parseChart } from './chart.js';
 import Quiz, { parseQuiz } from './Quiz.jsx';
-import InfoBlocks, { parseInfoBlocks } from './InfoBlocks.jsx';
+import InfoBlocks from './InfoBlocks.jsx';
 import { dedupeSession } from './dedupeLegs.js';
 import ArtifactVersionPicker from './ArtifactVersionPicker.jsx';
 /* The diagram code is its own file, fetched the first time a diagram is drawn.
@@ -1180,7 +1181,7 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
   // Diagrams and quizzes are drawn in place too (src/Mermaid.jsx, src/Quiz.jsx).
   if (language === 'mermaid') return <MermaidDiagram source={codeContent} />;
   if (language === 'quiz' && parseQuiz(codeContent)) return <Quiz source={codeContent} />;
-  if ((language === 'infographic' || language === 'info') && parseInfoBlocks(codeContent)) return <InfoBlocks source={codeContent} />;
+  if (language === 'infographic' || language === 'info') return <InfoBlocks source={codeContent} />;
 
   const previewable = isPreviewable(language);
   const runnable = isPythonish(language);
@@ -1270,12 +1271,15 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
    streamed token, a scroll button appearing -- parsed every answer in the
    chat again with remark/rehype/KaTeX, and remounted each code block because
    `components` was a new object each time. On a phone that was the lag. */
-const ANSWER_REMARK = [remarkGfm, remarkCjkFriendly, remarkMath];
+const ANSWER_REMARK = [remarkGfm, remarkCjkFriendly, remarkMath, remarkTableBreaks];
 const isLocalAnswerPath = value => /^(?:[a-z]:[\\/]|file:\/\/)/i.test(value || '');
 const answerUrlTransform = (url, key) => key === 'href' && isLocalAnswerPath(url) ? url : defaultUrlTransform(url);
 const AnswerLink = ({ node, ...props }) => {
   const [error, setError] = useState('');
-  if (!isLocalAnswerPath(props.href)) return <a {...props} target="_blank" rel="noopener noreferrer" />;
+  if (!isLocalAnswerPath(props.href)) {
+    const external = /^https?:\/\//i.test(props.href || '');
+    return <a {...props} className={external ? 'source-chip' : props.className} title={external ? `${extractText(props.children)} · ${props.href}` : props.title} target="_blank" rel="noopener noreferrer">{external && <span className="source-chip-icon" aria-hidden="true">↗</span>}{props.children}</a>;
+  }
   return <><a {...props} onClick={async e => {
     e.preventDefault(); e.stopPropagation(); setError('');
     if (!window.ollamaNative?.openLocalPath) { setError('로컬 파일 열기는 업데이트된 PC 클라이언트에서 사용할 수 있습니다.'); return; }
@@ -1287,20 +1291,26 @@ const AnswerMarkdown = memo(({ text, basePlugins, citations, onOpenArtifact, age
   const openRef = useRef(onOpenArtifact);
   openRef.current = onOpenArtifact;
   const open = useCallback((...args) => openRef.current?.(...args), []);
-  const citeKey = citations?.length ? citations.map(c => (c.url ? 'url' : 'passage')).join(',') : '';
+  const citeKey = citations?.length ? JSON.stringify(citations.map(c => ({url:c.url, docName:c.docName}))) : '';
   const plugins = useMemo(() => {
     const cited = citeKey
-      ? [...basePlugins, createCitationLinker(citeKey.split(',').length, citeKey.split(','))]
+      ? [...basePlugins, createCitationLinker(citations.length, citations.map(c => c.url ? 'url' : 'passage'))]
       : basePlugins;
     return ageOf ? [...cited, [rehypeAnimateTokens, { ageOf }]] : cited;
   }, [basePlugins, citeKey, ageOf]);
   const components = useMemo(() => ({
     pre: (props) => <MarkdownCodeBlock {...props} onOpenArtifact={open} />,
     a: AnswerLink,
-  }), [open]);
+    button: ({node, children, ...props}) => {
+      const n = Number(props['data-citation']);
+      const source = citations?.[n-1];
+      if (!source) return <button {...props}>{children}</button>;
+      return <button {...props} className={`${props.className || ''} source-chip`} title={source.docName || source.url} aria-label={`출처 ${n}: ${source.docName || source.url}`}><span aria-hidden="true">{source.url ? '↗' : '▤'}</span>{source.docName || '출처'}</button>;
+    },
+  }), [open, citeKey]);
   return <ReactMarkdown urlTransform={answerUrlTransform} remarkPlugins={ANSWER_REMARK} rehypePlugins={plugins} components={components}>{text}</ReactMarkdown>;
 }, (a, b) => a.text === b.text && a.basePlugins === b.basePlugins && a.ageOf === b.ageOf
-  && (a.citations?.length || 0) === (b.citations?.length || 0));
+  && a.citations === b.citations);
 
 /* Typewriter for the answer being streamed. A model sends text in bursts --
  * several words in one chunk -- so the text shown is let out from the front,
@@ -11104,6 +11114,21 @@ ${block}
         }
       }
 
+      // Resolve academic references even when general auto-grounding is off.
+      if (!isAutoTool && /논문|학술|선행\s*연구|\b(papers?|doi|scholarly|journal|bibliograph\w*)\b/i.test(originalInput)) {
+        try {
+          const response = await fetch('/api/research/papers', { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({query:safeHead(originalInput,500),limit:5}), signal });
+          const data = await response.json();
+          if (!response.ok || !data.success) throw new Error(data.error || 'Bibliographic lookup unavailable');
+          const base = (turnCitations || []).length;
+          turnCitations = [...(turnCitations || []), ...data.results.map(r => ({url:r.url, docName:r.title, text:r.snippet, doi:r.doi, bibliographicVerified:true}))];
+          finalInputText += '\n\n[Academic reference lookup: Crossref bibliographic records, not proof of relevance or findings]\n' + formatSearchResults(data.results,base) + '\nCite only relevant records. Verify findings in the original text; do not invent author/year/DOI details. No matching records means no verified paper was found.';
+        } catch (error) {
+          if (signal?.aborted) throw error;
+          finalInputText += '\n\n[Academic lookup unavailable. Do not invent references. Explain that the papers could not be verified; use only provided or independently checked original sources.]';
+        }
+      }
+
       // --- VISION PIPELINE ---
       // Send images straight to the model whenever it can read them. The
       // describe-then-relay path is now only a fallback for text-only models.
@@ -11382,7 +11407,7 @@ ${block}
       /* Also when there is no system prompt at all: a chat with none still has
          a profile, memories and -- once it is long -- a summary and recalled
          turns, and those have nowhere else to go. */
-      const wantsSystem = effectiveSystemPrompt || profileBlock || memoryBlock
+      const wantsSystem = CHAT_OFFICE_GUIDE || SOURCE_GUIDE || effectiveSystemPrompt || profileBlock || memoryBlock
         || memoryContext?.summary || (memoryContext?.recalled || []).length > 0;
       /* The picture workflow can change in Studio settings between turns.
          Rebuild this system message so a turn that now uses Krea 2 cannot
@@ -11563,6 +11588,7 @@ Diagrams and infographics
   ]}
   \`\`\`
 
+  Additional types: media (items: title, text, image as a real image URL, alt, sources [{title,url}]); chart (chart: a complete chart object); panel (title, blocks of stats/progress/chart, note). Use media for illustrated country or product rows; never invent image URLs. Every block may include sources [{title,url}] and note. Stats values may be before → after strings. Combine stats and progress in a panel for a compact dashboard.
   Types: stats (items: label, value, unit, delta "+n"/"-n", note, icon emoji),
   steps (items: title, text), timeline (items: when, title, text),
   compare (columns: name, items[], tag, highlight), progress (items: label,
@@ -11837,6 +11863,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         const finalSystemPrompt = [
           environmentPreamble(),
           CHAT_OFFICE_GUIDE,
+          SOURCE_GUIDE,
           /* Who is asking, before what is known about them: the profile is
              stated fact and the memories are things inferred from earlier
              conversations, and a model reading them in that order treats a
@@ -13390,7 +13417,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           setAttachments(prev => (prev.length ? prev : currentAttachments));
         }
         toast(t('chat.busyElsewhere'), 'info', 8000);
-      } else if (isRetryable(err) && !isAutoTool && originalInput.trim()) {
+      } else if (isRetryable(err) && !isAutoTool && originalInput.trim() && !sessionsRef.current.find(s => s.id === startedIn)?.messages?.some((m, index) => index >= newMessageIndex && (m.cliStarted || m.cliActivity || m.content))) {
         /* The wifi dropped, or Ollama was still loading, or the laptop was
            asleep. All three are ordinary and all three used to lose the
            question: the composer had already been cleared, so `**Error:**
@@ -13427,9 +13454,9 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             const msgs = [...session.messages];
             const previous = msgs[newMessageIndex] || { role: 'assistant', content: '' };
             msgs[newMessageIndex] = {
-              ...previous, content: `${previous.content || ''}\n\n**Error:** ${err.message}`, isMcpFetching: false,
+              ...previous, content: `${previous.content || ''}\n\n**Error:** ${err.message}`, isMcpFetching: false, interrupted: true,
               // Offered a "carry on" button (src/CliTurn.jsx) when the CLI kept its session.
-              ...(err.cliContinue ? { cliContinue: { model: activeModel } } : {}),
+              ...((err.cliContinue || previous.cliStarted || previous.cliActivity || isAutoTool) ? { cliContinue: { model: activeModel, resumable: !!err.cliContinue } } : {}),
               ...(err.cliTimedOut ? { cliTimedOut: true } : {}),
             };
             return { ...session, messages: msgs };
@@ -14261,7 +14288,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
   const continueCli = (model = null) => {
     if (isGenerating) return;
     cliContinueRef.current = true;
-    handleSend(null, [...messages, { role: 'user', content: t('cliTurn.continuePrompt'), at: Date.now() }], model);
+    handleSend(null, [...messages, { role: 'user', content: CONTINUE_WORK_PROMPT, at: Date.now() }], model);
   };
 
   /* Written through at once, like deleteSession. Left to the 700ms save timer,
@@ -17620,10 +17647,10 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                         saved copy still says it is being written. Said, with a
                         way to finish it, instead of passing as a whole answer. */}
                     {msg.role === 'assistant' && !answerLiveHere && !isGenerating && i + group.length - 1 === messages.length - 1
-                      && group[group.length - 1].cliActivity && !group[group.length - 1].metrics && !group[group.length - 1].followedOnly && (
+                      && !group[group.length - 1].cliContinue && (group[group.length - 1].interrupted || (group[group.length - 1].cliActivity && !group[group.length - 1].metrics)) && !group[group.length - 1].followedOnly && (
                       <div className="answer-cut-notice" role="status">
                         <span>{t('msg.cutOff')}</span>
-                        <button type="button" className="answer-cut-retry" onClick={() => handleRetry()}><RefreshCcw size={13} />{t('msg.retry')}</button>
+                        <button type="button" className="answer-cut-retry" onClick={() => continueCli(group[group.length - 1].model || selectedModel)}><RefreshCcw size={13} />{t('continue.action')}</button>
                       </div>
                     )}
                   </div>

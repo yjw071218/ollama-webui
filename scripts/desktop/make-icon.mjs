@@ -1,4 +1,4 @@
-﻿#!/usr/bin/env node
+#!/usr/bin/env node
 /* Turns public/favicon.svg (the app's logo) into installer/app.ico.
    Needs @resvg/resvg-js, which the release workflow installs with --no-save:
      npm i --no-save @resvg/resvg-js && node scripts/desktop/make-icon.mjs

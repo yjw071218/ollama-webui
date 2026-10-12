@@ -2637,6 +2637,7 @@ const runCliOnce = ({
     killTree(child);
     if (exited) cleanup();
     else setTimeout(cleanup, 15000).unref?.();
+    if (error && (persist || resume)) error.sessionId = reader.sessionId || (reader.threadId && !reader.thread?.ephemeral ? reader.threadId : '') || resume || '';
     // Part of what it was told lived in a one-run agent: not a session to pick up.
     if (invocation.unresumable) {
       if (value) value.sessionId = '';
@@ -2999,7 +3000,8 @@ export const takeContinuable = (owner, chat, { provider, keyModel }) => {
 
 const answer = async (req, res, baseEnv, body, target, { generate = false, providers = availableProviders(baseEnv) } = {}) => {
   const env = generate ? baseEnv : envForRequest(baseEnv, req.headers);
-  const wantsContinue = !generate && /^(on|1|true)$/i.test(String(req.headers['x-cli-continue'] || ''));
+  const ephemeral = req.headers['x-chat-ephemeral'] === '1';
+  const wantsContinue = !ephemeral && !generate && /^(on|1|true)$/i.test(String(req.headers['x-cli-continue'] || ''));
   const name = body.model;
   const messages = generate
     ? [...(body.system ? [{ role: 'system', content: body.system }] : []),
@@ -3035,7 +3037,7 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
     : { model: name, created_at: new Date().toISOString(), message: { role: 'assistant', content: delta.content || '', ...(delta.thinking ? { thinking: delta.thinking } : {}) }, ...extra });
 
   let connected = true;
-  res.on('close', () => { connected = false; });
+  res.on('close', () => { connected = false; if (ephemeral) controller.abort(); });
   if (stream) {
     res.statusCode = 200;
     res.setHeader('Content-Type', 'application/x-ndjson');
@@ -3141,7 +3143,7 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
     // A run that can act is told, in the transcript too, to act (see AGENTIC_FRAME).
     const agentic = !body.format && (!!project || Object.keys(tools?.servers || {}).length > 0 || !!tools?.web);
     const full = toPrompt(messages, { format: body.format, agentic });
-    const resumable = !generate && resumeEnabled(provider.id, env);
+    const resumable = !ephemeral && !generate && resumeEnabled(provider.id, env);
     // A session belongs to the folder it ran in: the same history in
     // another folder (or none) is a different session.
     const keyModel = project ? `${model}@${project.dir}#${project.mode}` : model;
@@ -3187,7 +3189,7 @@ const answer = async (req, res, baseEnv, body, target, { generate = false, provi
       result = await attempt(request, resume);
     } catch (e) {
       scratchWatch?.stop();
-      if (e.timedOut && e.sessionId && chat && !generate) {
+      if (e.sessionId && chat && !generate && !ephemeral && !isSessionMissingError(e.message)) {
         noteContinuable(owner, chat, { id: e.sessionId, provider: provider.id, keyModel });
         e.canContinue = true;
       }

@@ -133,8 +133,8 @@ export const CliTurnExtras = ({ message, live = false, isLast = false, busy = fa
       {showContinue && (
         <button type="button" className="continue-btn" onClick={() => onContinue?.(message.cliContinue.model)}>
           <CornerDownRight size={14} />
-          <span>{t('cliTurn.continue')}</span>
-          <span className="continue-hint">{t('cliTurn.continueHint')}</span>
+          <span>{t('continue.action')}</span>
+          {message.cliContinue.resumable !== false && <span className="continue-hint">{t('cliTurn.continueHint')}</span>}
         </button>
       )}
       {!showContinue && isLast && !busy && message.cliTimedOut && (

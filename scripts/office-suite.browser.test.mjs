@@ -43,8 +43,8 @@ try {
  assert.match(result.wordText,/수정된 문단/);assert.match(result.wordText,/마지막 문단/);
  for(const [format,r] of Object.entries(result.formats)){assert.equal(r.value,42,format);if(['xlsx','xls','ods'].includes(format))assert.equal(r.formula,'SUM(B2:B3)',format);}
  for(const format of ['xls','ods']) assert.equal(result.formats[format].total,50,format+' calculated sum');
- assert.equal(result.slides,6);
- console.log('PASS DOCX editing, XLSX/XLS/ODS/CSV/TSV values, spreadsheet formulas and six editable slide designs');
+ assert.equal(result.slides,11);
+ console.log('PASS DOCX editing, XLSX/XLS/ODS/CSV/TSV values, spreadsheet formulas and eleven editable slide designs');
  if(process.argv.includes('--convert')) {
   for(const [from,to,data] of [['docx','doc',result.word],['docx','odt',result.word],['pptx','odp',result.deck]]) {
    const out=await convertOffice({from,to,data});const back=await convertOffice({from:to,to:from,data:out.data});const files=unzipSync(Buffer.from(back.data,'base64'));

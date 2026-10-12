@@ -14,9 +14,11 @@ public final class QuickAskActivity extends MainActivity {
     }
     private void resize() {
         android.util.DisplayMetrics metrics = getResources().getDisplayMetrics();
-        getWindow().setLayout(Math.min((int)(520 * metrics.density), (int)(metrics.widthPixels * .94)),
-            (int)(metrics.heightPixels * .78));
+        getWindow().setLayout(Math.min((int)(380 * metrics.density), (int)(metrics.widthPixels * .92)),
+            Math.min((int)(460 * metrics.density), (int)(metrics.heightPixels * .66)));
         getWindow().setGravity(Gravity.CENTER);
+        getWindow().setBackgroundDrawable(new android.graphics.drawable.ColorDrawable(android.graphics.Color.TRANSPARENT));
+        getWindow().getDecorView().setPadding(0, 0, 0, 0);
         getWindow().setSoftInputMode(WindowManager.LayoutParams.SOFT_INPUT_ADJUST_RESIZE);
     }
     @Override public void onConfigurationChanged(Configuration config) {

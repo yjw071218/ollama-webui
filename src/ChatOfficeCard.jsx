@@ -1,3 +1,6 @@
+import './chatOfficeCard.css';
+import { slideScene } from './officeDesign.js';
+import { Download, FileText, Presentation, Sheet } from 'lucide-react';
 import React, { useMemo, useRef, useState } from 'react';
 import { buildChatOffice, parseChatOffice } from './chatOffice.js';
 
@@ -18,15 +21,19 @@ export default function ChatOfficeCard({ source }) {
     } catch (e) { setError(e.message); }
     finally { lock.current = false; setBusy(false); }
   };
-  return <section className="tool-block" aria-label="대화에서 만든 오피스 문서" style={{ padding: 16 }}>
+  const Icon = doc.slides ? Presentation : doc.sheets ? Sheet : FileText;
+  const first = doc.slides?.[0];
+  return <section className="chat-office-card" aria-label="대화에서 만든 오피스 문서">
+    {first && <svg className="office-cover" viewBox="0 0 1333.3 750" role="img" aria-label="첫 슬라이드 미리보기">{slideScene(first).map((shape,i)=>shape.type==='rect'?<rect key={i} x={shape.x*100} y={shape.y*100} width={shape.w*100} height={shape.h*100} fill={'#'+shape.fill}/>:<foreignObject key={i} x={shape.x*100} y={shape.y*100} width={shape.w*100} height={shape.h*100}><div xmlns="http://www.w3.org/1999/xhtml" style={{fontSize:shape.size*100/72,color:'#'+shape.color,fontWeight:shape.bold?700:400,lineHeight:1.2,whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{shape.text}</div></foreignObject>)}</svg>}
+    <div className="office-card-content"><div className="office-card-heading"><span className="office-file-icon"><Icon size={24}/></span><div>
     <strong>{doc.title}</strong>
     <p>{doc.format.toUpperCase()} · {doc.slides ? `${doc.slides.length}개 슬라이드` : doc.sheets ? `${doc.sheets.length}개 시트` : '문서'}</p>
-    <button type="button" disabled={busy} onClick={download}>{busy ? '파일 만드는 중…' : `${doc.format.toUpperCase()} 다운로드`}</button>
+    </div></div><button className="office-download" type="button" disabled={busy} onClick={download}><Download size={16}/>{busy ? '파일 만드는 중…' : `${doc.format.toUpperCase()} 다운로드`}</button>
     {error && <p role="alert">{error} 다시 다운로드를 누르면 재시도합니다.</p>}
     <details><summary>내용 미리보기</summary>
       {doc.slides ? doc.slides.map((s,i) => <div key={i}><h4>{i+1}. {s.title}</h4><p style={{ whiteSpace:'pre-wrap' }}>{s.body}</p>{s.items.map((v,j)=><p key={j}>{v.title}: {v.body}</p>)}</div>)
         : doc.sheets ? doc.sheets.map((s,i)=><div key={i}><h4>{s.name}</h4><pre style={{ overflow:'auto' }}>{s.rows.slice(0,20).map(row=>row.join('\t')).join('\n')}</pre></div>)
         : <p style={{ whiteSpace:'pre-wrap' }}>{doc.text}</p>}
-    </details>
+    </details></div>
   </section>;
 }

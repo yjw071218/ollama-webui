@@ -31,6 +31,8 @@
     capabilities: Object.freeze({ share: true, clipboard: true, screenCapture: true }),
     changeServer: () => call('changeServer'),
     checkUpdates: () => call('checkUpdates'),
+    closeQuickAsk: () => call('quickAskClose'),
+    openQuickAskApp: () => call('quickAskOpenApp'),
     // An answer is being written: the screen stays on until it is done (src/nativeEvents.js).
     busy: (value, info) => { call('busy', { value: !!value, chat: String(info?.chat || ''), title: String(info?.title || '') }).catch(() => {}); },
     captureScreen: async () => {
