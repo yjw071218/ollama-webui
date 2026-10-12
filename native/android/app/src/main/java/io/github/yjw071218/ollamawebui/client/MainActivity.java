@@ -61,6 +61,8 @@ public class MainActivity extends Activity {
     private static final int RECENT_MAX = 6;
     private int dp(int n) { return (int) (getResources().getDisplayMetrics().density * n); }
 
+    protected boolean floatingAsk() { return false; }
+
     @Override public void onCreate(Bundle state) {
         super.onCreate(state);
         prefs = getSharedPreferences("connection", MODE_PRIVATE);
@@ -75,7 +77,7 @@ public class MainActivity extends Activity {
         else { showSplash(); connect(saved, null); }
         watchNetwork();
         clearOldUpdates();
-        checkUpdates(false);
+        if (!floatingAsk()) checkUpdates(false);
     }
     /* ------------------------------------------------------------ palette */
     /** The phone's own light or dark, for the screens the app draws itself. */
@@ -227,13 +229,15 @@ public class MainActivity extends Activity {
             input.setSingleLine(false); input.setMinLines(2);
             FrameLayout box = new FrameLayout(this); box.setPadding(dp(20), dp(8), dp(20), 0); box.addView(input);
             dialog().setTitle(L.t("직접 질문하기", "Ask your own question")).setView(box)
-                .setNegativeButton(L.t("취소", "Cancel"), null)
+                .setOnCancelListener(cancelled -> { if (floatingAsk()) finish(); })
+                .setNegativeButton(L.t("취소", "Cancel"), (cancelled, buttonId) -> { if (floatingAsk()) finish(); })
                 .setPositiveButton(L.t("보내기", "Send"), (d2, w2) -> {
                     String q = input.getText().toString().trim();
                     sendAsk((q.isEmpty() ? L.t("다음 내용에 대해 알려 줘.", "Tell me about the following.") : q) + quoted);
                 }).show();
             input.requestFocus();
-        }).setNegativeButton(L.t("취소", "Cancel"), null).show();
+        }).setOnCancelListener(cancelled -> { if (floatingAsk()) finish(); })
+                .setNegativeButton(L.t("취소", "Cancel"), (cancelled, buttonId) -> { if (floatingAsk()) finish(); }).show();
         Toast.makeText(this, preview, Toast.LENGTH_SHORT).show();
     }
     private void sendAsk(String text) {
@@ -442,7 +446,7 @@ public class MainActivity extends Activity {
         stopService(new Intent(this, CaptureService.class));
         if (captureReply != null) { reply(captureReply, captureId, null, L.t("연결을 종료했습니다.", "Disconnected.")); captureReply = null; }
         if (web != null) { web.loadUrl("about:blank"); web.destroy(); web = null; }
-        if (proxy != null) { proxy.close(); proxy = null; }
+        if (proxy != null) { ClientGateways.release(proxy); proxy = null; }
         notificationAllowed = false;
         layout = new LinearLayout(this); layout.setOrientation(LinearLayout.VERTICAL);
         layout.setPadding(dp(24), dp(40), dp(24), dp(24));
@@ -554,20 +558,12 @@ public class MainActivity extends Activity {
                 catch (LoopbackProxy.NotServerException notServer) { throw notServer; }
                 catch (IOException unreachable) { if (button != null) throw new IOException(L.t("서버에 연결할 수 없습니다. 주소와 서버 실행 상태를 확인하세요.", "The server is not answering. Check the address and that the server is running."), unreachable); }
                 int port = prefs.getInt("port:" + server, 0);
-                LoopbackProxy candidate = new LoopbackProxy(server, port);
-                if (port == 0) {
-                    Set<Integer> used = new HashSet<>();
-                    for (Map.Entry<String, ?> entry : prefs.getAll().entrySet())
-                        if (entry.getKey().startsWith("port:") && entry.getValue() instanceof Integer) used.add((Integer) entry.getValue());
-                    for (int attempt = 0; used.contains(candidate.port()); attempt++) {
-                        candidate.close();
-                        if (attempt > 50) throw new IOException(L.t("사용할 앱 포트가 없습니다.", "No free port for the app."));
-                        candidate = new LoopbackProxy(server, 0);
-                    }
-                }
-                final LoopbackProxy ready = candidate;
+                Set<Integer> used = new HashSet<>();
+                for (Map.Entry<String, ?> entry : prefs.getAll().entrySet())
+                    if (entry.getKey().startsWith("port:") && entry.getValue() instanceof Integer) used.add((Integer) entry.getValue());
+                final LoopbackProxy ready = ClientGateways.acquire(server, port, used);
                 runOnUiThread(() -> {
-                    if (isFinishing() || isDestroyed()) { ready.close(); return; }
+                    if (isFinishing() || isDestroyed()) { ClientGateways.release(ready); return; }
                     proxy = ready;
                     Runnable open = () -> {
                         prefs.edit().putString("server", server).putInt("port:" + server, ready.port()).apply();
@@ -575,6 +571,7 @@ public class MainActivity extends Activity {
                         CookieManager cm = CookieManager.getInstance();
                         cm.setCookie(ready.origin, LoopbackProxy.COOKIE + "=" + ready.token + "; Path=/; HttpOnly; SameSite=Strict", ok -> {
                             connecting = false;
+                            if (isFinishing() || isDestroyed()) return;
                             if (!ok) { showSetup(); message(L.t("앱 연결 쿠키를 설정하지 못했습니다.", "Could not set the app's connection cookie.")); return; }
                             cm.flush(); showWeb(server);
                         });
@@ -630,6 +627,19 @@ public class MainActivity extends Activity {
         notificationAllowed = prefs.getBoolean("notify:" + server, false) && notificationsAllowedBySystem();
         // No native button bar: reload and server change live in the page's own
         // account menu (window.ollamaNative.changeServer), so the app has no frame.
+        if (floatingAsk()) {
+            LinearLayout bar = new LinearLayout(this);
+            bar.setGravity(Gravity.CENTER_VERTICAL);
+            bar.setPadding(dp(10), 0, dp(6), 0);
+            TextView title = label(L.t("AI에게 묻기", "Ask AI"), 15);
+            bar.addView(title, new LinearLayout.LayoutParams(0, dp(48), 1));
+            Button open = button(L.t("앱 열기", "Open app"), false);
+            open.setOnClickListener(v -> { startActivity(new Intent(this, MainActivity.class)); finish(); });
+            bar.addView(open);
+            Button close = button(L.t("닫기", "Close"), false);
+            close.setOnClickListener(v -> finish()); bar.addView(close);
+            layout.addView(bar);
+        }
         web = new WebView(this); layout.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
         applyChrome(prefs.getInt("chrome", Color.rgb(26, 25, 22)));
         WebSettings s = web.getSettings();
@@ -758,6 +768,11 @@ public class MainActivity extends Activity {
                 String js = new String(readBytes(in, 100000), StandardCharsets.UTF_8)
                     // The page learns at once that it may notify, before its first check.
                     .replace("static permission = 'default';", "static permission = '" + (notificationAllowed ? "granted" : "default") + "';");
+                if (floatingAsk()) {
+                    try (InputStream compact = getAssets().open("quickask.js")) {
+                        js += "\n" + new String(readBytes(compact, 100000), StandardCharsets.UTF_8);
+                    }
+                }
                 WebViewCompat.addDocumentStartJavaScript(web, js, Collections.singleton(proxy.origin));
             } catch (Exception e) { message(L.t("앱 확장 초기화 실패: ", "The app extension did not start: ") + e.getMessage()); }
         } else message(L.t("Android System WebView를 업데이트해야 화면 캡처·공유·알림 확장을 사용할 수 있습니다.", "Update Android System WebView to use screen capture, sharing and notifications."));
@@ -1035,10 +1050,10 @@ public class MainActivity extends Activity {
     @Override protected void onDestroy() {
         denyMedia();
         if (fileResult != null) fileResult.onReceiveValue(null);
-        stopService(new Intent(this, CaptureService.class)); CaptureService.result = null;
+        if (!floatingAsk() || captureReply != null) { stopService(new Intent(this, CaptureService.class)); CaptureService.result = null; }
         if (network != null) { try { getSystemService(ConnectivityManager.class).unregisterNetworkCallback(network); } catch (Exception ignored) { } }
         if (web != null) web.destroy();
-        if (proxy != null) proxy.close();
+        if (proxy != null) ClientGateways.release(proxy);
         io.shutdownNow(); super.onDestroy();
     }
 }

@@ -131,7 +131,19 @@ export const createChatJobStore = ({ limits = {}, now = Date.now, onFinished = n
     job.bytes += size;
     bytes += size;
     job.updatedAt = now();
-    if (format === 'object' && frame?.done) finish(id);
+    if (format === 'object' && (frame?.done || frame?.error)) finish(id);
+    if (format === 'string') {
+      // Network chunks can split a terminal NDJSON frame anywhere. The
+      // protocol's terminal frame, not eventual socket closure, ends a job.
+      const lines = ((job.pendingLine || '') + frame).split('\n');
+      job.pendingLine = lines.pop();
+      for (const line of [...lines, job.pendingLine]) {
+        try {
+          const value = JSON.parse(line);
+          if (value.done || value.error) { finish(id); job.pendingLine = ''; break; }
+        } catch { /* an incomplete line is continued by the next chunk */ }
+      }
+    }
     return true;
   };
   return {
@@ -159,7 +171,7 @@ export const createChatJobStore = ({ limits = {}, now = Date.now, onFinished = n
     live: (owner, chat) => {
       prune();
       return [...jobs.values()]
-        .filter(job => !job.finished && job.chat && job.chat === String(chat || '')
+        .filter(job => !job.finished && job.chat && (chat == null || job.chat === String(chat || ''))
           && job.owner === String(owner || ''))
         .sort((a, b) => b.startedAt - a.startedAt)
         .map(job => ({ id: job.id, chat: job.chat, kind: job.kind, startedAt: job.startedAt, bytes: job.bytes }));

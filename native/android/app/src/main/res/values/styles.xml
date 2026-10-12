@@ -9,4 +9,12 @@
         <item name="android:windowBackground">@color/app_background</item>
         <item name="android:colorAccent">#D97757</item>
     </style>
+    <style name="QuickAskTheme" parent="@android:style/Theme.Material.Light.Dialog.NoActionBar">
+        <item name="android:windowIsFloating">true</item>
+        <item name="android:windowCloseOnTouchOutside">true</item>
+        <item name="android:windowNoTitle">true</item>
+        <item name="android:backgroundDimEnabled">true</item>
+        <item name="android:backgroundDimAmount">0.18</item>
+        <item name="android:colorAccent">#D97757</item>
+    </style>
 </resources>

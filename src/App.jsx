@@ -10,6 +10,7 @@ import ModelMenu from './AnchoredMenu.jsx';
 import PdfReader from './PdfReader.jsx';
 import { flushSync, createPortal } from 'react-dom';
 import { resumableChatReader } from './chatStream.js';
+import { watchLiveJobs, busyChats } from './liveJobs.js';
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, useCallback, lazy, Suspense } from 'react';
 import { jankPhase } from './jankWatch.js';
 import localforage from 'localforage';
@@ -3003,6 +3004,12 @@ function App() {
   /* The answer being written on another device, as far as it has got:
      `{ chat, id, content }`, or null. Filled by `followElsewhere`. */
   const [followed, setFollowed] = useState(null);
+  const [liveJobs, setLiveJobs] = useState([]);
+  useEffect(() => {
+    setLiveJobs([]);
+    if (!isStorageLoaded) return undefined;
+    return watchLiveJobs(setLiveJobs);
+  }, [isStorageLoaded, profileScope]);
   /* A followed answer the reader deleted: its stream id, so the next look at
      /api/chat/live does not lay the same words back over the chat. */
   const dismissedFollowRef = useRef(null);
@@ -3586,14 +3593,16 @@ function App() {
    * why this device must not write it into the conversation.
    */
   useEffect(() => {
-    if (!isStorageLoaded || !currentSessionId || isGenerating) {
+    if (!isStorageLoaded || !currentSessionId || (isGenerating && String(generatingSessionId) === String(currentSessionId))) {
       setFollowed(null);
       return undefined;
     }
     const chat = String(currentSessionId);
     const controller = new AbortController();
     let stopped = false;
-    let reading = false;
+    let reading = false, looking = false, activeId = null, followController = null;
+    let retryTimer;
+    const finishedIds = new Set();
 
     /* When the turn began, in this device's clock. A turn that calls a tool is
        several streams one after another; the clock runs from the first, as it
@@ -3602,14 +3611,18 @@ function App() {
     let turnStart = null, idleLooks = 0;
     const follow = async (id, startedAt) => {
       reading = true;
+      activeId = id;
+      followController = new AbortController();
       idleLooks = 0;
       if (!turnStart) turnStart = startedAt;
-      const reader = resumableChatReader(null, id, controller.signal);
+      const reader = resumableChatReader(null, id, followController.signal);
       const decoder = new TextDecoder();
       let buffer = '', thinking = '', content = '', terminal = false, cliActivity = null, cliStarted = null;
       /* The same two fields the writing device composes from: Ollama streams
          reasoning separately, and an open <think> is what keeps the dropdown
          spinning while the model is still in it. */
+      setFollowed({ chat, id, content: '', live: true, startedAt: turnStart,
+        asked: askedCount(sessionsRef.current.find(s => String(s.id) === chat)?.messages || []) });
       const compose = () => (thinking
         ? (terminal || content
           ? `<think>\n${fenceThinking(decodeByteFallback(thinking))}\n</think>\n\n`
@@ -3631,7 +3644,7 @@ function App() {
             if (frame.cli_activity) cliActivity = frame.cli_activity;
             if (frame.cli_started) cliStarted = frame.cli_started;
             if (frame.done || frame.error) cliActivity = null;
-            if (frame.done) terminal = true;
+            if (frame.done || frame.error) terminal = true;
           }
           /* `live` is what the composer's stop button reads: the words stay
              on screen after the stream ends, but there is nothing left to
@@ -3641,18 +3654,21 @@ function App() {
             // How many questions the chat had here as these words came in (see `messages`).
             asked: askedCount(sessionsRef.current.find(s => String(s.id) === chat)?.messages || []),
           });
-          if (done) break;
+          if (done || terminal) { finishedIds.add(id); break; }
         }
       } catch (e) {
         /* A stream that cannot be followed is not a failure worth reporting:
            the answer still arrives here the ordinary way, by sync. */
       } finally {
-        reading = false;
-        if (!stopped) setFollowed(previous => (previous && previous.id === id ? { ...previous, live: false } : previous));
+        followController.abort();
+        reading = false; activeId = null;
+        terminal = true;
+        if (!stopped) setFollowed(previous => (previous && previous.id === id
+          ? { ...previous, content: compose(), live: false, cliActivity: null } : previous));
         /* A turn that called a tool goes on in a new stream: asked for at once
            rather than at the next tick, so the live line does not drop out
            for four seconds between the two. */
-        if (!stopped) setTimeout(() => { look(); }, 250);
+        if (!stopped) retryTimer = setTimeout(() => { look(); }, 250);
         /* What was heard is kept rather than cleared. The stored copy is
            usually a moment behind at this point, and blanking the text back to
            it would be a visible step backwards; `messages` hands over by
@@ -3661,22 +3677,45 @@ function App() {
     };
 
     const look = async () => {
-      if (stopped || reading) return;
-      const answer = await fetchJsonQuietly(`/api/chat/live?chat=${encodeURIComponent(chat)}`).catch(() => null);
-      if (stopped || reading) return;
-      if (!answer?.job?.id) {
+      if (stopped || looking) return;
+      looking = true;
+      let answer;
+      try { answer = await fetchJsonQuietly(`/api/chat/live?chat=${encodeURIComponent(chat)}`, { signal: controller.signal }); }
+      catch { return; }
+      finally { looking = false; }
+      if (stopped) return;
+      const jobs = answer?.jobs || (answer?.job ? [answer.job] : []);
+      if (reading) {
+        // A sleeping phone can miss the terminal bytes. Reconcile even while
+        // its replay socket is open, and never stop the model from a follower.
+        if (answer?.success && !jobs.some(job => job.id === activeId)) {
+          finishedIds.add(activeId);
+          followController?.abort();
+        }
+        return;
+      }
+      const job = jobs.find(job => !finishedIds.has(job.id));
+      if (!job?.id) {
         if (answer?.success && ++idleLooks >= 2) turnStart = null;
         return;
       }
-      const began = Number(answer.job.startedAt), serverNow = Number(answer.now);
-      follow(answer.job.id, Number.isFinite(began) && Number.isFinite(serverNow)
+      const began = Number(job.startedAt), serverNow = Number(answer.now);
+      follow(job.id, Number.isFinite(began) && Number.isFinite(serverNow)
         ? Date.now() - Math.max(0, serverNow - began)
         : Date.now());
     };
     look();
     const timer = setInterval(() => { if (!document.hidden) look(); }, 4000);
-    return () => { stopped = true; clearInterval(timer); controller.abort(); };
-  }, [currentSessionId, isStorageLoaded, isGenerating]);
+    const onVisible = () => { if (!document.hidden) look(); };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onVisible);
+    return () => {
+      stopped = true; clearInterval(timer); clearTimeout(retryTimer);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onVisible);
+      controller.abort(); followController?.abort();
+    };
+  }, [currentSessionId, isStorageLoaded, isGenerating, generatingSessionId]);
 
   /* "It is done" -- to somebody who is not looking at the screen.
    *
@@ -4264,12 +4303,14 @@ function App() {
   const remotePicture = drawing?.watched && String(drawing.sessionId) === String(currentSessionId)
     ? drawing : null;
   const remoteAnswer = followed?.live && followed.chat === String(currentSessionId) ? followed : null;
-  const remoteTurnHere = !isGenerating && !!(remotePicture || remoteAnswer);
+  const remoteTurnHere = !isThisChatGenerating && !!(remotePicture || remoteAnswer);
   /* An answer arriving in this chat, wherever it was asked: what the
      answering row looks like -- the typing dots, the caret, the open
      thinking, the clock and token count -- is the same on every device. Only
      the controls that belong to the device that asked stay with it. */
-  const answerLiveHere = isThisChatGenerating || (!isGenerating && !!remoteAnswer);
+  const answerLiveHere = isThisChatGenerating || !!remoteAnswer;
+  const otherBusyChats = busyChats(liveJobs, isGenerating ? generatingSessionId : null, currentSessionId);
+  const busyChatId = otherBusyChats[0] ?? (remoteTurnHere ? String(currentSessionId) : null);
 
   /**
    * Stop a turn that is running somewhere else.
@@ -18076,15 +18117,18 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   send button is dead with nothing saying why. Inline in the
                   toolbar beside the microphone, not a row of its own under the
                   composer. The whole chip opens the busy chat. */}
-              {isGenerating && !isThisChatGenerating && (
+              {busyChatId != null && (
                 <button
                   type="button"
                   className="busy-elsewhere"
                   title={`${t('chat.busyElsewhere')} · ${t('chat.goThere')}`}
-                  onClick={() => openChat(generatingSessionId)}
+                  onClick={() => {
+                    const chat = sessions.find(session => String(session.id) === busyChatId);
+                    if (chat) openChat(chat.id);
+                  }}
                 >
                   <RefreshCcw size={11} className="spin" />
-                  <span>{t('chat.busyElsewhere')}</span>
+                  <span>{busyChatId === String(currentSessionId) ? t('voice.thinking') : t('chat.busyElsewhere')}{otherBusyChats.length > 1 ? ` · ${otherBusyChats.length}` : ''}</span>
                 </button>
               )}
               

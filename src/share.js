@@ -18,7 +18,7 @@ export const canShare = () => (
   && typeof navigator.share === 'function'
   // A share from an insecure origin throws rather than returning false, and
   // this app is reached over plain http on a home network all the time.
-  && (typeof window === 'undefined' || window.isSecureContext !== false)
+  && (typeof window === 'undefined' || window.isSecureContext !== false || window.ollamaNative?.capabilities?.share === true)
 );
 
 /**
@@ -104,7 +104,7 @@ const guessType = (filename) => {
 export const whyNoSheet = () => {
   if (typeof navigator === 'undefined') return 'none';
   if (typeof navigator.share !== 'function') return 'none';
-  if (typeof window !== 'undefined' && window.isSecureContext === false) return 'insecure';
+  if (typeof window !== 'undefined' && window.isSecureContext === false && window.ollamaNative?.capabilities?.share !== true) return 'insecure';
   return '';
 };
 

@@ -28,6 +28,7 @@
   };
   Object.defineProperty(window, 'ollamaNative', { value: Object.freeze({
     platform: 'android',
+    capabilities: Object.freeze({ share: true, clipboard: true, screenCapture: true }),
     changeServer: () => call('changeServer'),
     checkUpdates: () => call('checkUpdates'),
     // An answer is being written: the screen stays on until it is done (src/nativeEvents.js).
@@ -47,10 +48,14 @@
     return call('share', { title: String(data.title || ''), text: String(data.text || ''), url: String(data.url || ''),
       file: file ? { name: file.name, type: file.type, data: await base64(file) } : null });
   } });
-  Object.defineProperty(navigator, 'clipboard', { value: Object.freeze({
-    writeText: text => call('clipboardWrite', { text: String(text) }),
-    readText: () => call('clipboardRead'),
-  }) });
+  // Keep WebView's binary read/write methods when supported. Only text needs
+  // the native fallback; replacing the whole object removed those APIs.
+  const clipboard = navigator.clipboard || {};
+  Object.defineProperties(clipboard, {
+    writeText: { value: text => call('clipboardWrite', { text: String(text) }) },
+    readText: { value: () => call('clipboardRead') },
+  });
+  Object.defineProperty(navigator, 'clipboard', { value: clipboard });
   class NativeNotification {
     static permission = 'default';
     static async requestPermission(callback) {

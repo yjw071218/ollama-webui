@@ -81,8 +81,8 @@ test('chat replay preserves CLI activity and original start for followers and re
 
 test('another client follows status-only frames and uses the original elapsed time', async () => {
   const app = fs.readFileSync('src/App.jsx', 'utf8');
-  const begin = app.lastIndexOf('  useEffect(() => {', app.indexOf('if (!isStorageLoaded || !currentSessionId || isGenerating)'));
-  const ending = '}, [currentSessionId, isStorageLoaded, isGenerating]);';
+  const begin = app.indexOf('  useEffect(() => {', app.indexOf('  /* The words of an answer another device is writing.'));
+  const ending = '}, [currentSessionId, isStorageLoaded, isGenerating, generatingSessionId]);';
   const source = app.slice(begin, app.indexOf(ending, begin) + ending.length);
   const frames = [
     { cli_started: { startedAt: 1000, provider: 'codex' }, cli_activity: { phase: 'thinking', at: 1001 } },
@@ -94,11 +94,13 @@ test('another client follows status-only frames and uses the original elapsed ti
   let cleanup;
   const before = Date.now();
   vm.runInNewContext(source, {
-    isStorageLoaded: true, currentSessionId: 'c', isGenerating: false,
+    isStorageLoaded: true, currentSessionId: 'c', isGenerating: false, generatingSessionId: null,
+    document: { addEventListener() {}, removeEventListener() {} },
+    window: { addEventListener() {}, removeEventListener() {} },
     AbortController, TextDecoder,
     useEffect: run => { cleanup = run(); },
     setFollowed: value => updates.push(typeof value === 'function' ? value(updates.at(-1)) : value),
-    setTimeout: () => 0, setInterval: () => 0, clearInterval: () => {},
+    setTimeout: () => 0, clearTimeout: () => {}, setInterval: () => 0, clearInterval: () => {},
     fetchJsonQuietly: async () => ({ job: { id: 'job', startedAt: 1000 }, now: 11000 }),
     resumableChatReader: () => ({ read: async () => frames.length ? { done: false, value: frames.shift() } : { done: true } }),
     decodeByteFallback: text => text, fenceThinking: text => text,
@@ -106,8 +108,8 @@ test('another client follows status-only frames and uses the original elapsed ti
   });
   await new Promise(resolve => setImmediate(resolve));
   cleanup();
-  assert.deepEqual(updates.slice(0, 3).map(u => u.cliActivity.phase), ['thinking', 'running', 'responding']);
-  assert.equal(updates[0].cliStarted.startedAt, 1000);
+  assert.deepEqual(updates.filter(u => u.cliActivity).slice(0, 3).map(u => u.cliActivity.phase), ['thinking', 'running', 'responding']);
+  assert.equal(updates[1].cliStarted.startedAt, 1000);
   assert.ok(Math.abs(updates[0].startedAt - (before - 10000)) < 100);
   assert.equal(updates[1].live, true);
   assert.equal(updates.at(-1).live, false);
@@ -119,7 +121,7 @@ test('another client follows status-only frames and uses the original elapsed ti
   const overlay = app.slice(overlayBegin, app.indexOf(overlayEnd, overlayBegin) + overlayEnd.length);
   const shown = vm.runInNewContext(overlay + '\nmessages;', {
     currentSession: { messages: [{ role: 'user', content: '작업해 줘' }] },
-    currentSessionId: 'c', followed: updates[0], useMemo: run => run(), askedCount: () => 1,
+    currentSessionId: 'c', followed: updates[1], useMemo: run => run(), askedCount: () => 1,
     dismissedFollowRef: { current: null },
   });
   assert.equal(shown.length, 2);

@@ -59,3 +59,13 @@ powershell -ExecutionPolicy Bypass -File native/bootstrap-android.ps1
 powershell -ExecutionPolicy Bypass -File native/build-android.ps1
 ```
 출력은 `native/artifacts/windows` 및 `native/artifacts/android`입니다. Android SDK 라이선스가 필요합니다. 로컬 릴리스 서명 키와 비밀번호는 `native/.tools`에만 보관하며 Git에 추가하지 않습니다. 같은 앱 업데이트를 위해 이 키를 안전하게 백업해야 합니다. CI Android APK는 별도 debug ID/서명이며 공개 릴리스 APK와 다릅니다.
+
+## 외부 앱에서 간단히 질문하기
+
+Android Whale·Chrome 등에서 텍스트를 선택한 후 **AI에게 묻기**를 누르면 별도의 플로팅 창이 열립니다. 요약·번역·설명·다듬기 또는 직접 질문을 선택하면 같은 창에서 답변을 읽고 후속 질문을 보낼 수 있습니다. 사이드바와 상단 도구는 숨기고 모델 선택·입력·답변 기능을 유지합니다. 닫기·뒤로가기는 원래 앱으로 돌아가며, 전체 화면은 **앱 열기**로 명시적으로 엽니다. 별도의 다른 앱 위에 표시 권한은 필요하지 않습니다.
+
+메인 화면과 플로팅 창은 같은 서버의 로컬 연결과 저장소를 공유합니다. 어느 한 창을 닫아도 다른 창의 연결은 유지됩니다. 최초 연결·로그인·OS 권한 확인은 필요합니다. Windows의 외부 텍스트 질문은 기존 **Ctrl+Shift+Q** 플로팅 창을 사용합니다.
+
+HTTP 원격 서버라도 클라이언트 내부의 127.0.0.1 보안 컨텍스트를 통해 마이크·카메라·클립보드 API를 사용할 수 있습니다. Android 화면 캡처·공유·알림은 네이티브 브리지를 사용합니다. 네이티브 공유는 브라우저의 HTTPS 판정과 별도로 실제 브리지 지원 여부를 확인하고, 클립보드 텍스트 브리지는 WebView가 제공하는 이미지 read/write API를 제거하지 않습니다. OS 권한 및 WebView의 실제 지원 범위는 그대로 적용되며, 이 기능이 HTTP 서버 구간을 암호화하지는 않습니다.
+
+회귀 검사: `node --test native/tests/quickask.test.mjs native/tests/android-features.test.mjs native/tests/proxy.test.mjs`, `node native/tests/desktop-smoke.mjs`, Android `assembleRelease lintRelease`.

@@ -543,14 +543,21 @@ export const createApiRoutes = (env = {}, options = {}) => {
       return res.end(JSON.stringify({ success: true, running: !!job && !job.finished, known: !!job }));
     }
 
+    if (url.searchParams.get('all') === '1') {
+      const owner = authenticate(req).user?.id;
+      // Guest job IDs are not an account-wide discovery mechanism.
+      const jobs = owner ? liveChatJobs(owner) : [];
+      return res.end(JSON.stringify({ success: true, jobs, now: Date.now() }));
+    }
     if (!chat) {
       res.statusCode = 400;
       return res.end(JSON.stringify({ success: false, error: 'A chat is required' }));
     }
-    const [job = null] = liveChatJobs(authenticate(req).user?.id || '', chat);
+    const jobs = liveChatJobs(authenticate(req).user?.id || '', chat);
+    const [job = null] = jobs;
     /* `now` is this server's clock: the follower times the answer from
        `job.startedAt` against it, not against its own, which may be off. */
-    res.end(JSON.stringify({ success: true, job, now: Date.now() }));
+    res.end(JSON.stringify({ success: true, job, jobs, now: Date.now() }));
   });
 
   route('/api/chat/cancel', (req, res) => {

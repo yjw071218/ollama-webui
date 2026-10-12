@@ -37,7 +37,7 @@ const check = (name, cond, detail = '') => {
 
 database().exec(`INSERT INTO users (id, name, provider, created_at, rev) VALUES ('u1', 'A', 'password', 1, 0);`);
 const held = (id) => {
-  const row = database().prepare("SELECT updated_at, payload FROM records WHERE user_id='u1' AND kind='chat' AND id=?").get(id);
+  const row = database().prepare("SELECT updated_at, payload FROM readable_records WHERE user_id='u1' AND kind='chat' AND id=?").get(id);
   return row ? { ...JSON.parse(row.payload), updatedAt: row.updated_at } : null;
 };
 const up = (record) => applyChanges('u1', { records: [record] });
