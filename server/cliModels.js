@@ -2628,6 +2628,7 @@ const runCliOnce = ({
     if (settled) return;
     settled = true;
     clearTimeout(timer);
+    clearTimeout(limitTimer);
     stopWatching();
     try { reader.close?.(); } catch { /* only the live list */ }
     // The last steps agy wrote, before the answer is called whole.
@@ -2659,6 +2660,24 @@ const runCliOnce = ({
   }, timeoutMs) : null;
   timer?.unref?.();
 
+  /* Out of quota mid-run. Some CLIs say so and then keep retrying (Codex
+     backs off on 429 for minutes) or simply sit there, and the chat showed
+     only its clock, frozen, with no end frame. Heard once -- on stderr, as
+     plain text, or in an error event -- the CLI gets a short grace to finish
+     on its own words, and is then stopped with those words. */
+  let limitTimer = null;
+  const LIMIT_GRACE_MS = Math.max(2000, Number(env.CLI_LIMIT_GRACE_MS) || 12000);
+  const heardLimit = (said) => {
+    if (settled || limitTimer) return;
+    const text = String(said || '').trim().split(/\r?\n/).filter(l => LIMIT_ERROR.test(l)).slice(-2).join('\n').slice(0, 400);
+    limitTimer = setTimeout(() => {
+      const e = new Error(`${provider.label} usage limit reached: ${text || 'limit reached'}`);
+      e.limit = true;
+      settle(e);
+    }, LIMIT_GRACE_MS);
+    limitTimer.unref?.();
+  };
+
   const write = (message) => {
     if (!child.stdin.writable) return;
     try { child.stdin.write(`${JSON.stringify(message)}\n`, 'utf8'); } catch { /* it exited; `close` says why */ }
@@ -2666,9 +2685,13 @@ const runCliOnce = ({
 
   const handle = (raw) => {
     const text = raw.trim();
-    if (!text.startsWith('{')) return;
+    if (!text.startsWith('{')) { if (text && isLimitError(text)) heardLimit(text); return; }
     let line;
     try { line = JSON.parse(text); } catch { return; }
+    /* An error event that is about quota (not tool output, which can say
+       anything): its type or method names an error or a retry. */
+    if (/error|retry|rate_limit|limit/i.test(String(line.type || line.method || line.subtype || ''))
+      && isLimitError(text) && !(line.type === 'rate_limit_event' && line.rate_limit_info?.status !== 'rejected')) heardLimit(text);
     reportActivity(activity.accept(line));
     const out = reader.accept(line);
     if (!out) return;
@@ -2703,7 +2726,10 @@ const runCliOnce = ({
     }
   });
   child.stderr.setEncoding('utf8');
-  child.stderr.on('data', (chunk) => { stderr = (stderr + chunk).slice(-4000); });
+  child.stderr.on('data', (chunk) => {
+    stderr = (stderr + chunk).slice(-4000);
+    if (isLimitError(chunk)) heardLimit(chunk);
+  });
   child.on('error', (e) => settle(new Error(`${provider.label} could not start: ${e.message}`)));
   child.on('close', (code) => {
     if (stdout.trim()) handle(stdout);

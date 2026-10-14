@@ -8,6 +8,7 @@
  * back before storing it, so the rest of the app sees the original value.
  */
 import { authHeaders } from './session.jsx';
+import { isLocalBlob, internalize } from './localBlobs.js';
 
 export const BLOB_PREFIX = 'webui-blob:v1:';
 const MIN_BYTES = 64 * 1024;          // smaller strings are not worth a request
@@ -38,6 +39,14 @@ const upload = async (text, known) => {
 /** A copy of `value` with every large string replaced by a blob marker. */
 export const slimPayload = async (value, known = new Set()) => {
   if (typeof value === 'string') {
+    /* Stored on this device by address (src/localBlobs.js): its bytes are
+       what goes up, so another device gets the picture and not a name for a
+       store it does not have. */
+    if (isLocalBlob(value)) {
+      const text = await internalize(value);
+      if (isLocalBlob(text)) return value;
+      value = text;
+    }
     return value.length >= MIN_BYTES ? BLOB_PREFIX + await upload(value, known) : value;
   }
   if (Array.isArray(value)) {

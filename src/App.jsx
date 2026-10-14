@@ -18,6 +18,7 @@ import { watchLiveJobs, busyChats } from './liveJobs.js';
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, useCallback, lazy, Suspense } from 'react';
 import { jankPhase } from './jankWatch.js';
 import localforage from 'localforage';
+import { externalizeList, internalizeList } from './localBlobs.js';
 import { ArrowUp, Paperclip, Sparkles, RefreshCcw, Trash2, Copy, Check, Terminal, Settings, Edit, MessageSquare, ChevronDown, Download, Square, X, Play, Mic, MicOff, Volume2, Search, Code, Maximize2, Sun, Moon, Monitor, Pin, PinOff, GitBranch, FileDown, Command, Cpu, Plus, Save, ArrowDown, Zap, Layers, Server, ExternalLink, Star, Info, TriangleAlert, FileText, Minimize2, PanelLeft, ListTree, LogOut, UserPlus, Languages, User, Activity, Globe, Folder, FolderPlus, MoreHorizontal, ChevronLeft, ChevronRight, SlidersHorizontal, CornerDownRight, Archive, WrapText, ListChecks, ChevronUp, Vibrate, Smartphone, FolderInput, StretchHorizontal, TextQuote, Brain, HelpCircle, Baby, Share2, ClipboardPaste, Upload, Users, Telescope, ShieldCheck, Wand2, Clock, Film, Brush, Scissors, Tags, Images, SquareSplitHorizontal, Undo2, Music, FileEdit } from 'lucide-react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
 import remarkGfm from 'remark-gfm';
@@ -2867,14 +2868,17 @@ function App() {
     let cancelled = false;
     setIsStorageLoaded(false);
 
-    localforage.getItem(storageKey).then(async stored => {
+    localforage.getItem(storageKey).then(async storedRaw => {
+      if (cancelled) return;
+      // Attached pictures live in their own store (src/localBlobs.js).
+      const stored = await internalizeList(storedRaw);
       if (cancelled) return;
       /* What the last page was still writing when it went away -- see
          src/unloadJournal.js. Laid over storage, and written into it, so one
          refresh shows what was on screen before it. */
       const saved = withJournal(stored, takeJournal(storageKey));
       if (saved !== stored) {
-        localforage.setItem(storageKey, saved).catch(() => {});
+        externalizeList(saved).then(slim => localforage.setItem(storageKey, slim)).catch(() => {});
       }
 
       // Nothing is copied between buckets here. This used to adopt whatever the
@@ -2955,7 +2959,7 @@ function App() {
     const readKey = storageKeyRef.current;
     let saved;
     try {
-      saved = await localforage.getItem(readKey);
+      saved = await internalizeList(await localforage.getItem(readKey));
     } catch (e) {
       return false;
     }
@@ -2991,7 +2995,11 @@ function App() {
         const id = String(x.id);
         const mine = onScreen.get(id);
         if (!mine) return x;
-        if (id === live || (mine.updatedAt || 0) > (x.updatedAt || 0)) return foldNewerFields(mine, x);
+        /* The same version on both sides keeps the copy on screen: storage
+           hands back a fresh clone of every chat on every read, and taking it
+           re-rendered the whole list (and every open message) once a second
+           while another device streamed. */
+        if (id === live || (mine.updatedAt || 0) >= (x.updatedAt || 0)) return foldNewerFields(mine, x);
         return foldNewerFields(x, mine);
       });
       // A reply streaming into a chat storage has not been given yet.
@@ -5511,7 +5519,10 @@ function App() {
       else merged.set(String(chat.id), foldNewerFields(held, chat));
     }
 
-    const next = [...merged.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    let next = [...merged.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    /* Attached pictures by address, their bytes stored once elsewhere
+       (src/localBlobs.js): the list written twice a second is text only. */
+    try { next = await externalizeList(next); } catch { /* written whole */ }
     try {
       await localforage.setItem(key, next);
     } catch (e) {

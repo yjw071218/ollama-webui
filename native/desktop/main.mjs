@@ -59,6 +59,11 @@ process.on('uncaughtException', (error) => { crashLog('main:uncaughtException', 
 process.on('unhandledRejection', (reason) => { crashLog('main:unhandledRejection', String(reason?.stack || reason)); });
 app.on('child-process-gone', (_event, details) => { if (details.reason !== 'clean-exit') crashLog('child-process-gone', details); });
 app.on('render-process-gone', (_event, contents, details) => { if (details.reason !== 'clean-exit') crashLog('render-process-gone', { url: contents?.getURL?.(), ...details }); });
+/* The page ran out of memory dozens of times a day (crash.log: reason "oom")
+   and was reloaded each time -- the "lags, then refreshes". The chat list is
+   now much smaller (src/localBlobs.js); this is headroom on top of that, so a
+   long day of pictures is not the end of the page. */
+try { app.commandLine.appendSwitch('js-flags', '--max-old-space-size=6144'); } catch { /* */ }
 const setupURL = pathToFileURL(path.join(directory, 'setup.html')).href;
 const smoke = process.argv.includes('--native-smoke');
 const smokeProfile = process.argv.find(value => value.startsWith('--smoke-profile='));
@@ -403,7 +408,11 @@ function watchConnection(win, server) {
   win.clientContents.on('unresponsive', () => {
     crashLog('page:unresponsive', win.clientContents.getURL());
     clearTimeout(hangTimer);
-    hangTimer = setTimeout(() => { if (!win.isDestroyed() && !win.clientContents.isDestroyed()) { crashLog('page:reloaded-after-hang'); win.clientContents.forcefullyCrashRenderer(); win.clientContents.reload(); } }, 15000);
+    /* Fifteen seconds was shorter than a long chat takes to save or a big
+       answer to lay out, and the reload that followed threw the work away
+       mid-way -- itself the reason the page then lagged again. Only a page
+       that has been gone for a full minute is reloaded. */
+    hangTimer = setTimeout(() => { if (!win.isDestroyed() && !win.clientContents.isDestroyed()) { crashLog('page:reloaded-after-hang'); win.clientContents.forcefullyCrashRenderer(); win.clientContents.reload(); } }, 60000);
   });
   win.clientContents.on('responsive', () => { clearTimeout(hangTimer); hangTimer = null; });
   let crashes = [];

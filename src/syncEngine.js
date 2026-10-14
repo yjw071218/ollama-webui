@@ -572,7 +572,10 @@ export const syncOnce = async (scope, { full = false, limit = 500, onPhase } = {
   const slimmed = [];
   for (const record of pendingChanges) {
     if (record.deleted || record.payload == null) { slimmed.push(record); continue; }
-    if (encoder.encode(JSON.stringify(record.payload)).byteLength <= SLIM_ABOVE) { slimmed.push(record); continue; }
+    const json = JSON.stringify(record.payload);
+    // Pictures stored here by address (src/localBlobs.js) always go through
+    // the blob path: a local address means nothing on another device.
+    if (!json.includes('local-blob:v1:') && encoder.encode(json).byteLength <= SLIM_ABOVE) { slimmed.push(record); continue; }
     try {
       slimmed.push({ kind: record.kind, id: record.id, updatedAt: record.updatedAt,
         ...(record.base != null ? { base: record.base } : {}), payload: await slimPayload(record.payload) });

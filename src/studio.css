@@ -52,7 +52,7 @@
 .studio-place {
   position: absolute;
   inset: 0;
-  top: var(--header-height, 56px);
+  top: var(--header-h, 56px);
   z-index: 6;
   overflow: hidden;
   background: var(--lt);

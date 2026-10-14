@@ -19,6 +19,7 @@
 // a file people email to themselves.
 
 import localforage from 'localforage';
+import { internalizeList } from './localBlobs.js';
 import { readScopeSettings, writeScopeSettings, isScopedSetting } from './settingsStore.js';
 
 export const BACKUP_VERSION = 3;
@@ -98,6 +99,8 @@ export const collectBackup = async ({
     if (only) { if (key === only.sessions) sessions[key] = value; return; }
     if (key === SESSION_PREFIX || key.startsWith(`${SESSION_PREFIX}:`)) sessions[key] = value;
   });
+  // Attached pictures are stored apart (src/localBlobs.js); a backup carries the bytes.
+  for (const key of Object.keys(sessions)) sessions[key] = await internalizeList(sessions[key]);
 
   const backup = {
     kind: 'ollama-webui-backup',
