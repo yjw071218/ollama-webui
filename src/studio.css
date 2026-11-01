@@ -525,6 +525,11 @@
 /* Portalled to <body>: fixed to the viewport, above every panel and footer. */
 .studio-search-panel.is-floating {
   position: fixed;
+  /* Placed by inline top *or* bottom. Without resetting the base rule's
+     `top: calc(100% + 4px)`, a panel opening upward had both, was squashed
+     to its padding below the viewport, and no LoRA could be picked in a row
+     near the bottom of the screen. */
+  top: auto;
   right: auto;
   z-index: var(--z-popover);
   display: flex;
