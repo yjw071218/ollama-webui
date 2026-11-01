@@ -180,7 +180,7 @@ check('and a sampler this app has never heard of is passed through',
 const stackable = models.filter(m => m.has.lora);
 eq('both image workflows take LoRAs', stackable.length, 2);
 eq('Anima stacks nine, which is what its stacker holds', byId['anima-base'].loraSlots, 9);
-eq('Krea 2 chains six cloned loaders', byId['krea2-turbo'].loraSlots, 6);
+eq('Krea 2 chains cloned loaders without a ceiling', byId['krea2-turbo'].loraSlots, Number.MAX_SAFE_INTEGER);
 eq('and the video one has none', byId['minimax-h3'].loraSlots, 0);
 
 /* A stacker: nine slots already in the graph, so choosing four is four

@@ -162,7 +162,8 @@ export const describe = (definition, installed = null) => {
     /* How many LoRAs this workflow can stack. Anima's stacker takes nine
        without changing anything; Krea 2's single loader is cloned and chained,
        which is why it has a ceiling at all. */
-    loraSlots: definition.loras?.max || 0,
+    // 0 = no LoRAs; a stack without `max` (Krea 2's chain) is unlimited.
+    loraSlots: definition.loras ? (definition.loras.max || Number.MAX_SAFE_INTEGER) : 0,
     loraUnlimited: !!definition.loras,
     /* Why the ones it does not have are absent.
      *

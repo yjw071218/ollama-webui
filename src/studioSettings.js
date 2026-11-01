@@ -206,8 +206,13 @@ export const restoreForm = (model, saved = {}) => {
      deleted last week is a failure forty seconds into the next generation. */
   if (Array.isArray(saved.loras)) {
     form.loras = saved.loras
-      .filter(row => row && typeof row.name === 'string' && row.name)
-      .filter(row => stillThere(row.name, choices.lora))
+      /* An empty row is kept: it is the row somebody just added with "Add" and
+         has not picked a file for yet. This form is re-read whenever the model
+         catalogue refreshes or another device syncs, and dropping unnamed rows
+         there made the second LoRA row vanish before it could be filled in --
+         so only one LoRA could ever be chosen. Requests skip unnamed rows. */
+      .filter(row => row && typeof row.name === 'string')
+      .filter(row => !row.name || stillThere(row.name, choices.lora))
       .filter(() => !!model?.loraSlots)
       .map(row => ({
         name: row.name,

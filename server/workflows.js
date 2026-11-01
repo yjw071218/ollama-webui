@@ -84,16 +84,14 @@ export const WORKFLOWS = {
     /* One `LoraLoaderModelOnly`, which holds exactly one LoRA — so more than
        one means *more nodes*. See `applyLoras`: the loader is cloned and the
        clones are chained through their `model` input, which is what stacking
-       LoRAs is at the graph level. Six is a self-imposed ceiling rather than a
-       limit of the node; past that the weights fight each other and the load
-       time is real. */
+       LoRAs is at the graph level: one cloned loader per chosen LoRA, with
+       no ceiling. */
     loras: {
       style: 'chain',
       node: '30:15',
       name: 'lora_name',
       weight: 'strength_model',
       through: 'model',
-      max: 6,
       kind: 'loras',
       // Naming a LoRA is not enough; this graph gates the whole loader behind
       // a boolean, so choosing one has to switch it on.

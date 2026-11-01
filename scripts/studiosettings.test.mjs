@@ -181,6 +181,8 @@ eq('all saved LoRAs survive restoring a form',
   S.restoreForm({ ...MODEL, loraSlots: 2 }, { loras: NAMES.map(n => ({ name: n })) }).loras.length, NAMES.length);
 eq('disabled LoRA state survives restoring a form',
   S.restoreForm(MODEL, {loras:[{name:NAMES[0],weight:0.7,enabled:false}]}).loras[0].enabled, false);
+eq('an empty row just added survives a re-read, so a second LoRA can be picked',
+  S.restoreForm(MODEL, { loras: [{ name: NAMES[0], weight: 1 }, { name: '', weight: 1 }] }).loras.length, 2);
 
 /* --------------------------------------------------------- surviving rubbish */
 
