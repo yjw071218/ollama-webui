@@ -183,6 +183,8 @@ export const restoreForm = (model, saved = {}) => {
   if (typeof saved.seed === 'string') form.seed = saved.seed;
   form.lockSeed = !!saved.lockSeed;
   form.monochrome = !!saved.monochrome;
+  // TIPO prompt expansion: on unless it was switched off.
+  if (saved.tipo === false) form.tipo = false;
 
   // The numbers restore inside whatever the workflow now allows.
   form.width = inRange(saved.width, null, form.width);

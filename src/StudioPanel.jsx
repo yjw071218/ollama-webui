@@ -1079,6 +1079,7 @@ export const StudioPanel = ({
       ...(has.loop && form.loop ? { loop: true } : {}),
       ...(has.cut && form.cut && !form.loop ? { cut: true, transition: form.transition === 'none' ? 'none' : 'fade' } : {}),
       ...(has.upscale && form.upscale ? { upscale: true } : {}),
+      ...(has.tipo ? { tipo: form.tipo !== false } : {}),
       ...(form.sampler ? { sampler: form.sampler } : {}),
       ...(form.scheduler ? { scheduler: form.scheduler } : {}),
       ...(form.model ? { model_file: form.model } : {}),
@@ -2321,6 +2322,12 @@ export const StudioPanel = ({
               {has.upscale && (
                 <Switch label={t('studio.upscale')} checked={!!form.upscale}
                   onChange={v => set('upscale', v)} hint={t('studio.upscaleHelp')} />
+              )}
+              {/* TIPO expands the prompt into tags and a longer description
+                  before the workflow reads it. On unless switched off. */}
+              {has.tipo && (
+                <Switch label={t('studio.tipo')} checked={form.tipo !== false}
+                  onChange={v => set('tipo', v)} hint={t('studio.tipoHelp')} />
               )}
             </Group>
 

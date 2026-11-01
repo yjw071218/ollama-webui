@@ -81,6 +81,18 @@ export const WORKFLOWS = {
       clip: { node: '30:11', input: 'clip_name', kind: 'text_encoders' },
       refinePrompt: { node: '30:24', input: 'value' },
     },
+    /* TIPO (KBlueLeaf/TIPOv2-1B-A200M) expands the user's prompt into tags
+       and a longer description before Krea 2's own refiner reads it. Not in
+       the exported graph: a `TIPO` node is added at request time between the
+       user prompt box and everything that read it. See `applyTipo`. */
+    tipo: {
+      prompt: '30:19',
+      latent: '30:5',
+      seed: '75',
+      // The GGUF file of that repo. Its transformers weights sit under `hf/`,
+      // which the TIPO node cannot find ("no file named model.safetensors").
+      model: 'KBlueLeaf/TIPOv2-1B-A200M | TIPOv2-1B-A200M-f16.gguf',
+    },
     /* One `LoraLoaderModelOnly`, which holds exactly one LoRA — so more than
        one means *more nodes*. See `applyLoras`: the loader is cloned and the
        clones are chained through their `model` input, which is what stacking
@@ -726,6 +738,74 @@ export const applyLoras = (prompt, definition, loras = []) => {
   }
 
   return { applied: 0, capacity: spec.max || 0 };
+};
+
+/* ================================================================ TIPO
+
+   A prompt upsampler: short words in, Danbooru tags plus an extended natural
+   language description out. Inserted rather than bound, because no exported
+   workflow has it -- the prompt box's consumers are repointed at TIPO's
+   formatted `prompt` output, and TIPO reads the box itself. Taken from the
+   finished graph, so whatever was written into the box (the user's prompt,
+   with its framing) is what TIPO expands. */
+
+/**
+ * Put TIPO between a workflow's prompt box and whatever reads it.
+ *
+ * `available` is ComfyUI's node list; without the `TIPO` class (the
+ * z-tipo-extension pack) nothing changes and the reason is returned.
+ */
+export const applyTipo = (prompt, definition, { available, models = [], seed } = {}) => {
+  const spec = definition.tipo;
+  if (!spec) return { applied: false, reason: 'unsupported' };
+  if (available && !available.has('TIPO')) return { applied: false, reason: 'missing' };
+  const sourceKey = keyOf(prompt, spec.prompt);
+  if (!sourceKey) return { applied: false, reason: 'noPrompt' };
+  const source = prompt[sourceKey];
+  const text = typeof source.inputs?.value === 'string' ? source.inputs.value : '';
+  if (!text.trim()) return { applied: false, reason: 'empty' };
+
+  // The configured entry, or the same repo under another file name.
+  const wanted = spec.model;
+  const repo = wanted.split(' |')[0];
+  const model = models.includes(wanted) ? wanted
+    : (models.find(name => name.startsWith(repo + ' |')) || wanted);
+
+  const latent = findNode(prompt, spec.latent);
+  const seedNode = findNode(prompt, spec.seed);
+  const rawSeed = Number(seed ?? seedNode?.inputs?.seed);
+  const tipoSeed = Number.isFinite(rawSeed) ? Math.abs(Math.floor(rawSeed)) % 2147483647 : 1234;
+
+  const consumers = [];
+  for (const [key, node] of Object.entries(prompt)) {
+    for (const [input, value] of Object.entries(node.inputs || {})) {
+      if (Array.isArray(value) && String(value[0]) === String(sourceKey)) consumers.push({ key, input, slot: value[1] });
+    }
+  }
+  const key = nextKey(prompt);
+  prompt[key] = {
+    class_type: 'TIPO',
+    inputs: {
+      tags: '',
+      nl_prompt: [sourceKey, 0],
+      ban_tags: '',
+      tipo_model: model,
+      format: '<|special|>,\n<|characters|>, <|copyrights|>,\n<|artist|>,\n\n<|general|>,\n\n<|extended|>.\n\n<|quality|>, <|meta|>, <|rating|>',
+      width: latent?.inputs?.width ?? 1024,
+      height: latent?.inputs?.height ?? 1024,
+      temperature: 0.5,
+      top_p: 0.95,
+      min_p: 0.05,
+      top_k: 80,
+      tag_length: 'long',
+      nl_length: 'long',
+      seed: tipoSeed,
+      device: 'cuda',
+    },
+    _meta: { title: 'TIPO', source: `${spec.prompt}#tipo` },
+  };
+  for (const { key: k, input } of consumers) prompt[k].inputs[input] = [key, 0];
+  return { applied: true, model, consumers: consumers.length, key };
 };
 
 /* ======================================================= editing a picture

@@ -821,5 +821,26 @@ check('and a long list of choices is cut short',
     /if \(!job\.referenceImage && definition\.controls\?\.referenceImage\) \{\s*\n\s*const dropped = dropReference\(graph, definition\);/.test(studioSource));
 }
 
+/* ------------------------------------------------------------- TIPO on Krea 2 */
+{
+  const { applyTipo } = await import('../server/workflows.js');
+  const def = { tipo: { prompt: '30:19', latent: '30:5', seed: '75', model: 'KBlueLeaf/TIPOv2-1B-A200M | TIPOv2-1B-A200M-f16.gguf' } };
+  const graph = {
+    '34': { class_type: 'PrimitiveStringMultiline', inputs: { value: 'a cat' }, _meta: { source: '30:19' } },
+    '24': { class_type: 'EmptyLatentImage', inputs: { width: 800, height: 1200 }, _meta: { source: '30:5' } },
+    '22': { class_type: 'Seed Generator', inputs: { seed: 197067652215528 }, _meta: { source: '75' } },
+    '32': { class_type: 'StringConcatenate', inputs: { string_a: 'sys', string_b: ['34', 0] } },
+    '36': { class_type: 'ComfySwitchNode', inputs: { on_false: ['34', 0] } },
+  };
+  const r = applyTipo(graph, def, { available: new Set(['TIPO']), models: [def.tipo.model] });
+  check('TIPO is inserted on Krea 2', r.applied && graph[r.key].class_type === 'TIPO');
+  check('TIPO reads the prompt box', JSON.stringify(graph[r.key].inputs.nl_prompt) === '["34",0]');
+  check('everything that read the prompt box now reads TIPO',
+    graph['32'].inputs.string_b[0] === r.key && graph['36'].inputs.on_false[0] === r.key);
+  eq('TIPO uses TIPOv2-1B-A200M', graph[r.key].inputs.tipo_model, def.tipo.model);
+  check('TIPO seed fits in 32 bits', graph[r.key].inputs.seed < 2147483647);
+  eq('without the node pack nothing changes', applyTipo({}, def, { available: new Set() }).reason, 'missing');
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);

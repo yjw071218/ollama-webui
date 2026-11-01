@@ -42,7 +42,7 @@ import { readRequestBody } from './requestBody.js';
  */
 
 import {
-  WORKFLOWS, buildPrompt, applyJob, applyLoras, applyImg2Img, stampOutputs, clearAuthorContent,
+  WORKFLOWS, buildPrompt, applyJob, applyLoras, applyTipo, applyImg2Img, stampOutputs, clearAuthorContent,
   applyRegionEdit, regionTerms, REGION_NODES, MASK_NODES, readSettings, readDenoise, dropReference,
   applyPoseGuide, pickPoseLLLite,
 } from './workflows.js';
@@ -158,6 +158,8 @@ export const describe = (definition, installed = null) => {
          the workflow's own upscaler, where its node is installed. */
       ...(definition.motion?.long ? { cut: true } : {}),
       ...(definition.id === 'minimax-h3' && installed?.objectInfo?.RTXVideoSuperResolution ? { upscale: true } : {}),
+      // TIPO prompt expansion, where the workflow has a place for it and the node is installed.
+      ...(definition.tipo && installed?.objectInfo?.TIPO ? { tipo: true } : {}),
     },
     /* How many LoRAs this workflow can stack. Anima's stacker takes nine
        without changing anything; Krea 2's single loader is cloned and chained,
@@ -1193,6 +1195,18 @@ export const createStudioRoutes = (env = {}, { identify = () => '' } = {}) => {
     if (stacked.capacity !== null && (job.loras || []).filter(l => l.enabled !== false).length > stacked.capacity) {
       warnings.push(`${definition.label} stacks ${stacked.capacity} LoRAs; the rest were left out.`);
     }
+    /* TIPO, where the workflow has a prompt box for it and it was not
+       switched off. See applyTipo in server/workflows.js. */
+    let tipoUsed = '';
+    if (definition.tipo && job.tipo !== false) {
+      const tipo = applyTipo(graph, definition, {
+        available,
+        models: installed.objectInfo?.TIPO?.input?.required?.tipo_model?.[1]?.options
+          || installed.objectInfo?.TIPO?.input?.required?.tipo_model?.[0] || [],
+      });
+      if (tipo.applied) tipoUsed = tipo.model;
+      else if (tipo.reason === 'missing') warnings.push('TIPO needs the z-tipo-extension node pack in ComfyUI; the prompt was used as written.');
+    }
     /* The workflow's own upscaler, when asked. See applyH3Upscale. */
     let upscaled = false;
     if (job.upscale && definition.id === 'minimax-h3') {
@@ -1220,6 +1234,7 @@ export const createStudioRoutes = (env = {}, { identify = () => '' } = {}) => {
       ...readSettings(graph, definition, { applied }),
       ...(denoiseUsed !== undefined ? { denoise: denoiseUsed } : {}),
       ...(stacked.used?.length ? { loras: stacked.used } : {}),
+      ...(tipoUsed ? { tipo: tipoUsed } : {}),
       ...(job.referenceImage ? { reference: true } : {}),
       ...(posed?.applied ? { pose: posed.patch.replace(/\.safetensors$/i, ''), poseStrength: posed.strength } : {}),
       /* What was actually rendered. "Six segments of ten seconds" is not the

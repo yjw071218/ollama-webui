@@ -6210,6 +6210,8 @@ function App() {
       ...(form.vae ? { vae: form.vae } : {}),
       ...(form.clip ? { clip: form.clip } : {}),
       ...(loras.length ? { loras } : {}),
+      // TIPO follows the Studio switch for the same workflow.
+      ...(descriptor.has?.tipo ? { tipo: form.tipo !== false } : {}),
       // A locked seed is a deliberate choice to repeat a picture; an unlocked
       // one means a new picture each time, which is what a fresh request is.
       ...(form.lockSeed && form.seed !== '' ? { seed: Number(form.seed) } : {}),
