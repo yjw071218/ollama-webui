@@ -19,6 +19,7 @@
 // a file people email to themselves.
 
 import localforage from 'localforage';
+import { readChats, updateChats, splitChatLists } from './chatStore.js';
 import { internalizeList } from './localBlobs.js';
 import { readScopeSettings, writeScopeSettings, isScopedSetting } from './settingsStore.js';
 
@@ -99,6 +100,11 @@ export const collectBackup = async ({
     if (only) { if (key === only.sessions) sessions[key] = value; return; }
     if (key === SESSION_PREFIX || key.startsWith(`${SESSION_PREFIX}:`)) sessions[key] = value;
   });
+  // And the profiles already kept one record per chat (src/chatStore.js).
+  for (const key of await splitChatLists()) {
+    if (only && key !== only.sessions) continue;
+    sessions[key] = await readChats(key);
+  }
   // Attached pictures are stored apart (src/localBlobs.js); a backup carries the bytes.
   for (const key of Object.keys(sessions)) sessions[key] = await internalizeList(sessions[key]);
 
@@ -203,18 +209,18 @@ export const restoreBackup = async (backup, {
 
   for (const [key, incoming] of Object.entries(backup.sessions || {})) {
     const target = rename(key);
-    const existing = replace ? [] : await localforage.getItem(target);
-    const merged = mergeSessions(existing, incoming);
-
-    // What actually changed, not what arrived. The caller reloads the page when
-    // this is non-zero, so counting every incoming chat every time would mean
-    // reloading forever against an account that is already in sync.
-    const before = JSON.stringify(existing || []);
-    const after = JSON.stringify(merged);
-    if (before !== after) {
-      await localforage.setItem(target, merged);
+    // Under the store's lock (src/chatStore.js `updateChats`), so a sync
+    // landing during a restore is merged with rather than written over.
+    await updateChats(target, (current) => {
+      const existing = replace ? [] : current;
+      const merged = mergeSessions(existing, incoming);
+      // What actually changed, not what arrived. The caller reloads the page when
+      // this is non-zero, so counting every incoming chat every time would mean
+      // reloading forever against an account that is already in sync.
+      if (JSON.stringify(current || []) === JSON.stringify(merged)) return null;
       restored.chats += Math.max(merged.length - (existing?.length || 0), 1);
-    }
+      return merged;
+    });
     if (target !== key) restored.remapped = { from: key, to: target };
   }
 

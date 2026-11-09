@@ -18,6 +18,10 @@ import { watchLiveJobs, busyChats } from './liveJobs.js';
 import React, { useState, useEffect, useLayoutEffect, useRef, useMemo, memo, useCallback, lazy, Suspense } from 'react';
 import { jankPhase } from './jankWatch.js';
 import localforage from 'localforage';
+import SidebarMore from './SidebarMore.jsx';
+import { readChats, writeChats, updateChats, removeChats, enableSplitChatStore } from './chatStore.js';
+// One record per chat, not one value per account (see src/chatStore.js).
+enableSplitChatStore(true);
 import { externalizeList, internalizeList } from './localBlobs.js';
 import { ArrowUp, Paperclip, Sparkles, RefreshCcw, Trash2, Copy, Check, Terminal, Settings, Edit, MessageSquare, ChevronDown, Download, Square, X, Play, Mic, MicOff, Volume2, Search, Code, Maximize2, Sun, Moon, Monitor, Pin, PinOff, GitBranch, FileDown, Command, Cpu, Plus, Save, ArrowDown, Zap, Layers, Server, ExternalLink, Star, Info, TriangleAlert, FileText, Minimize2, PanelLeft, ListTree, LogOut, UserPlus, Languages, User, Activity, Globe, Folder, FolderPlus, MoreHorizontal, ChevronLeft, ChevronRight, SlidersHorizontal, CornerDownRight, Archive, WrapText, ListChecks, ChevronUp, Vibrate, Smartphone, FolderInput, StretchHorizontal, TextQuote, Brain, HelpCircle, Baby, Share2, ClipboardPaste, Upload, Users, Telescope, ShieldCheck, Wand2, Clock, Film, Brush, Scissors, Tags, Images, SquareSplitHorizontal, Undo2, Music, FileEdit } from 'lucide-react';
 import ReactMarkdown, { defaultUrlTransform } from 'react-markdown';
@@ -1543,6 +1547,29 @@ const fetchJsonQuietly = (url, init) => fetch(url, init)
 
 const EMPTY_RETRIES = 2;
 
+
+/* A CSS variable on <html>, written only when it changes. Each write restyles
+   the whole page, and these are measured after every update: rewriting an
+   unchanged value made the next measurement lay the page out again (on a
+   phone-speed CPU, part of the stall on the first sent message). */
+const rootVars = new Map();
+const setRootVar = (name, value) => {
+  if (rootVars.get(name) === value) return;
+  rootVars.set(name, value);
+  const style = document.documentElement.style;
+  if (value) style.setProperty(name, value); else style.removeProperty(name);
+};
+
+/* One chat in the sidebar; see `renderSessionRow` in App for why it is
+   memoised and why its handlers go through a ref. */
+const NO_FOLDERS = [];
+const sameRowView = (a, b) => {
+  for (const k in a) if (a[k] !== b[k]) return false;
+  return true;
+};
+const SidebarRow = memo(({ s, v, R, draw }) => draw(s, v, R),
+  (a, b) => a.s === b.s && a.R === b.R && sameRowView(a.v, b.v));
+
 function App() {
     /* Everything Ollama has installed, and the part of it that can be chatted
      with. Embedding models only make vectors -- picking one for a chat is an
@@ -2071,6 +2098,9 @@ function App() {
 
   // --- Sidebar session editing ---
   const [renamingId, setRenamingId] = useState(null);
+  // How many chat rows the sidebar draws before the rest (see renderGroupRows).
+  const sidebarRowLimit = 80;
+  const [sidebarGroupExtra, setSidebarGroupExtra] = useState({});
   const [renameValue, setRenameValue] = useState('');
 
   // --- Prompt library ---
@@ -2868,7 +2898,7 @@ function App() {
     let cancelled = false;
     setIsStorageLoaded(false);
 
-    localforage.getItem(storageKey).then(async storedRaw => {
+    readChats(storageKey).then(async storedRaw => {
       if (cancelled) return;
       // Attached pictures live in their own store (src/localBlobs.js).
       const stored = await internalizeList(storedRaw);
@@ -2876,9 +2906,15 @@ function App() {
       /* What the last page was still writing when it went away -- see
          src/unloadJournal.js. Laid over storage, and written into it, so one
          refresh shows what was on screen before it. */
-      const saved = withJournal(stored, takeJournal(storageKey));
+      const journal = takeJournal(storageKey);
+      const saved = withJournal(stored, journal);
       if (saved !== stored) {
-        externalizeList(saved).then(slim => localforage.setItem(storageKey, slim)).catch(() => {});
+        // Laid over what is in storage *now*, under the lock -- not over the
+        // copy read above, which a sync may have added to since.
+        updateChats(storageKey, async (current) => {
+          const over = withJournal(await internalizeList(current), journal);
+          return over === current ? null : externalizeList(over);
+        }).catch(() => {});
       }
 
       // Nothing is copied between buckets here. This used to adopt whatever the
@@ -2959,7 +2995,7 @@ function App() {
     const readKey = storageKeyRef.current;
     let saved;
     try {
-      saved = await internalizeList(await localforage.getItem(readKey));
+      saved = await internalizeList(await readChats(readKey));
     } catch (e) {
       return false;
     }
@@ -5499,7 +5535,14 @@ function App() {
      * else, and its own bytes are all there is. */
     list = persistable(list).map(withoutPictureBytes).map(dedupeSession);
     let stored = [];
-    try { stored = (await localforage.getItem(key)) || []; } catch (e) { stored = []; }
+    /* Read, merge and write as one step under the store's lock
+       (src/chatStore.js `updateChats`). Read outside it, a page the sync
+       wrote in between was overwritten by this older picture -- and the
+       sync then read those chats as deleted and told the account so. */
+    let next;
+    try {
+      await updateChats(key, async (current) => {
+    stored = current || [];
     observeChats(stored);
 
     const merged = new Map();
@@ -5519,12 +5562,12 @@ function App() {
       else merged.set(String(chat.id), foldNewerFields(held, chat));
     }
 
-    let next = [...merged.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
+    next = [...merged.values()].sort((a, b) => (b.updatedAt || 0) - (a.updatedAt || 0));
     /* Attached pictures by address, their bytes stored once elsewhere
        (src/localBlobs.js): the list written twice a second is text only. */
     try { next = await externalizeList(next); } catch { /* written whole */ }
-    try {
-      await localforage.setItem(key, next);
+        return next;
+      });
     } catch (e) {
       console.warn('Failed to save sessions to localforage.', e);
       return null;
@@ -7388,6 +7431,10 @@ function App() {
         markInitialSync(profileScope, true);
         setInitialSync({ percent: 0, error: '', stage: syncStage({ phase: 'connecting' }) });
         target = (await accountStamp())?.rev || 0;
+        /* A retry resumes from the saved revision, so the bar must not drop
+           back to 0% -- that read as "it reset itself" when it had not. */
+        const resumed = syncPercent(readRev(profileScope), target, false);
+        if (resumed > 0) setInitialSync((s) => ({ ...(s || {}), percent: Math.max(s?.percent || 0, resumed) }));
       }
       // One exchange, both directions: what this device has that the account
       // does not goes up, what the account has that this device does not comes
@@ -7397,7 +7444,10 @@ function App() {
         // A first download is paged (by count and by size); keep going until
         // it ends. Smaller pages than an ordinary sync, so the bar moves.
         maxRounds: 10000,
-        limit: 200,
+        limit: 1000,
+        // Large pages: each round rewrites the local chat list once, so 12 MB
+        // pages make a few-hundred-MB account a few dozen rounds, not hundreds.
+        pageBytes: 12 * 1024 * 1024,
         // Never backwards: a phase report mid-round may know less than the
         // round before it did.
         onProgress: (p) => setInitialSync((s) => ({
@@ -7680,7 +7730,7 @@ function App() {
     }
 
     // Only now: the account is gone, so its cache here is orphaned.
-    await localforage.removeItem(sessionStorageKeyFor(leaving));
+    await removeChats(sessionStorageKeyFor(leaving));
     clearScopeSettings(leaving);
     forgetGoogleAutoSelect();
 
@@ -8519,7 +8569,7 @@ function App() {
       // copy is wrong: the account is authoritative, and starting again from it
       // is more honest than trying to reconcile a mess.
       if (mode === 'replace') resetSyncPosition(profileScope);
-      const result = await syncFully(profileScope, { full: mode === 'replace', maxRounds: 200 });
+      const result = await syncFully(profileScope, { full: mode === 'replace', maxRounds: 2000, limit: 1000, pageBytes: 12 * 1024 * 1024 });
       syncStampRef.current = result.rev;
       settingsPrintRef.current = settingsFingerprint();
       setSyncInfo(await accountStamp({ full: true }));
@@ -13539,15 +13589,15 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     composerObserver.current = null;
     composerWrite.current = null;
     const root = document.documentElement;
-    if (!node) { root.style.removeProperty('--composer-h'); return; }
+    if (!node) { setRootVar('--composer-h', ''); return; }
     const write = () => {
       const box = node.getBoundingClientRect();
       // Only when it is at the bottom: on an empty chat it sits mid-screen,
       // clear of that corner, and lifting the notices would put them on the
       // starter cards instead.
       const fromBottom = Math.round(window.innerHeight - box.top);
-      if (box.height > 0 && box.bottom > window.innerHeight - 48) root.style.setProperty('--composer-h', `${fromBottom}px`);
-      else root.style.removeProperty('--composer-h');
+      if (box.height > 0 && box.bottom > window.innerHeight - 48) setRootVar('--composer-h', `${fromBottom}px`);
+      else setRootVar('--composer-h', '');
     };
     write();
     composerWrite.current = write;
@@ -13566,7 +13616,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
     stopHeaderSearchFit.current = node ? watchHeaderSearch(node) : null;
     if (node) {
       const height = Math.round(node.getBoundingClientRect().height);
-      if (height > 0) document.documentElement.style.setProperty('--header-h', `${height}px`);
+      if (height > 0) setRootVar('--header-h', `${height}px`);
     }
   }, []);
 
@@ -13586,7 +13636,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
       const node = headerEl.current;
       if (!node) return;
       const height = Math.round(node.getBoundingClientRect().height);
-      if (height > 0) document.documentElement.style.setProperty('--header-h', `${height}px`);
+      if (height > 0) setRootVar('--header-h', `${height}px`);
     };
     write();
     window.addEventListener('resize', write);
@@ -14583,16 +14633,78 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
 
   // One row, rendered from two places: inside a folder and under a date
   // heading. Keeping it in one function is what stops the two drifting apart.
-  const renderSessionRow = (s) => (
+  /* How many rows each sidebar group draws; the rest follow as the list is
+     scrolled or the group's "+N" is pressed (src/SidebarMore.jsx).
+
+     Per group, not one budget in screen order. A single budget was spent top
+     to bottom, and folders come first: on a real account whose folders held
+     more chats than the budget, the "Today" group -- where a new chat and the
+     one that just changed always are -- was not drawn at all. Now every group
+     gets its first rows (ROWS_PER_GROUP), the rest of the budget goes in screen
+     order, and a group can be grown on its own. The open chat, a picked one and
+     one being renamed are drawn wherever they fall. */
+  const ROWS_PER_GROUP = 8;
+  const visibleGroups = [
+    ...folderGroups.filter(({ folder }) => !collapsedFolders[folder.id]).map(({ folder, sessions: inside }) => [`f:${folder.id}`, inside]),
+    ...categories.map(category => [`c:${category}`, groupedSessions[category]]),
+  ];
+  const groupAllowance = new Map();
+  {
+    let spare = sidebarRowLimit;
+    for (const [key, list] of visibleGroups) {
+      const first = Math.min(list.length, ROWS_PER_GROUP);
+      groupAllowance.set(key, first);
+      spare -= first;
+    }
+    for (const [key, list] of visibleGroups) {
+      if (spare <= 0) break;
+      const more = Math.min(list.length - groupAllowance.get(key), spare);
+      groupAllowance.set(key, groupAllowance.get(key) + more);
+      spare -= more;
+    }
+  }
+  const renderGroupRows = (key, list) => {
+    const allowed = (groupAllowance.get(key) || 0) + (sidebarGroupExtra[key] || 0);
+    let hidden = 0;
+    const rows = list.map((s, i) => {
+      if (i < allowed || s.id === currentSessionId || selectedIds.has(s.id) || renamingId === s.id) return renderSessionRow(s);
+      hidden++;
+      return null;
+    });
+    return (
+      <>
+        {rows}
+        <SidebarMore hidden={hidden} onMore={() => setSidebarGroupExtra(x => ({ ...x, [key]: (x[key] || 0) + 120 }))} />
+      </>
+    );
+  };
+  /* A sidebar row, re-rendered only when something it shows changes.
+
+     It was a plain function called for every row on every render of the app
+     -- each token of a reply, each keystroke -- and on a real 536-chat account
+     the sidebar was most of what each update re-rendered. `SidebarRow` (above
+     App) is memoised on the chat object and the few values a row draws (`v`).
+     The handlers inside go through `rowApi`, which is replaced on every
+     render, so a row that was not re-rendered still acts on the current state
+     rather than on whatever it saw when it was last drawn. */
+  const rowApi = useRef(null);
+  rowApi.current = {
+    selectMode, rowMenuFor, toggleSelected, openChat, setDraggingId, setDropFolderId, setRenameValue,
+    commitRename, setRenamingId, startRename, toggleTagFilter, togglePin, setRowMenuFor, duplicateSession,
+    toggleArchived, exportSessionMarkdown, printSession, exportSessionHtml, setTagEditorFor, setTagDraft,
+    moveSessionToFolder, deleteSession,
+  };
+  // Relative times are worded to the minute; a row re-renders when that changes.
+  const rowMinute = Math.floor(Date.now() / 60000);
+  const drawSessionRow = (s, v, R) => (
     <div
-      key={s.id}
-      className={`history-item ${currentSessionId === s.id ? 'active' : ''} ${selectedIds.has(s.id) ? 'picked' : ''} ${draggingId === s.id ? 'dragging' : ''}`}
+      className={`history-item ${v.active ? 'active' : ''} ${v.picked ? 'picked' : ''} ${v.dragging ? 'dragging' : ''}`}
       // Only outside selection mode. A drag inside it would be ambiguous --
       // is it moving this chat, or all the selected ones? -- and the bulk bar
       // already offers the answer.
-      draggable={!selectMode && !renamingId}
+      draggable={!v.selectMode && !v.anyRenaming}
       onDragStart={(e) => {
-        setDraggingId(s.id);
+        R.current.setDraggingId(s.id);
         // A plain-text id as well as the private type, so dropping a chat
         // somewhere that is not a folder pastes something legible rather than
         // nothing at all.
@@ -14600,46 +14712,46 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
         e.dataTransfer.setData('text/plain', s.title);
         e.dataTransfer.effectAllowed = 'move';
       }}
-      onDragEnd={() => { setDraggingId(null); setDropFolderId(undefined); }}
+      onDragEnd={() => { R.current.setDraggingId(null); R.current.setDropFolderId(undefined); }}
       onClick={() => {
-        if (selectMode) { toggleSelected(s.id); return; }
+        if (R.current.selectMode) { R.current.toggleSelected(s.id); return; }
         // Deliberately not guarded on `isGenerating`. The reply is being
         // written to the chat that asked for it, so leaving is safe -- and
         // coming back shows however much of it has arrived.
-        openChat(s.id);
+        R.current.openChat(s.id);
       }}
     >
-      {selectMode && (
-        <span className={`row-check ${selectedIds.has(s.id) ? 'on' : ''}`} aria-hidden="true">
-          {selectedIds.has(s.id) && <Check size={11} />}
+      {v.selectMode && (
+        <span className={`row-check ${v.picked ? 'on' : ''}`} aria-hidden="true">
+          {v.picked && <Check size={11} />}
         </span>
       )}
-      {generatingSessionId === s.id && (
+      {v.generating && (
         <RefreshCcw size={12} className="spin row-generating" aria-label={t('chat.generatingHere')} />
       )}
       {s.pinned && <Pin size={12} className="pin-marker" />}
-      {renamingId === s.id ? (
+      {v.renaming ? (
         <input
           className="history-rename-input"
-          value={renameValue}
+          value={v.renameValue}
           autoFocus
           onClick={e => e.stopPropagation()}
-          onChange={e => setRenameValue(e.target.value)}
-          onBlur={commitRename}
+          onChange={e => R.current.setRenameValue(e.target.value)}
+          onBlur={() => R.current.commitRename()}
           onKeyDown={e => {
-            if (e.key === 'Enter') { e.preventDefault(); commitRename(); }
-            if (e.key === 'Escape') { e.preventDefault(); setRenamingId(null); }
+            if (e.key === 'Enter') { e.preventDefault(); R.current.commitRename(); }
+            if (e.key === 'Escape') { e.preventDefault(); R.current.setRenamingId(null); }
           }}
         />
       ) : (
-        <div className="history-main" onDoubleClick={(e) => startRename(s, e)}>
+        <div className="history-main" onDoubleClick={(e) => R.current.startRename(s, e)}>
           <span className="history-title">{s.title}</span>
           {/* When you last spoke in it. Filing it away is not speaking in
               it, and labelling a three-week-old conversation "just now"
               because it was tidied into a folder is a small lie the sidebar
               used to tell. */}
-          <span className="history-meta" title={absoluteTime(conversationTime(s), lang)}>
-            {relativeTime(conversationTime(s), lang)}
+          <span className="history-meta" title={absoluteTime(conversationTime(s), v.lang)}>
+            {relativeTime(conversationTime(s), v.lang)}
           </span>
           {/* Under the title rather than beside it: a chat can carry several,
               and squeezing them onto the title line would cost the title the
@@ -14659,7 +14771,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                   className="chat-tag"
                   key={tag}
                   title={t('tags.filterOne', { tag })}
-                  onClick={(e) => { e.stopPropagation(); toggleTagFilter(tag); }}
+                  onClick={(e) => { e.stopPropagation(); R.current.toggleTagFilter(tag); }}
                 >
                   {tag}
                 </button>
@@ -14668,11 +14780,11 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           )}
         </div>
       )}
-      <div className="history-actions" style={selectMode ? { display: 'none' } : undefined}>
+      <div className="history-actions" style={v.selectMode ? { display: 'none' } : undefined}>
         <button
           className={s.pinned ? 'is-on' : ''}
           title={s.pinned ? t('sidebar.unpin') : t('sidebar.pin')}
-          onClick={(e) => togglePin(s.id, e)}
+          onClick={(e) => R.current.togglePin(s.id, e)}
         >
           {s.pinned ? <PinOff size={13} /> : <Pin size={13} />}
         </button>
@@ -14681,48 +14793,48 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           <button
             ref={el => { rowMenuAnchors.current[s.id] = el; }}
             title={t('sidebar.more')}
-            onClick={(e) => { e.stopPropagation(); setRowMenuFor(rowMenuFor === s.id ? null : s.id); }}
+            onClick={(e) => { e.stopPropagation(); R.current.setRowMenuFor(R.current.rowMenuFor === s.id ? null : s.id); }}
           >
             <MoreHorizontal size={13} />
           </button>
           <AnchoredMenu
-            open={rowMenuFor === s.id}
-            onClose={() => setRowMenuFor(null)}
+            open={v.menuOpen}
+            onClose={() => R.current.setRowMenuFor(null)}
             anchorRef={{ current: rowMenuAnchors.current[s.id] }}
             className="row-menu"
             width={215}
           >
-            <button className="cmd-item" onClick={() => { setRowMenuFor(null); startRename(s); }}>
+            <button className="cmd-item" onClick={() => { R.current.setRowMenuFor(null); R.current.startRename(s); }}>
               <Edit size={13} /><span className="cmd-label">{t('sidebar.rename')}</span>
             </button>
-            <button className="cmd-item" onClick={() => { setRowMenuFor(null); duplicateSession(s.id); }}>
+            <button className="cmd-item" onClick={() => { R.current.setRowMenuFor(null); R.current.duplicateSession(s.id); }}>
               <Copy size={13} /><span className="cmd-label">{t('sidebar.duplicate')}</span>
             </button>
-            <button className="cmd-item" onClick={() => { setRowMenuFor(null); toggleArchived(s.id); }}>
+            <button className="cmd-item" onClick={() => { R.current.setRowMenuFor(null); R.current.toggleArchived(s.id); }}>
               <Archive size={13} />
               <span className="cmd-label">{s.archived ? t('sidebar.unarchive') : t('sidebar.archive')}</span>
             </button>
-            <button className="cmd-item" onClick={() => { setRowMenuFor(null); exportSessionMarkdown(s); }}>
+            <button className="cmd-item" onClick={() => { R.current.setRowMenuFor(null); R.current.exportSessionMarkdown(s); }}>
               <FileDown size={13} /><span className="cmd-label">{t('sidebar.exportMd')}</span>
             </button>
-            <button className="cmd-item" onClick={() => { setRowMenuFor(null); printSession(s); }}>
+            <button className="cmd-item" onClick={() => { R.current.setRowMenuFor(null); R.current.printSession(s); }}>
               <FileDown size={13} /><span className="cmd-label">{t('sidebar.exportPdf')}</span>
             </button>
-            <button className="cmd-item" onClick={() => { setRowMenuFor(null); exportSessionHtml(s); }}>
+            <button className="cmd-item" onClick={() => { R.current.setRowMenuFor(null); R.current.exportSessionHtml(s); }}>
               <Globe size={13} /><span className="cmd-label">{t('sidebar.exportHtml')}</span>
             </button>
 
-            <button className="cmd-item" onClick={() => { setTagEditorFor(s.id); setTagDraft(''); setRowMenuFor(null); }}>
+            <button className="cmd-item" onClick={() => { R.current.setTagEditorFor(s.id); R.current.setTagDraft(''); R.current.setRowMenuFor(null); }}>
               <ListTree size={13} /><span className="cmd-label">{t('tags.edit')}</span>
             </button>
 
             <div className="row-menu-sep">{t('folders.move')}</div>
-            <button className="cmd-item" onClick={() => { moveSessionToFolder(s.id, null); setRowMenuFor(null); }}>
+            <button className="cmd-item" onClick={() => { R.current.moveSessionToFolder(s.id, null); R.current.setRowMenuFor(null); }}>
               <span className="cmd-label">{t('folders.none')}</span>
               {!s.folderId && <Check size={13} />}
             </button>
-            {folders.map(f => (
-              <button key={f.id} className="cmd-item" onClick={() => { moveSessionToFolder(s.id, f.id); setRowMenuFor(null); }}>
+            {v.folders.map(f => (
+              <button key={f.id} className="cmd-item" onClick={() => { R.current.moveSessionToFolder(s.id, f.id); R.current.setRowMenuFor(null); }}>
                 <Folder size={13} />
                 <span className="cmd-label">{f.name}</span>
                 {s.folderId === f.id && <Check size={13} />}
@@ -14731,11 +14843,33 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
           </AnchoredMenu>
         </span>
 
-        <button className="danger" title={t('sidebar.delete')} onClick={(e) => deleteSession(s.id, e)}>
+        <button className="danger" title={t('sidebar.delete')} onClick={(e) => R.current.deleteSession(s.id, e)}>
           <Trash2 size={13} />
         </button>
       </div>
     </div>
+  );
+  const renderSessionRow = (s) => (
+    <SidebarRow
+      key={s.id}
+      s={s}
+      R={rowApi}
+      draw={drawSessionRow}
+      v={{
+        active: currentSessionId === s.id,
+        picked: selectedIds.has(s.id),
+        dragging: draggingId === s.id,
+        selectMode,
+        anyRenaming: !!renamingId,
+        renaming: renamingId === s.id,
+        renameValue: renamingId === s.id ? renameValue : '',
+        generating: generatingSessionId === s.id,
+        menuOpen: rowMenuFor === s.id,
+        folders: rowMenuFor === s.id ? folders : NO_FOLDERS,
+        lang,
+        minute: rowMinute,
+      }}
+    />
   );
 
   const exportSessions = () => {
@@ -15631,7 +15765,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
               </div>
               {!collapsedFolders[folder.id] && (
                 inside.length > 0
-                  ? inside.map(renderSessionRow)
+                  ? renderGroupRows(`f:${folder.id}`, inside)
                   : <div className="folder-empty">{t('folders.empty')}</div>
               )}
             </div>
@@ -15646,7 +15780,7 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
                 className={`recents-label ${dropFolderId === null ? 'drop-target' : ''}`}
                 {...folderDropProps(null)}
               >{t(CATEGORY_KEYS[category])}</div>
-              {groupedSessions[category].map(renderSessionRow)}
+              {renderGroupRows(`c:${category}`, groupedSessions[category])}
             </div>
           ))}
         </div>
@@ -17981,6 +18115,14 @@ A video prompt is a timeline — [0s-2s] … [2s-5s] … — that ends at the cl
             <textarea
               ref={composerRef}
               className="chat-input"
+              /* Writing assistants stay out of the composer. Grammarly's
+                 extension attaches to every textarea and, measured, cost the
+                 first sent message ~1.7 s of main-thread work on a phone-speed
+                 CPU -- for a box that holds prompts and code. Its own
+                 documented opt-out attributes. */
+              data-gramm="false"
+              data-gramm_editor="false"
+              data-enable-grammarly="false"
               /* The model picker sits right under this box and already names
                  the model; a raw tag such as "gemma4:26b-a4b-it-q8_0" in the
                  placeholder repeated it as noise on every screen width. */

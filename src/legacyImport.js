@@ -18,6 +18,7 @@
 //     costs nothing and the guest keeps being the guest.
 
 import localforage from 'localforage';
+import { readChats, updateChats, splitChatLists } from './chatStore.js';
 import { readScopeSettings, writeScopeSettings, stampSetting } from './settingsStore.js';
 
 const SESSION_PREFIX = 'ollama-sessions';
@@ -59,13 +60,18 @@ export const findLegacyData = async ({ currentScope = null } = {}) => {
   const names = await legacyNames();
   const found = [];
 
-  await localforage.iterate((value, key) => {
-    if (key !== SESSION_PREFIX && !key.startsWith(`${SESSION_PREFIX}:`)) return;
+  // Both layouts: the old one value per profile, and one record per chat
+  // (src/chatStore.js) for profiles that have been written since.
+  const buckets = [];
+  await localforage.iterate((value, key) => { buckets.push([key, value]); });
+  for (const key of await splitChatLists()) buckets.push([key, await readChats(key)]);
+  for (const [key, value] of buckets) {
+    if (key !== SESSION_PREFIX && !key.startsWith(`${SESSION_PREFIX}:`)) continue;
     const scope = scopeOfBucket(key);
-    if (scope.startsWith('srv-')) return;         // belongs to a real account
-    if (scope === currentScope) return;
+    if (scope.startsWith('srv-')) continue;       // belongs to a real account
+    if (scope === currentScope) continue;
     const chats = Array.isArray(value) ? value.length : 0;
-    if (!chats) return;
+    if (!chats) continue;
     found.push({
       key,
       scope,
@@ -74,7 +80,7 @@ export const findLegacyData = async ({ currentScope = null } = {}) => {
       label: scope === '' ? '' : (names.get(scope) || ''),
       updatedAt: Math.max(0, ...(value || []).map(s => s.updatedAt || 0)),
     });
-  });
+  }
 
   return found.sort((a, b) => b.updatedAt - a.updatedAt);
 };
@@ -119,12 +125,13 @@ export const importLegacyBucket = async (fromScope, toScope) => {
   const targetKey = `${SESSION_PREFIX}:${toScope}`;
   const imported = { chats: 0, documents: 0, memories: 0, settings: 0 };
 
-  const incoming = (await localforage.getItem(sourceKey)) || [];
+  const incoming = await readChats(sourceKey);
   if (incoming.length) {
-    const existing = (await localforage.getItem(targetKey)) || [];
-    const merged = mergeSessions(existing, incoming);
-    await localforage.setItem(targetKey, merged);
-    imported.chats = merged.length - existing.length;
+    await updateChats(targetKey, (existing) => {
+      const merged = mergeSessions(existing, incoming);
+      imported.chats = merged.length - existing.length;
+      return merged;
+    });
   }
 
   const knowledge = named('knowledge');

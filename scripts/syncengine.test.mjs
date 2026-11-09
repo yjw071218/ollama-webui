@@ -770,5 +770,38 @@ on(laptop);
   globalThis.fetch = originalFetch;
 }
 
+/* Several syncs told to rebuild at once (a fresh device's boot): the snapshot
+   comes down once, and a chat started during it is not taken for stale work. */
+{
+  const browser = makeBrowser(); on(browser);
+  const originalFetch = globalThis.fetch;
+  let pages = 0;
+  let releasePage;
+  const pageGate = new Promise(r => { releasePage = r; });
+  globalThis.fetch = async (url, options = {}) => {
+    if (options.method === 'POST') return { ok: true, status: 200, json: async () => ({ success: true, ownerId: 'abc', resetRequired: true, floor: 10, records: [], rev: 0 }) };
+    pages++;
+    await pageGate; // the snapshot is slow to arrive
+    return { ok: true, status: 200, json: async () => ({ success: true, ownerId: 'abc', complete: true, rev: 10,
+      records: [{ kind: 'chat', id: 'from-account', updatedAt: 10, payload: { id: 'from-account', updatedAt: 10, messages: [] } }] }) };
+  };
+  const first = E.syncOnce(SCOPE);
+  const second = E.syncOnce(SCOPE);
+  const third = E.syncOnce(SCOPE);
+  await new Promise(r => setTimeout(r, 30));
+  // Meanwhile the person starts a chat.
+  const fresh = { id: 'typed-during-rebuild', updatedAt: Date.now() + 5, messages: [{ content: 'hello' }] };
+  await current.forage.setItem(CHATS, [...((await current.forage.getItem(CHATS)) || []), fresh]);
+  releasePage();
+  const results = await Promise.all([first, second, third]);
+  eq('concurrent rebuilds fetch the snapshot once', pages, 1);
+  check('and every caller gets the one result', results.every(r => r === results[0]));
+  const chats = await current.forage.getItem(CHATS);
+  check('a chat started during the rebuild stays in the list', chats.some(c => c.id === 'typed-during-rebuild'), JSON.stringify(chats.map(c => c.id)));
+  const copies = [...browser.raw.stores.get('default')].filter(([key]) => key.startsWith('sync-recovery:'));
+  eq('and is not moved to a recovery copy', copies.length, 0);
+  globalThis.fetch = originalFetch;
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

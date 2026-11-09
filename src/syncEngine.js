@@ -26,6 +26,8 @@ import { jankPhase } from './jankWatch.js';
 import { foldNewerFields } from '../server/chatMerge.js';
 import { observeStamp, nextStamp } from './logicalClock.js';
 import { syncStorage } from './syncStorage.js';
+import { readChats, updateChats, splitChatStoreEnabled } from './chatStore.js';
+import { externalizeChat } from './localBlobs.js';
 import { api, ApiError, currentTabSession } from './session.jsx';
 import { ownerOfScope } from './profileScope.js';
 import { mergeJobs, trimJobs } from './studioTools.js';
@@ -289,7 +291,8 @@ export const collectLocal = async (scope) => {
   const keys = keysFor(scope);
   const out = [];
 
-  const chats = (await chatStorage.getItem(keys.chats)) || [];
+  // Per chat in the app (src/chatStore.js); the whole value elsewhere.
+  const chats = await readChats(keys.chats, { legacyRead: () => chatStorage.getItem(keys.chats) });
   for (const chat of chats) {
     if (chat?.id == null) continue;
     // By address rather than by value -- see `withoutPictureBytes`.
@@ -391,8 +394,9 @@ export const applyLocal = async (scope, records) => {
     const incoming = byKind(kind);
     if (!incoming.length) return;
 
-    const existing = (await store.getItem(key)) || [];
-    const map = new Map(existing.map(item => [String(item.id), item]));
+    const isChats = store === chatStorage && key === keys.chats;
+    const merge = (existing) => {
+    const map = new Map((existing || []).map(item => [String(item.id), item]));
 
     for (const record of incoming) {
       if (record.deleted) {
@@ -426,8 +430,27 @@ export const applyLocal = async (scope, records) => {
       applied[counter]++;
     }
 
-    const next = [...map.values()].sort((a, b) => (b[stamp] || 0) - (a[stamp] || 0));
-    await store.setItem(key, next);
+    return [...map.values()].sort((a, b) => (b[stamp] || 0) - (a[stamp] || 0));
+    };
+    if (isChats) {
+      /* Read, merge and write as one step (src/chatStore.js `updateChats`),
+         so the app's own save cannot slip an older list in between -- and
+         only the chats this page changed are written. */
+      /* Stored the way the app stores them: large strings by address
+         (src/localBlobs.js). Stored as they arrived, the app's next save
+         rewrote every one of them in that form -- measured on a real 519 MB
+         account, a first sync wrote 934 MB of chat records instead of ~half. */
+      const shaped = splitChatStoreEnabled()
+        ? async (existing) => {
+          const next = merge(existing);
+          const before = new Set(existing || []);
+          return Promise.all(next.map(chat => (before.has(chat) ? chat : externalizeChat(chat).catch(() => chat))));
+        }
+        : merge;
+      await updateChats(key, shaped, { legacyRead: () => store.getItem(key), legacyWrite: (list) => store.setItem(key, list) });
+    } else {
+      await store.setItem(key, merge(await store.getItem(key)));
+    }
   };
 
   await mergeList(chatStorage, keys.chats, 'chat', 'updatedAt', 'chats');
@@ -548,7 +571,9 @@ export const applyLocal = async (scope, records) => {
  */
 const applyTouched = (a) => Object.values(a || {}).some(n => Number(n) > 0);
 
-export const syncOnce = async (scope, { full = false, limit = 500, onPhase } = {}) => {
+const rebuilding = new Map(); // scope -> the rebuild in progress (see syncOnce)
+
+export const syncOnce = async (scope, { full = false, limit = 500, pageBytes, onPhase } = {}) => {
   const ownerId = ownerOfScope(scope);
   if (!ownerId) throw new Error('There is no signed-in account to sync with.');
 
@@ -590,7 +615,7 @@ export const syncOnce = async (scope, { full = false, limit = 500, onPhase } = {
   try {
     result = await api('/api/auth/sync', {
       method: 'POST',
-      body: { since, ownerId, records: changed, limit },
+      body: { since, ownerId, records: changed, limit, ...(pageBytes ? { maxBytes: pageBytes } : {}) },
     });
   } catch (e) {
     if (e instanceof ApiError && e.code === 'owner-mismatch') {
@@ -606,32 +631,94 @@ export const syncOnce = async (scope, { full = false, limit = 500, onPhase } = {
     throw new OwnerMismatch(ownerId, result.ownerId);
   }
 
+  /* One rebuild per account at a time, in this page.
+
+     Several callers start a sync -- the first sync, the check that follows the
+     live stream connecting, the upload scheduler -- and on a fresh device they
+     all read revision 0 and were all told to rebuild. The account came down
+     three times at once (measured: the same pages fetched in triplicate), and
+     the one that finished last looked for local work the server lacked, found
+     the chat the person had just started, and moved it out of the list into a
+     recovery copy. A second caller now waits for the rebuild already running
+     and takes its result. Ordinary syncs still run side by side as before:
+     a stalled request must not hold up every later one. */
+  if (result.resetRequired && rebuilding.has(scope)) return rebuilding.get(scope);
   if (result.resetRequired) {
+    const rebuild = rebuildFromSnapshot();
+    rebuilding.set(scope, rebuild);
+    try { return await rebuild; } finally { rebuilding.delete(scope); }
+  }
+  async function rebuildFromSnapshot() {
     // Never re-upload a cache whose deletions have been collected. First stage
     // a complete server snapshot; preserve absent local work in a recovery copy.
-    const snapshot = [];
-    let cursor = 0, page;
+    /* Page by page, never the whole account at once. This used to gather
+       every page into one array, then make a restored copy of all of it, then
+       merge that into the local chats -- three copies of an account that can
+       be a few hundred megabytes, which is past what a tab may hold. Chrome
+       killed the tab ("Out of Memory"), the next load hit the same expired
+       cursor, and it started from zero again, forever.
+
+       Now each page is restored and applied as it arrives and only its
+       `kind:id -> updatedAt` stamps are kept. Progress is saved after every
+       page, so a reload or a failure resumes where it stopped instead of
+       downloading everything again. The final rev is written only once the
+       snapshot is complete, so an ordinary upload still cannot happen first. */
+    const progressKey = `sync-reset:${scope}`;
+    // Work made here after the rebuild began is new, not stale: see `absent`.
+    const rebuildStartedAt = Date.now();
+    let progress = null;
+    try { progress = await chatStorage.getItem(progressKey); } catch (e) { progress = null; }
+    if (!progress || progress.ownerId !== ownerId || progress.floor !== result.floor || !Number.isSafeInteger(progress.cursor)) {
+      progress = { ownerId, floor: result.floor, cursor: 0, stamps: {}, received: 0 };
+    }
+    const applied = { chats: 0, settings: 0, documents: 0, memories: 0, lists: 0, studio: 0 };
+    const addApplied = (a) => { for (const k of Object.keys(applied)) applied[k] += Number(a?.[k]) || 0; };
+    let cursor = progress.cursor, page;
     do {
-      page = await api(`/api/auth/sync?since=${cursor}`);
+      page = await api(`/api/auth/sync?since=${cursor}${pageBytes ? `&maxBytes=${pageBytes}` : ''}`);
       if (page.ownerId !== ownerId) throw new OwnerMismatch(ownerId, page.ownerId);
-      snapshot.push(...(page.records || []));
       if (!page.complete && page.rev <= cursor) throw new Error('Sync snapshot did not advance.');
+      const records = page.records || [];
+      onPhase?.({ phase: 'applying', received: progress.received + records.length, remaining: page.remaining });
+      const pageCache = new Map();
+      const restored = [];
+      for (const r of records) {
+        restored.push(r.deleted || r.payload == null ? r : { ...r, payload: await restorePayload(r.payload, pageCache) });
+      }
+      addApplied(await applyLocal(scope, restored));
+      for (const r of records) {
+        const key = `${r.kind}:${r.id}`;
+        if (r.deleted) delete progress.stamps[key];
+        else progress.stamps[key] = r.updatedAt;
+      }
+      progress.received += records.length;
       cursor = page.rev;
+      progress.cursor = page.complete ? progress.cursor : cursor;
+      if (!page.complete) {
+        try { await chatStorage.setItem(progressKey, progress); } catch (e) { /* quota: resumes from the last saved page */ }
+      }
+      page = { complete: page.complete };
     } while (!page.complete);
-    const keys = new Set(snapshot.filter(r => !r.deleted).map(r => `${r.kind}:${r.id}`));
+
+    // Local work the server does not have is kept in a recovery copy, then
+    // removed from the live lists. Payloads are built only for those few.
     const presentLocal = await collectLocal(scope);
-    const absent = presentLocal.filter(r => !r.deleted && !keys.has(`${r.kind}:${r.id}`));
+    const absent = presentLocal
+      /* Only what predates this rebuild. A chat started while the snapshot was
+         coming down cannot be a stale copy of something deleted elsewhere --
+         it did not exist -- and is left in place to be uploaded next sync. */
+      .filter(r => !r.deleted && !(`${r.kind}:${r.id}` in progress.stamps) && (Number(r.updatedAt) || 0) < rebuildStartedAt)
+      .map(r => ({ kind: r.kind, id: r.id, updatedAt: r.updatedAt, payload: r.payload }));
     if (absent.length) {
       await chatStorage.setItem(`sync-recovery:${scope}:${Date.now()}`, { ownerId, records: absent, at: Date.now() });
       globalThis.window?.dispatchEvent?.(new CustomEvent('webui-sync-recovery', { detail: { count: absent.length } }));
+      addApplied(await applyLocal(scope, absent.map(r => ({ kind: r.kind, id: r.id, deleted: true, payload: null, updatedAt: Math.max(Date.now(), r.updatedAt + 1) }))));
     }
-    const recoveryCache = new Map();
-    const restored = await Promise.all(snapshot.map(async r => r.deleted ? r : { ...r, payload: await restorePayload(r.payload, recoveryCache) }));
-    const applied = await applyLocal(scope, [...absent.map(r => ({ ...r, deleted: true, payload: null, updatedAt: Math.max(Date.now(), r.updatedAt + 1) })), ...restored]);
-    writeSent(scope, Object.fromEntries(snapshot.filter(r => !r.deleted).map(r => [`${r.kind}:${r.id}`, r.updatedAt])));
+    writeSent(scope, { ...progress.stamps });
     writeRev(scope, cursor);
+    try { await chatStorage.setItem(progressKey, null); } catch (e) { /* harmless leftover */ }
     return { applied, sent: 0, rejected: 0, refused: [], refusedCount: 0, rev: cursor, complete: false,
-      received: snapshot.length, remaining: 0, changedLocally: applied.chats + applied.settings + applied.documents + applied.memories + applied.lists + applied.studio,
+      received: progress.received, remaining: 0, changedLocally: applied.chats + applied.settings + applied.documents + applied.memories + applied.lists + applied.studio,
       localCount: local.length, recovered: absent.length };
   }
 
@@ -707,24 +794,25 @@ export const syncOnce = async (scope, { full = false, limit = 500, onPhase } = {
  * enough to be in step. The page cap is what keeps a slow connection from
  * having to hold one enormous request open.
  */
-export const syncFully = async (scope, { full = false, maxRounds = 100, limit = 500, onProgress } = {}) => {
+export const syncFully = async (scope, { full = false, maxRounds = 100, limit = 500, pageBytes, onProgress } = {}) => {
   // Seen by the connection banner: a ping slowed by this is not an outage.
   globalThis.__webuiSyncBusy = (globalThis.__webuiSyncBusy || 0) + 1;
   const endPhase = jankPhase('sync');
-  try { return await syncRounds(scope, { full, maxRounds, limit, onProgress }); }
+  try { return await syncRounds(scope, { full, maxRounds, limit, pageBytes, onProgress }); }
   finally {
     endPhase();
     globalThis.__webuiSyncBusy = Math.max(0, (globalThis.__webuiSyncBusy || 1) - 1);
   }
 };
 
-const syncRounds = async (scope, { full, maxRounds, limit, onProgress }) => {
+const syncRounds = async (scope, { full, maxRounds, limit, pageBytes, onProgress }) => {
   let total = null;
   let receivedSoFar = 0;
   for (let round = 0; round < maxRounds; round++) {
     const result = await syncOnce(scope, {
       full: full && round === 0,
       limit,
+      pageBytes,
       // Said as it happens, not after the round: a round on a phone can take
       // many seconds, and silence for that long reads as a hang.
       onPhase: (p) => onProgress?.({ ...p, round, receivedSoFar: receivedSoFar + (p.received || 0) }),

@@ -11531,3 +11531,12 @@ body .main-header .header-tools > .model-selector-container:not(.header-secondar
 .virtual-message { min-width: 0; flex-shrink: 0; }
 .sync-recovery-notice { position: fixed; bottom: 16px; left: 16px; right: 16px; z-index: 19000; background: var(--bg-primary, white); color: var(--text-primary); padding: 12px; border: 1px solid #d97757; border-radius: 8px; }
 .sync-recovery-notice button { margin-inline-start: 12px; }
+
+/* The end of a partly drawn chat list (src/SidebarMore.jsx). Mostly never
+   seen: it asks for more rows before it scrolls into view. */
+.sidebar-more {
+  display: block; width: 100%; margin: 4px 0 12px; padding: 6px 0;
+  border: 0; background: transparent; color: var(--text-muted, inherit);
+  font-size: 12px; cursor: pointer; opacity: 0.7;
+}
+.sidebar-more:hover { opacity: 1; }

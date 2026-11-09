@@ -42,7 +42,7 @@ import { createGoogleHandoffs, nativeGooglePage } from './nativeGoogle.js';
 import { googleNativeRedirect, nativeGoogleDirectPage, nativeGoogleCallbackPage, createRedirectProbe, GOOGLE_LOOPBACK_REDIRECT } from './nativeGoogleDirect.js';
 import {
   changesSince, applyChanges, accountStats, currentRev,
-  OwnerMismatch, MAX_RECORD_BYTES, MAX_BATCH_RECORDS,
+  OwnerMismatch, MAX_RECORD_BYTES, MAX_BATCH_RECORDS, PAGE_BYTES,
 } from './records.js';
 import { listRevisions, readRevision, recordsWithHistory } from './recordHistory.js';
 import {
@@ -1488,6 +1488,13 @@ export const createApiRoutes = (env = {}, options = {}) => {
       } catch (error) { sendJson(res, { success: false, error: error.message }, 500); }
     });
 
+    /* How large a page the client may ask for. Bigger pages mean far fewer
+       rounds on a first sync of a large account, and every round costs the
+       client a rewrite of its whole chat list. Clamped: 1-16 MB. */
+    const pageBytesOf = (value) => {
+      const n = Number(value);
+      return Number.isFinite(n) && n > 0 ? Math.max(1024 * 1024, Math.min(16 * 1024 * 1024, Math.floor(n))) : PAGE_BYTES;
+    };
     route('/api/auth/sync', async (req, res) => {
       const auth = req.method === 'GET'
         ? (() => {
@@ -1503,14 +1510,15 @@ export const createApiRoutes = (env = {}, options = {}) => {
 
       try {
         if (req.method === 'GET') {
-          const since = Number(new URL(req.url, 'http://x').searchParams.get('since') || 0);
-          const page = changesSince(auth.user.id, since);
+          const params = new URL(req.url, 'http://x').searchParams;
+          const since = Number(params.get('since') || 0);
+          const page = changesSince(auth.user.id, since, 500, pageBytesOf(params.get('maxBytes')));
           return sendJson(res, { success: true, ownerId: auth.user.id, ...page });
         }
 
         const body = await jsonBody(req, MAX_RECORD_BYTES * 4);
         acknowledgeSync(auth.user.id, deviceIdOf(req) || `session:${sessionIdOf(auth.session.key)}`, body.since);
-        const result = applyChanges(auth.user.id, body);
+        const result = applyChanges(auth.user.id, { ...body, maxBytes: pageBytesOf(body.maxBytes) });
 
         /* Tombstones are swept occasionally rather than on a timer: this is
            the only code that runs regularly, and a sweep on every write would
