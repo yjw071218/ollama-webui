@@ -185,7 +185,11 @@ export async function downloadUpdate(update, destination, { fetcher = fetch, sig
     await rename(part, destination);
     return { path: destination, sha256: hash, size: received };
   } catch (error) {
-    out.destroy();
+    /* Closed first, then removed. The stream opens its file asynchronously:
+       cancelled early, `rm` used to run before the file existed and the
+       stream created it afterwards, leaving a stray `.part` (seen on a CI
+       runner's slower disk). 'close' comes after the open has settled. */
+    await new Promise(resolve => { if (out.closed) resolve(); else { out.once('close', resolve); out.destroy(); } });
     await rm(part, { force: true }).catch(() => {});
     throw error;
   }
