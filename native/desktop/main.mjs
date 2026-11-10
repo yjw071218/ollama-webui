@@ -6,6 +6,7 @@ import { fileURLToPath, pathToFileURL } from 'node:url';
 import path from 'node:path';
 import { createHash } from 'node:crypto';
 import { normalizeServer, legacyServer, probeServer, startProxy } from './proxy.mjs';
+import { moveOrigin } from './originMove.mjs';
 import { createUpdater } from './updater.mjs';
 import { loadTrustedPage } from './navigation.mjs';
 import { createClientWindow, chromeOptions } from './chrome.mjs';
@@ -208,6 +209,16 @@ const zoomBy = direction => {
   if (win && !win.clientContents.isDestroyed()) setZoom(zoomStep(win.clientContents.getZoomFactor(), direction));
 };
 
+/* A new server's port is picked below the OS's dynamic range (49152+), where
+   Hyper-V/WSL take their reservations, so a later boot cannot claim it. */
+async function startFreshProxy(server) {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try { return await startProxy(server, 20000 + Math.floor(Math.random() * 12000)); }
+    catch (error) { if (error.code !== 'EADDRINUSE' && error.code !== 'EACCES') throw error; }
+  }
+  return startProxy(server, 0);
+}
+
 async function connect(value) {
   if (connecting) throw new Error(tr('연결 중입니다.', 'Already connecting.'));
   connecting = true;
@@ -222,10 +233,22 @@ async function connect(value) {
     // Fixed per-server origins preserve IndexedDB and keep different servers isolated.
     if (clientWindow && !clientWindow.isDestroyed()) clientWindow.destroy();
     if (gateway) { await gateway.close(); gateway = undefined; }
-    try { gateway = await startProxy(server, savedPort); }
-    catch (error) { if (error.code === 'EADDRINUSE') throw new Error(tr('저장된 앱 포트가 사용 중입니다. 다른 앱 인스턴스를 종료한 후 다시 시도하세요.', 'The app\'s saved port is in use. Close the other copy of the app and try again.')); throw error; }
-    const current = gateway;
     const ses = session.fromPartition('persist:server-' + key);
+    try { gateway = savedPort ? await startProxy(server, savedPort) : await startFreshProxy(server); }
+    catch (error) {
+      if (error.code === 'EADDRINUSE') throw new Error(tr('저장된 앱 포트가 사용 중입니다. 다른 앱 인스턴스를 종료한 후 다시 시도하세요.', 'The app\'s saved port is in use. Close the other copy of the app and try again.'));
+      if (error.code !== 'EACCES') throw error;
+      /* Hyper-V/WSL/Docker reserved the saved port at boot, and may again after
+         every restart. The server moves to a new port and its stored data moves
+         with it (originMove.mjs); the new port is saved once the page loads. */
+      gateway = await startFreshProxy(server);
+      try { await moveOrigin(ses, 'http://127.0.0.1:' + savedPort, gateway.origin); }
+      catch (moveError) {
+        await gateway.close(); gateway = undefined;
+        throw new Error(tr(`앱 포트 ${savedPort}을(를) Windows가 예약해 새 포트로 옮기려 했지만 저장된 데이터를 옮기지 못했습니다: ${moveError.message}`, `Windows reserved the app's port ${savedPort}, and moving this server's stored data to a new port failed: ${moveError.message}`));
+      }
+    }
+    const current = gateway;
     const supportedPermissions = ['media', 'notifications', 'clipboard-read', 'clipboard-sanitized-write', 'fullscreen', 'pointerLock', 'idle-detection', 'speaker-selection'];
     // What this server was told it may always have (다시 묻지 않기) starts out granted.
     const grants = loadGrants(app.getPath('userData'), key, supportedPermissions);
@@ -340,8 +363,32 @@ async function connect(value) {
     win.clientContents.on('will-navigate', guard);
     win.clientContents.on('will-redirect', guard);
     win.clientContents.on('will-attach-webview', event => event.preventDefault());
+    /* A server file (an attachment's original, a PDF) asked for as a page used
+       to replace the whole app with it, with no way back. It opens in a
+       viewer window of its own, on the same session, so the chat stays put. */
+    const serverFile = (url) => {
+      try {
+        const p = new URL(url).pathname.toLowerCase();
+        return p.startsWith('/api/attach-file') || p.startsWith('/api/auth/answer-file') || p.startsWith('/studio/view')
+          || /\.(pdf|docx?|xlsx?|pptx?|hwpx?|zip|png|jpe?g|webp|gif|mp4|webm)$/.test(p);
+      } catch { return false; }
+    };
+    const openViewer = (url) => {
+      const viewer = new BrowserWindow({
+        width: 980, height: 820, autoHideMenuBar: true, backgroundColor: '#211f1c', title: 'Ollama WebUI',
+        icon: path.join(directory, 'icons/app.png'),
+        webPreferences: { session: win.clientContents.session, plugins: true, sandbox: true, contextIsolation: true, nodeIntegration: false },
+      });
+      viewer.webContents.setWindowOpenHandler(({ url: next }) => { external(next, win); return { action: 'deny' }; });
+      viewer.webContents.on('will-navigate', (event, next) => { if (!sameOrigin(next, current.origin)) { event.preventDefault(); external(next, win); } });
+      void viewer.loadURL(url).catch(() => {});
+    };
+    win.clientContents.on('will-navigate', (event, url) => {
+      if (sameOrigin(url, current.origin) && serverFile(url)) { event.preventDefault(); openViewer(url); }
+    });
     win.clientContents.setWindowOpenHandler(({ url }) => {
-      if (sameOrigin(url, current.origin)) void win.loadClientURL(url).catch(() => {});
+      if (sameOrigin(url, current.origin) && serverFile(url)) openViewer(url);
+      else if (sameOrigin(url, current.origin)) void win.loadClientURL(url).catch(() => {});
       else external(url, win);
       return { action: 'deny' };
     });

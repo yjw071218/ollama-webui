@@ -6,8 +6,8 @@ android {
         applicationId 'io.github.yjw071218.ollamawebui.client'
         minSdk 26
         targetSdk 35
-        versionCode 44
-        versionName '2.0.10'
+        versionCode 45
+        versionName '2.0.13'
     }
     signingConfigs {
         release {

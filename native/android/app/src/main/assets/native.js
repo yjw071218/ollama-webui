@@ -35,6 +35,9 @@
     saveFile: async (blob, name) => call('save', {name, type:blob.type, data:await base64(blob)}),
     closeQuickAsk: () => call('quickAskClose'),
     openQuickAskApp: () => call('quickAskOpenApp'),
+    moveQuickAsk: (dx, dy, end) => call('quickAskMove', { dx: Math.round(dx), dy: Math.round(dy), end: !!end }),
+    screenContext: () => call('screenContext'),
+    screenContextSettings: () => call('screenContextSettings'),
     // An answer is being written: the screen stays on until it is done (src/nativeEvents.js).
     busy: (value, info) => { call('busy', { value: !!value, chat: String(info?.chat || ''), title: String(info?.title || '') }).catch(() => {}); },
     captureScreen: async () => {

@@ -1493,7 +1493,34 @@
 .studio-job-menu button svg { flex: none; opacity: 0.85; }
 .studio-job-menu button.is-danger { color: #f0a58c; }
 /* Open, the corner stays up even when the pointer has left the card. */
-.studio-job:has(.studio-job-menu) .studio-job-actions { opacity: 1; }
+.studio-job:has(.studio-job-more[data-open]) .studio-job-actions { opacity: 1; }
+/* Portalled to <body> (see JobMenu): placed by the component on wide screens,
+   a bottom sheet on phones. */
+.studio-job-menu.is-portal {
+  position: fixed;
+  top: auto;
+  right: auto;
+  z-index: var(--z-popover, 400);
+  overflow-y: auto;
+  min-width: 0;
+}
+.studio-job-menu.is-sheet {
+  left: 12px;
+  right: 12px;
+  top: auto;
+  bottom: max(12px, env(safe-area-inset-bottom));
+  max-height: 60dvh;
+  padding: 6px;
+  border-radius: 14px;
+  transform-origin: bottom center;
+}
+.studio-job-menu.is-sheet button { padding: 12px 14px; font-size: 14px; }
+.studio-job-menu-scrim {
+  position: fixed;
+  inset: 0;
+  z-index: calc(var(--z-popover, 400) - 1);
+  background: rgba(0, 0, 0, 0.35);
+}
 
 /* A film's way into the viewer: its player takes every other click. */
 .studio-job-expand {
@@ -2187,7 +2214,6 @@
  .studio-table, .studio-form, .studio-gallery, .studio-tools { min-width: 0; max-width: 100%; box-sizing: border-box; }
  .studio-gallery.is-density-s { grid-template-columns: repeat(auto-fill, minmax(min(160px, 100%), 1fr)); }
  .studio-gallery.is-density-l { grid-template-columns: repeat(auto-fill, minmax(min(360px, 100%), 1fr)); }
- .studio-job-menu { position: fixed; left: 12px; right: 12px; top: auto; bottom: max(12px, env(safe-area-inset-bottom)); min-width: 0; max-height: 60dvh; overflow-y: auto; z-index: var(--z-popover); }
  .studio-tools { flex-wrap: wrap; gap: 8px; position: static; }
  .studio-tools > * { min-width: 0; max-width: 100%; }
  .studio-tools input, .studio-tools select { max-width: 100%; box-sizing: border-box; }

@@ -6,4 +6,6 @@
     <string name="process_text_label">AI에게 묻기</string>
     <string name="widget_description">음성이나 새 대화로 바로 질문하기</string>
     <string name="tile_label">AI에게 묻기</string>
+    <string name="screen_context_label">Ollama WebUI 플로팅 AI 화면 인식</string>
+    <string name="screen_context_description">플로팅 AI 버튼을 누른 순간에만 앞에 있는 앱 이름, 제목, 주소, 화면의 글자(Android 11 이상은 스크린샷 포함)를 읽어 플로팅 AI에게 전달합니다. 그 외에는 읽지 않고 저장하지도 않으며 비밀번호 입력란은 절대 읽지 않습니다.</string>
 </resources>

@@ -590,39 +590,75 @@ const JobMedia = ({ job, snapshot, lastFrame, level, t, onCancel, onOpen, onJudg
  */
 const JobMenu = ({ label, items }) => {
   const [open, setOpen] = useState(false);
+  const [place, setPlace] = useState(null);
   const box = useRef(null);
+  const menu = useRef(null);
+  /* The menu is portalled to <body>: a card inside the Studio sits under
+     ancestors with transform/backdrop-filter, and those make `position: fixed`
+     relative to the card instead of the screen -- on a phone that left an
+     empty dark sheet stuck to the card with its rows clipped away. */
+  const measure = useCallback(() => {
+    const btn = box.current?.querySelector('button');
+    if (!btn) return;
+    const r = btn.getBoundingClientRect();
+    const vw = window.innerWidth;
+    const vh = window.innerHeight;
+    const narrow = vw <= 720;
+    if (narrow) { setPlace({ sheet: true }); return; }
+    const width = 220;
+    const left = Math.max(8, Math.min(vw - width - 8, r.right - width));
+    const below = vh - r.bottom;
+    const up = below < 320 && r.top > below;
+    setPlace(up
+      ? { left, bottom: vh - r.top + 6, width, maxHeight: Math.max(160, r.top - 16) }
+      : { left, top: r.bottom + 6, width, maxHeight: Math.max(160, below - 16) });
+  }, []);
   useEffect(() => {
     if (!open) return undefined;
-    const onDown = (e) => { if (box.current && !box.current.contains(e.target)) setOpen(false); };
+    measure();
+    const inside = (target) => (box.current && box.current.contains(target)) || (menu.current && menu.current.contains(target));
+    const onDown = (e) => { if (!inside(e.target)) setOpen(false); };
     // Captured, so Escape closes the menu and not the Studio behind it.
     const onKey = (e) => { if (e.key === 'Escape') { e.stopPropagation(); setOpen(false); } };
-    document.addEventListener('mousedown', onDown);
+    const onMove = () => measure();
+    document.addEventListener('pointerdown', onDown, true);
     document.addEventListener('keydown', onKey, true);
+    window.addEventListener('resize', onMove);
+    window.addEventListener('scroll', onMove, true);
     return () => {
-      document.removeEventListener('mousedown', onDown);
+      document.removeEventListener('pointerdown', onDown, true);
       document.removeEventListener('keydown', onKey, true);
+      window.removeEventListener('resize', onMove);
+      window.removeEventListener('scroll', onMove, true);
     };
-  }, [open]);
+  }, [open, measure]);
 
   const shown = items.filter(Boolean);
   if (!shown.length) return null;
+  const style = place && !place.sheet ? {
+    left: place.left, top: place.top, bottom: place.bottom, width: place.width, maxHeight: place.maxHeight,
+  } : undefined;
   return (
-    <div className="studio-job-more" ref={box}>
+    <div className="studio-job-more" ref={box} data-open={open ? 'true' : undefined}>
       <button type="button" className="icon-btn" aria-haspopup="menu" aria-expanded={open}
         title={label} aria-label={label} onClick={() => setOpen(v => !v)}>
         <MoreHorizontal size={14} />
       </button>
-      {open && (
-        <div className="studio-job-menu" role="menu">
-          {shown.map(item => (
-            <button key={item.key} type="button" role="menuitem"
-              className={item.danger ? 'is-danger' : ''} disabled={item.busy}
-              onClick={() => { setOpen(false); item.onClick(); }}>
-              {item.busy ? <RefreshCcw size={14} className="spin" /> : item.icon}
-              <span>{item.label}</span>
-            </button>
-          ))}
-        </div>
+      {open && place && createPortal(
+        <>
+          {place.sheet && <div className="studio-job-menu-scrim" onPointerDown={() => setOpen(false)} />}
+          <div ref={menu} className={`studio-job-menu is-portal${place.sheet ? ' is-sheet' : ''}`} role="menu" style={style}>
+            {shown.map(item => (
+              <button key={item.key} type="button" role="menuitem"
+                className={item.danger ? 'is-danger' : ''} disabled={item.busy}
+                onClick={() => { setOpen(false); item.onClick(); }}>
+                {item.busy ? <RefreshCcw size={14} className="spin" /> : item.icon}
+                <span>{item.label}</span>
+              </button>
+            ))}
+          </div>
+        </>,
+        document.body,
       )}
     </div>
   );

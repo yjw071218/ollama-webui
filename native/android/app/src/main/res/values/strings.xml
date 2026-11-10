@@ -6,4 +6,6 @@
     <string name="process_text_label">Ask Ollama WebUI</string>
     <string name="widget_description">Ask a question, by voice or in a new chat</string>
     <string name="tile_label">Ask AI</string>
+    <string name="screen_context_label">Ollama WebUI floating AI screen reading</string>
+    <string name="screen_context_description">When you press the floating AI button, the app in front, its title, address and visible text (and a screenshot on Android 11+) are passed to the floating AI so it knows what you are looking at. Nothing is read at any other time, nothing is stored, and password fields are never read.</string>
 </resources>

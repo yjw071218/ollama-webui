@@ -29,6 +29,7 @@ import java.util.concurrent.*;
 
 public class MainActivity extends Activity {
     private WebView web;
+    private SideBrowser side;
     private LoopbackProxy proxy;
     private LinearLayout layout;
     private android.content.SharedPreferences prefs;
@@ -94,6 +95,7 @@ public class MainActivity extends Activity {
         super.onConfigurationChanged(config);
         // The address screen follows a theme switch made while it is open.
         if (onSetup && web == null && !connecting) showSetup();
+        if (side != null) side.relayout();
     }
 
     /** Shown for the moment it takes to open the saved server. */
@@ -133,6 +135,9 @@ public class MainActivity extends Activity {
      * back returns to the chat -- rather than leaving for the browser.
      */
     private void openLinkTab(Uri uri) {
+        // In the app itself the link opens in the panel docked on the left
+        // (SideBrowser); the floating window is too small for that.
+        if (side != null && !floatingAsk()) { side.open(uri); return; }
         Intent intent = new Intent(Intent.ACTION_VIEW, uri);
         Bundle extras = new Bundle();
         extras.putBinder("android.support.customtabs.extra.SESSION", null);
@@ -156,6 +161,10 @@ public class MainActivity extends Activity {
         } catch (Exception e) {
             openAuthTab(Uri.parse(server + "/api/auth/native/page#" + id + "&app=android"));
         }
+    }
+    /** A plain event for the page (the floating window: a new screen was read). */
+    protected void pageEvent(String name) {
+        if (web != null && name.matches("[a-z-]+")) web.evaluateJavascript("window.dispatchEvent(new Event('" + name + "'))", null);
     }
     /** Tell the page to check for a finished sign-in now instead of at its next poll. */
     private void nudgeAuth() {
@@ -604,8 +613,11 @@ public class MainActivity extends Activity {
     }
     /** Paint the system bars and the area behind them in the page's own background colour. */
     private void applyChrome(int color) {
-        if (layout != null) layout.setBackgroundColor(color);
-        if (web != null) web.setBackgroundColor(color);
+        // The floating window has rounded corners drawn by its page: nothing square behind them.
+        int behind = floatingAsk() ? Color.TRANSPARENT : color;
+        if (layout != null) layout.setBackgroundColor(behind);
+        if (web != null) web.setBackgroundColor(behind);
+        if (floatingAsk()) return;
         getWindow().setStatusBarColor(color); getWindow().setNavigationBarColor(color);
         double luminance = (0.299 * Color.red(color) + 0.587 * Color.green(color) + 0.114 * Color.blue(color)) / 255;
         View decor = getWindow().getDecorView();
@@ -634,7 +646,11 @@ public class MainActivity extends Activity {
         notificationAllowed = prefs.getBoolean("notify:" + server, false) && notificationsAllowedBySystem();
         // No native button bar: reload and server change live in the page's own
         // account menu (window.ollamaNative.changeServer), so the app has no frame.
-        web = new WebView(this); layout.addView(web, new LinearLayout.LayoutParams(-1, 0, 1));
+        if (side != null) { side.destroy(); side = null; }
+        FrameLayout stage = new FrameLayout(this);
+        layout.addView(stage, new LinearLayout.LayoutParams(-1, 0, 1));
+        web = new WebView(this); stage.addView(web, new FrameLayout.LayoutParams(-1, -1));
+        if (!floatingAsk()) side = new SideBrowser(this, stage, web, open -> { });
         applyChrome(prefs.getInt("chrome", Color.rgb(26, 25, 22)));
         WebSettings s = web.getSettings();
         s.setJavaScriptEnabled(true); s.setDomStorageEnabled(true);
@@ -667,6 +683,12 @@ public class MainActivity extends Activity {
                         }
                         return true;
                     }
+                    /* A file of the server's -- an attachment's original, a
+                       PDF -- asked for as a page ("원본 열기", target=_blank).
+                       Left alone it replaced the whole app with a page the
+                       WebView cannot even draw, and nothing led back. It is
+                       fetched and handed to a reader app instead. */
+                    if (request.isForMainFrame() && localFile(request.getUrl())) { openLocalFile(url); return true; }
                     return false;
                 }
                 if (!request.isForMainFrame()) return true;
@@ -676,7 +698,17 @@ public class MainActivity extends Activity {
                     openLinkTab(request.getUrl());
                 return true;
             }
-            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) { pageReady = false; }
+            @Override public void onPageStarted(WebView view, String url, android.graphics.Bitmap favicon) {
+                // Belt and braces: a file reached without shouldOverrideUrlLoading
+                // (a redirect, window.location) is stopped and the app goes back.
+                if (url != null && local(url) && localFile(Uri.parse(url))) {
+                    view.stopLoading();
+                    if (view.canGoBack()) view.goBack(); else view.loadUrl(proxy.origin + "/");
+                    openLocalFile(url);
+                    return;
+                }
+                pageReady = false;
+            }
             @Override public void onPageFinished(WebView view, String url) {
                 pageReady = local(url);
                 deliverChat();
@@ -952,6 +984,18 @@ public class MainActivity extends Activity {
                 case "quickAskOpenApp":
                     if (floatingAsk()) { startActivity(new Intent(this, MainActivity.class)); finish(); }
                     reply(reply, id, true, null); break;
+                case "quickAskMove":
+                    if (this instanceof QuickAskActivity) ((QuickAskActivity) this).moveBy(request.optInt("dx"), request.optInt("dy"), request.optBoolean("end"));
+                    reply(reply, id, true, null); break;
+                case "screenContext": {
+                    JSONObject snap = ScreenContextService.latest();
+                    if (snap == null) snap = new JSONObject();
+                    snap.put("enabled", ScreenContextService.enabled(this));
+                    reply(reply, id, snap, null); break;
+                }
+                case "screenContextSettings":
+                    startActivity(new Intent(android.provider.Settings.ACTION_ACCESSIBILITY_SETTINGS).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK));
+                    reply(reply, id, true, null); break;
                 case "changeServer":
                     confirmChangeServer(() -> reply(reply, requestId, false, null)); break;
                 case "checkUpdates":
@@ -966,6 +1010,58 @@ public class MainActivity extends Activity {
                 default: throw new IllegalArgumentException(L.t("지원하지 않는 앱 요청입니다.", "Not something the app can do."));
             }
         } catch (Exception e) { reply(reply, id, null, e.getMessage()); }
+    }
+    /** A server URL that is a file rather than the app: an attachment, a PDF, a download. */
+    private static boolean localFile(Uri uri) {
+        String path = uri.getPath() == null ? "" : uri.getPath().toLowerCase(Locale.ROOT);
+        if (path.startsWith("/api/attach-file") || path.startsWith("/api/auth/answer-file") || path.startsWith("/studio/view")) return true;
+        return path.matches(".*\\.(pdf|docx?|xlsx?|pptx?|hwpx?|zip|odt|ods|odp)$");
+    }
+    private boolean openingFile;
+    /**
+     * Fetch a server file through the gateway (with the page's cookies) into
+     * the cache, then offer it to whatever reads that kind of file.
+     */
+    private void openLocalFile(String url) {
+        if (openingFile) return;
+        openingFile = true;
+        Toast.makeText(this, L.t("파일을 여는 중…", "Opening the file…"), Toast.LENGTH_SHORT).show();
+        io.execute(() -> {
+            HttpURLConnection c = null;
+            try {
+                c = (HttpURLConnection) new URL(url).openConnection();
+                String cookie = CookieManager.getInstance().getCookie(url);
+                if (cookie != null) c.setRequestProperty("Cookie", cookie);
+                c.setConnectTimeout(15000); c.setReadTimeout(60000);
+                if (c.getResponseCode() >= 400) throw new IOException("HTTP " + c.getResponseCode());
+                String type = c.getContentType();
+                String name = URLUtil.guessFileName(url, c.getHeaderField("Content-Disposition"), type);
+                String asked = Uri.parse(url).getQueryParameter("path");
+                if (asked != null && asked.contains(".")) name = asked.substring(Math.max(asked.lastIndexOf('/'), asked.lastIndexOf('\\')) + 1);
+                if (type == null || type.startsWith("application/octet-stream")) {
+                    String ext = MimeTypeMap.getFileExtensionFromUrl(name);
+                    String guess = ext == null ? null : MimeTypeMap.getSingleton().getMimeTypeFromExtension(ext.toLowerCase(Locale.ROOT));
+                    type = guess != null ? guess : "application/octet-stream";
+                }
+                type = type.split(";")[0].trim();
+                File dir = new File(getCacheDir(), "shared"); dir.mkdirs();
+                File dest = new File(dir, UUID.randomUUID().toString().substring(0, 8) + "-" + safeName(name));
+                try (InputStream in = c.getInputStream(); FileOutputStream out = new FileOutputStream(dest)) {
+                    byte[] buf = new byte[65536]; int n;
+                    while ((n = in.read(buf)) > 0) out.write(buf, 0, n);
+                }
+                Uri file = FileProvider.getUriForFile(this, getPackageName() + ".files", dest);
+                String mime = type;
+                runOnUiThread(() -> {
+                    openingFile = false;
+                    Intent view = new Intent(Intent.ACTION_VIEW).setDataAndType(file, mime).addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                    try { startActivity(Intent.createChooser(view, L.t("파일 열기", "Open file"))); }
+                    catch (ActivityNotFoundException e) { message(L.t("이 파일을 열 수 있는 앱이 없습니다.", "There is no app to open this file.")); }
+                });
+            } catch (Exception e) {
+                runOnUiThread(() -> { openingFile = false; message(L.t("파일을 열지 못했습니다: ", "Could not open the file: ") + e.getMessage()); });
+            } finally { if (c != null) c.disconnect(); }
+        });
     }
     private static String safeName(String name) { return name.replaceAll("[^a-zA-Z0-9._가-힣-]", "_").replaceAll("^\\.+", "_"); }
     private static byte[] decode(String value) {
@@ -1072,6 +1168,7 @@ public class MainActivity extends Activity {
      */
     @Override public void onBackPressed() {
         if (web == null) { super.onBackPressed(); return; }
+        if (side != null && side.back()) return;
         WebView page = web;
         page.evaluateJavascript("(function(){var e=new Event('ollama-native-back',{cancelable:true});window.dispatchEvent(e);return e.defaultPrevented})()", handled -> {
             if ("true".equals(handled) || web != page) return;
@@ -1083,6 +1180,7 @@ public class MainActivity extends Activity {
         if (fileResult != null) fileResult.onReceiveValue(null);
         if (!floatingAsk() || captureReply != null) { stopService(new Intent(this, CaptureService.class)); CaptureService.result = null; }
         if (network != null) { try { getSystemService(ConnectivityManager.class).unregisterNetworkCallback(network); } catch (Exception ignored) { } }
+        if (side != null) { side.destroy(); side = null; }
         if (web != null) web.destroy();
         if (proxy != null) ClientGateways.release(proxy);
         io.shutdownNow(); super.onDestroy();
