@@ -803,5 +803,45 @@ on(laptop);
   globalThis.fetch = originalFetch;
 }
 
+/* A page whose restored records are far larger than one batch (a phone's
+   WebView died holding such a page whole): every record still lands, in
+   order -- a deletion and a later copy of the same chat in one page. */
+{
+  const browser = makeBrowser(); on(browser);
+  const originalFetch = globalThis.fetch;
+  const big = (id, t) => ({ kind: 'chat', id, updatedAt: t, payload: { id, updatedAt: t, messages: [{ content: id + 'x'.repeat(3 * 1024 * 1024) }] } });
+  const records = [big('a', 1), big('b', 2), big('c', 3), { kind: 'chat', id: 'b', updatedAt: 4, deleted: true, payload: null }, big('d', 5), big('b', 6), big('e', 7)];
+  globalThis.fetch = async (url, options = {}) => ({ ok: true, status: 200, json: async () => ({ success: true, ownerId: 'abc', records, rev: 7, complete: true, remaining: 0 }) });
+  const result = await E.syncOnce(SCOPE);
+  const chats = await current.forage.getItem(CHATS);
+  const ids = (chats || []).map(c => c.id).sort().join(',');
+  eq('a page larger than a batch lands whole', ids, 'a,b,c,d,e');
+  eq('a deletion then a newer copy in one page keeps the copy', chats.find(c => c.id === 'b')?.updatedAt, 6);
+  check('every record counted', result.applied.chats >= 5, JSON.stringify(result.applied));
+  globalThis.fetch = originalFetch;
+}
+
+/* Hundreds of chats waiting to go up (an older client's re-send marker): the
+   request prepares only what it carries, and the rest follow in later rounds.
+   Preparing all of them first is what killed an Android tablet's page. */
+{
+  const browser = makeBrowser(); on(browser);
+  for (const key of [...server.rows.keys()]) if (key.startsWith('chat:wave-')) server.rows.delete(key);
+  const many = Array.from({ length: 250 }, (_, i) => ({ id: `wave-${i}`, title: `w${i}`, updatedAt: 1000 + i, messages: [{ role: 'user', content: 'y'.repeat(120 * 1024) }] }));
+  await current.forage.setItem(CHATS, many);
+  const realStringify = JSON.stringify;
+  let prepared = 0;
+  JSON.stringify = function (value, ...rest) {
+    if (value && typeof value === 'object' && Array.isArray(value.messages) && String(value.id || '').startsWith('wave-')) prepared++;
+    return realStringify.call(this, value, ...rest);
+  };
+  let first;
+  try { first = await E.syncOnce(SCOPE); } finally { JSON.stringify = realStringify; }
+  check('one request prepares about what it carries, not all 250', prepared <= 3 * 100, `prepared ${prepared}`);
+  check('and says more are waiting', first.complete === false && first.sent > 0 && first.sent <= 100, JSON.stringify({ sent: first.sent, complete: first.complete }));
+  await E.syncFully(SCOPE, { maxRounds: 20 });
+  eq('every waiting chat reaches the account over the rounds', [...server.rows.keys()].filter(k => k.startsWith('chat:wave-')).length, 250);
+}
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail === 0 ? 0 : 1);

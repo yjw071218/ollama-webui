@@ -573,6 +573,52 @@ const applyTouched = (a) => Object.values(a || {}).some(n => Number(n) > 0);
 
 const rebuilding = new Map(); // scope -> the rebuild in progress (see syncOnce)
 
+/* Roughly how much memory a restored record holds: its strings, which is
+   where the weight is (pictures and attachments as text). */
+const approxBytes = (value, depth = 0) => {
+  if (typeof value === 'string') return value.length;
+  if (!value || typeof value !== 'object' || depth > 40) return 8;
+  let n = 0;
+  if (Array.isArray(value)) { for (const v of value) n += approxBytes(v, depth + 1); return n; }
+  for (const k in value) n += k.length + approxBytes(value[k], depth + 1);
+  return n;
+};
+
+/* Restore a page's records and store them a few megabytes at a time.
+
+   A page is sized on the server by its slimmed form, where every picture is a
+   64-character address. Restored, the same page can be hundreds of megabytes,
+   and it used to be restored whole -- every blob of the page fetched at once
+   -- and then stored in one go. A desktop survived that; an Android WebView,
+   with far less memory, did not: the page's process was killed, the app
+   opened the page again, and the sync started over -- "it syncs, refreshes and
+   resets". Now each record is restored in turn, and once about BATCH_BYTES of
+   them are held they are stored and let go. Per-chat storage
+   (src/chatStore.js) makes the extra writes cheap. Order is kept, so a
+   deletion and a later copy of the same record in one page land as before. */
+const BATCH_BYTES = 8 * 1024 * 1024;
+const applyInBatches = async (scope, records) => {
+  const applied = { chats: 0, settings: 0, documents: 0, memories: 0, lists: 0, studio: 0, settingKeys: [] };
+  const add = (a) => {
+    for (const k of Object.keys(applied)) if (k !== 'settingKeys') applied[k] += Number(a?.[k]) || 0;
+    for (const key of a?.settingKeys || []) if (!applied.settingKeys.includes(key)) applied.settingKeys.push(key);
+  };
+  let batch = [], bytes = 0, cache = new Map();
+  const flush = async () => {
+    if (!batch.length) return;
+    add(await applyLocal(scope, batch));
+    batch = []; bytes = 0; cache = new Map();
+  };
+  for (const r of records) {
+    const restored = r.deleted || r.payload == null ? r : { ...r, payload: await restorePayload(r.payload, cache) };
+    batch.push(restored);
+    bytes += restored === r ? 64 : approxBytes(restored.payload);
+    if (bytes >= BATCH_BYTES) await flush();
+  }
+  await flush();
+  return applied;
+};
+
 export const syncOnce = async (scope, { full = false, limit = 500, pageBytes, onPhase } = {}) => {
   const ownerId = ownerOfScope(scope);
   if (!ownerId) throw new Error('There is no signed-in account to sync with.');
@@ -593,22 +639,45 @@ export const syncOnce = async (scope, { full = false, limit = 500, pageBytes, on
   const { changed: pendingChanges, local } = full ? { changed: [], local: [] } : await localChanges(scope);
   /* Records over the limit lose their large strings to the blob store
      (src/syncBlobs.js) instead of being refused. Only the uploaded copy. */
+  /* Only what this request will carry is prepared, newest first, one record
+     at a time.
+
+     Every pending record used to be stringified and slimmed -- each of its
+     pictures read back from this device and uploaded -- before the batch of
+     at most 100 / 8 MB was chosen, and all of that was held at once. When a
+     device had hundreds of chats to send (an older client's re-send marker
+     turns everything pending), an Android tablet's WebView ran out of memory
+     before the request was even made, the app reopened the page, and the same
+     thing happened again: "syncs, refreshes, starts from 0%", with nothing
+     ever reaching the server. Records beyond this batch are only counted;
+     they go up in the next rounds, as before. Same choice as `uploadBatch`. */
   const encoder = new TextEncoder();
-  const slimmed = [];
-  for (const record of pendingChanges) {
-    if (record.deleted || record.payload == null) { slimmed.push(record); continue; }
-    const json = JSON.stringify(record.payload);
-    // Pictures stored here by address (src/localBlobs.js) always go through
-    // the blob path: a local address means nothing on another device.
-    if (!json.includes('local-blob:v1:') && encoder.encode(json).byteLength <= SLIM_ABOVE) { slimmed.push(record); continue; }
-    try {
-      slimmed.push({ kind: record.kind, id: record.id, updatedAt: record.updatedAt,
-        ...(record.base != null ? { base: record.base } : {}), payload: await slimPayload(record.payload) });
-    } catch (e) {
-      slimmed.push(record); // uploadBatch reports it as too large, with the reason
+  const LIMIT = 8 * 1024 * 1024;
+  const changed = [], oversized = [];
+  let bytes = 0, remaining = 0, packed = false;
+  for (const record of [...pendingChanges].sort((a, b) => b.updatedAt - a.updatedAt)) {
+    if (packed || changed.length >= 100 || bytes >= LIMIT) { remaining++; continue; }
+    let outgoing = record;
+    if (!record.deleted && record.payload != null) {
+      const json = JSON.stringify(record.payload);
+      // Pictures stored here by address (src/localBlobs.js) always go through
+      // the blob path: a local address means nothing on another device.
+      if (json.includes('local-blob:v1:') || encoder.encode(json).byteLength > SLIM_ABOVE) {
+        try {
+          outgoing = { kind: record.kind, id: record.id, updatedAt: record.updatedAt,
+            ...(record.base != null ? { base: record.base } : {}), payload: await slimPayload(record.payload) };
+        } catch (e) { outgoing = record; } // reported below as too large, with the reason
+      }
+      if (encoder.encode(JSON.stringify(outgoing.payload)).byteLength > LIMIT) {
+        oversized.push({ kind: record.kind, id: record.id, reason: '대화의 텍스트 자체가 동기화 한도 8MB를 초과했습니다. 대화를 나누어 주세요.' });
+        continue;
+      }
     }
+    const size = encoder.encode(JSON.stringify(outgoing)).byteLength;
+    // Full: the rest wait for the next round, unprepared.
+    if (changed.length > 0 && bytes + size > LIMIT) { remaining++; packed = true; continue; }
+    changed.push(outgoing); bytes += size;
   }
-  const { batch: changed, refused: oversized, remaining } = uploadBatch(slimmed);
 
   let result;
   onPhase?.({ phase: changed.length ? 'uploading' : 'downloading', sending: changed.length });
@@ -680,12 +749,7 @@ export const syncOnce = async (scope, { full = false, limit = 500, pageBytes, on
       if (!page.complete && page.rev <= cursor) throw new Error('Sync snapshot did not advance.');
       const records = page.records || [];
       onPhase?.({ phase: 'applying', received: progress.received + records.length, remaining: page.remaining });
-      const pageCache = new Map();
-      const restored = [];
-      for (const r of records) {
-        restored.push(r.deleted || r.payload == null ? r : { ...r, payload: await restorePayload(r.payload, pageCache) });
-      }
-      addApplied(await applyLocal(scope, restored));
+      addApplied(await applyInBatches(scope, records));
       for (const r of records) {
         const key = `${r.kind}:${r.id}`;
         if (r.deleted) delete progress.stamps[key];
@@ -723,10 +787,7 @@ export const syncOnce = async (scope, { full = false, limit = 500, pageBytes, on
   }
 
   onPhase?.({ phase: 'applying', received: (result.records || []).length, remaining: result.remaining });
-  const cache = new Map();
-  const incoming = await Promise.all((result.records || []).map(async r => (
-    r.deleted || r.payload == null ? r : { ...r, payload: await restorePayload(r.payload, cache) })));
-  const applied = await applyLocal(scope, incoming);
+  const applied = await applyInBatches(scope, result.records || []);
 
   // Record where we got to only after the writes landed. Doing it first means a
   // failure loses those records for good — they are below the revision this

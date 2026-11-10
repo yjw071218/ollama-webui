@@ -41,25 +41,27 @@ const INSTRUMENT = `(() => {
 
 const openDevice = async (name, port, token = TOKEN) => {
   const chrome = launchChrome(browser, `webui-sync-${LABEL}-${name}-`, ['--headless=new', '--disable-gpu', '--no-sandbox', `--remote-debugging-port=${port}`,
-    '--disable-extensions', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', '--js-flags=--max-old-space-size=8192']);
+    '--disable-extensions', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows', `--js-flags=--max-old-space-size=${process.env.BENCH_HEAP_MB || 8192}`]);
   let wsUrl;
   for (let i = 0; i < 80 && !wsUrl; i++) { try { wsUrl = (await (await fetch(`http://127.0.0.1:${port}/json/list`)).json()).find(t => t.type === 'page')?.webSocketDebuggerUrl; } catch {} if (!wsUrl) await sleep(250); }
   const ws = new WebSocket(wsUrl); await new Promise(r => { ws.onopen = r; });
-  let id = 0; const pending = new Map(); const thrown = []; const consoleErr = [];
+  let id = 0; const pending = new Map(); const thrown = []; const consoleErr = []; const crashes = [];
   ws.onmessage = (e) => { const m = JSON.parse(e.data);
+    // Like the Android app (MainActivity onRenderProcessGone): a dead page is opened again.
+    if (m.method === 'Inspector.targetCrashed') { crashes.push(Date.now()); setTimeout(() => send('Page.reload').catch(() => {}), 500); }
     if (m.method === 'Runtime.exceptionThrown') thrown.push(String(m.params?.exceptionDetails?.exception?.description || '').split('\n')[0].slice(0, 200));
     if (m.method === 'Runtime.consoleAPICalled' && m.params.type === 'error') consoleErr.push(m.params.args.map(a => a.value || a.description).join(' ').slice(0, 200));
     if (m.id && pending.has(m.id)) { pending.get(m.id)(m); pending.delete(m.id); } };
   const send = (method, params = {}) => new Promise(r => { const n = ++id; pending.set(n, r); ws.send(JSON.stringify({ id: n, method, params })); });
   const ev = async (expression) => { const r = await send('Runtime.evaluate', { expression, awaitPromise: true, returnByValue: true });
     if (r.result?.exceptionDetails) throw new Error(r.result.exceptionDetails.exception?.description); return r.result?.result?.value; };
-  await send('Page.enable'); await send('Runtime.enable'); await send('Performance.enable'); await send('Network.enable');
+  await send('Page.enable'); await send('Runtime.enable'); await send('Performance.enable'); await send('Network.enable'); await send('Inspector.enable');
   await send('Emulation.setDeviceMetricsOverride', MOBILE ? { width: 412, height: 915, deviceScaleFactor: 2, mobile: true } : { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false });
-  if (MOBILE) await send('Emulation.setCPUThrottlingRate', { rate: 4 });
+  if (MOBILE) { await send('Emulation.setCPUThrottlingRate', { rate: 4 }); await send('Emulation.setTouchEmulationEnabled', { enabled: true, maxTouchPoints: 5 }); await send('Emulation.setEmitTouchEventsForMouse', { enabled: true, configuration: 'mobile' }); }
   await send('Page.addScriptToEvaluateOnNewDocument', { source: INSTRUMENT });
   await send('Network.setCookie', { name: 'webui_session', value: token, domain: host, path: '/', httpOnly: true });
   const heap = async () => Math.round((await send('Performance.getMetrics')).result.metrics.find(m => m.name === 'JSHeapUsedSize').value / 1e6);
-  return { name, send, ev, thrown, consoleErr, heap, close: () => { try { ws.close(); } catch {} chrome.close(); } };
+  return { name, send, ev, thrown, consoleErr, crashes, heap, close: () => { try { ws.close(); } catch {} chrome.close(); } };
 };
 
 /* Where the first sync stands, from the app's own bookkeeping. */
@@ -91,7 +93,7 @@ const firstSync = async (dev) => {
   const final = await dev.ev(STATE).catch(() => ({}));
   const by = await dev.ev(`Object.entries(window.__m.by || {}).sort((a, b) => b[1] - a[1]).slice(0, 8).map(([k, n]) => k + ' ' + Math.round(n / 1e6) + 'MB')`).catch(() => []);
   log(dev.name, 'writes by target', JSON.stringify(by));
-  return { done, secs, maxHeapMB: maxHeap, worstStallMs: final.lag, putMB: final.putMB, counts, timeline: stage.slice(-12) };
+  return { done, secs, crashes: dev.crashes.length, maxHeapMB: maxHeap, worstStallMs: final.lag, putMB: final.putMB, counts, timeline: stage.slice(-12) };
 };
 
 const sendMessage = (dev, text) => dev.ev(`(async () => { const box = document.querySelector('.chat-input textarea, textarea'); if (!box) return 'no box';

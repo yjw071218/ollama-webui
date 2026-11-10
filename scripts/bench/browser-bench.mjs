@@ -48,7 +48,7 @@ await new Promise(r => server.listen(HTTP_PORT, '127.0.0.1', r));
 const { launchChrome } = await import(pathToFileURL(path.join(HERE, '../chromeProfile.mjs')).href);
 const chrome = launchChrome(browser, `webui-bench-${LABEL}-`, ['--headless=new', '--disable-gpu', '--no-sandbox', `--remote-debugging-port=${CDP_PORT}`,
   '--disable-extensions', '--disable-background-timer-throttling', '--disable-renderer-backgrounding', '--disable-backgrounding-occluded-windows',
-  '--js-flags=--max-old-space-size=8192']);
+  `--js-flags=--max-old-space-size=${process.env.BENCH_HEAP_MB || 8192}`]);
 const finish = (code = 0) => { try { server.close(); } catch {} try { chrome.close(); } catch {} console.log('RESULT ' + JSON.stringify(out)); process.exit(code); };
 
 let wsUrl;

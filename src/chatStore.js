@@ -53,7 +53,18 @@ const chatsDb = () => (db ??= localforage.createInstance({ name: 'ollama-webui-c
 const held = new Map(); // listKey -> { legacy, byId: Map, vers: Map, prints: Map, list }
 
 const asList = (value) => (Array.isArray(value) ? value.filter(c => c && c.id != null) : []);
-const byNewest = (a, b) => (b.updatedAt || 0) - (a.updatedAt || 0);
+const WRITE_BATCH_BYTES = 8 * 1024 * 1024;
+/* Roughly a chat's size: its message text, where nearly all of it is. */
+const approxChatBytes = (chat) => {
+  let n = 256;
+  for (const m of Array.isArray(chat?.messages) ? chat.messages : []) {
+    if (typeof m?.content === 'string') n += m.content.length;
+    for (const a of Array.isArray(m?.attachments) ? m.attachments : []) if (typeof a?.data === 'string') n += a.data.length;
+    for (const k of ['images', 'pictures']) for (const p of Array.isArray(m?.[k]) ? m[k] : []) if (typeof p === 'string') n += p.length;
+  }
+  return n;
+};
+const byNewest =(a, b) => (b.updatedAt || 0) - (a.updatedAt || 0);
 const newVersion = () => `${Date.now().toString(36)}.${Math.random().toString(36).slice(2, 8)}`;
 
 /* A cheap fingerprint, checked even when the object is the very one we stored:
@@ -224,7 +235,15 @@ export const updateChats = async (listKey, change, { legacyRead, legacyWrite } =
       const wanted = new Map();
       for (const chat of asList(next)) wanted.set(String(chat.id), chat);
 
-      const vers = new Map(), prints = new Map(), writes = [];
+      /* Written a few megabytes at a time, not all at once. Each write holds a
+         structured clone of its chat until it lands; the migration of a
+         whole account (and a first sync) writes every chat, and started
+         together that was a second copy of the account in memory -- on an
+         Android tablet's WebView, enough to kill the page, which the app
+         reopened, which migrated again. A streamed reply still writes its one
+         chat at once. */
+      const vers = new Map(), prints = new Map();
+      let inFlight = [], inFlightBytes = 0;
       for (const [id, chat] of wanted) {
         const prev = state.byId.get(id);
         const print = printOf(chat);
@@ -232,9 +251,11 @@ export const updateChats = async (listKey, change, { legacyRead, legacyWrite } =
           && state.prints.get(id) === print && sameChat(prev, chat);
         if (unchanged) { vers.set(id, state.vers.get(id)); prints.set(id, print); continue; }
         vers.set(id, newVersion()); prints.set(id, print);
-        writes.push(store.setItem(recordKey(listKey, id), chat));
+        inFlight.push(store.setItem(recordKey(listKey, id), chat));
+        inFlightBytes += approxChatBytes(chat);
+        if (inFlightBytes >= WRITE_BATCH_BYTES) { await Promise.all(inFlight); inFlight = []; inFlightBytes = 0; }
       }
-      await Promise.all(writes);
+      await Promise.all(inFlight);
       const gone = [...state.byId.keys()].filter(id => !wanted.has(id));
       // The index first, so a crash after it leaves a removed chat unlisted
       // (a cold read would still find it -- harmless, it is merely kept).

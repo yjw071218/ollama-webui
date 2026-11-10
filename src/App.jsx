@@ -1570,6 +1570,16 @@ const sameRowView = (a, b) => {
 const SidebarRow = memo(({ s, v, R, draw }) => draw(s, v, R),
   (a, b) => a.s === b.s && a.R === b.R && sameRowView(a.v, b.v));
 
+/* First-sync page size. Large pages mean fewer rounds, but each page is
+   parsed whole; a phone's WebView has far less memory than a desktop, so it
+   takes smaller ones (records are then restored a few MB at a time, see
+   applyInBatches in src/syncEngine.js). */
+const syncPageBytes = () => {
+  const phone = window.ollamaNative?.platform === 'android'
+    || (typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches && Math.min(screen.width, screen.height) < 820);
+  return (phone ? 3 : 12) * 1024 * 1024;
+};
+
 function App() {
     /* Everything Ollama has installed, and the part of it that can be chatted
      with. Embedding models only make vectors -- picking one for a chat is an
@@ -7447,7 +7457,7 @@ function App() {
         limit: 1000,
         // Large pages: each round rewrites the local chat list once, so 12 MB
         // pages make a few-hundred-MB account a few dozen rounds, not hundreds.
-        pageBytes: 12 * 1024 * 1024,
+        pageBytes: syncPageBytes(),
         // Never backwards: a phase report mid-round may know less than the
         // round before it did.
         onProgress: (p) => setInitialSync((s) => ({
@@ -8569,7 +8579,7 @@ function App() {
       // copy is wrong: the account is authoritative, and starting again from it
       // is more honest than trying to reconcile a mess.
       if (mode === 'replace') resetSyncPosition(profileScope);
-      const result = await syncFully(profileScope, { full: mode === 'replace', maxRounds: 2000, limit: 1000, pageBytes: 12 * 1024 * 1024 });
+      const result = await syncFully(profileScope, { full: mode === 'replace', maxRounds: 2000, limit: 1000, pageBytes: syncPageBytes() });
       syncStampRef.current = result.rev;
       settingsPrintRef.current = settingsFingerprint();
       setSyncInfo(await accountStamp({ full: true }));
