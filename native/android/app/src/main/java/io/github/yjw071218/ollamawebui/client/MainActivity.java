@@ -684,7 +684,7 @@ public class MainActivity extends Activity {
                         return true;
                     }
                     /* A file of the server's -- an attachment's original, a
-                       PDF -- asked for as a page ("원본 열기", target=_blank).
+                       PDF -- asked for as a page (the "open original" link, target=_blank).
                        Left alone it replaced the whole app with a page the
                        WebView cannot even draw, and nothing led back. It is
                        fetched and handed to a reader app instead. */
