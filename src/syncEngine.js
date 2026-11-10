@@ -740,8 +740,15 @@ export const syncOnce = async (scope, { full = false, limit = 500, pageBytes, on
     if (!progress || progress.ownerId !== ownerId || progress.floor !== result.floor || !Number.isSafeInteger(progress.cursor)) {
       progress = { ownerId, floor: result.floor, cursor: 0, stamps: {}, received: 0 };
     }
-    const applied = { chats: 0, settings: 0, documents: 0, memories: 0, lists: 0, studio: 0 };
-    const addApplied = (a) => { for (const k of Object.keys(applied)) applied[k] += Number(a?.[k]) || 0; };
+    /* With the keys of the settings that changed. Without them the app was
+       told "N settings arrived" but not which, and `applySyncedSettings`
+       (App.jsx) applies by key -- so a new device took every chat from the
+       account and none of its settings, until the next reload. */
+    const applied = { chats: 0, settings: 0, documents: 0, memories: 0, lists: 0, studio: 0, settingKeys: [] };
+    const addApplied = (a) => {
+      for (const k of Object.keys(applied)) if (k !== 'settingKeys') applied[k] += Number(a?.[k]) || 0;
+      for (const key of a?.settingKeys || []) if (!applied.settingKeys.includes(key)) applied.settingKeys.push(key);
+    };
     let cursor = progress.cursor, page;
     do {
       page = await api(`/api/auth/sync?since=${cursor}${pageBytes ? `&maxBytes=${pageBytes}` : ''}`);

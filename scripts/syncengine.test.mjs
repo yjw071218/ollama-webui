@@ -821,6 +821,22 @@ on(laptop);
   globalThis.fetch = originalFetch;
 }
 
+/* A new device's first sync is a rebuild (the account has a floor): the
+   settings it brings down must be named, or the app applies none of them. */
+{
+  const browser = makeBrowser(); on(browser);
+  const originalFetch = globalThis.fetch;
+  globalThis.fetch = async (url, options = {}) => ({ ok: true, status: 200, json: async () =>
+    options.method === 'POST'
+      ? { success: true, ownerId: 'abc', resetRequired: true, floor: 10, records: [], rev: 0 }
+      : { success: true, ownerId: 'abc', complete: true, rev: 20, records: [
+        { kind: 'setting', id: 'temperature', updatedAt: 50, payload: '0.3' },
+        { kind: 'chat', id: 'c1', updatedAt: 20, payload: { id: 'c1', updatedAt: 20, messages: [] } }] } });
+  const result = await E.syncOnce(SCOPE);
+  check('a rebuild names the settings it applied', result.applied.settings > 0 && (result.applied.settingKeys || []).includes('temperature'), JSON.stringify(result.applied));
+  globalThis.fetch = originalFetch;
+}
+
 /* Hundreds of chats waiting to go up (an older client's re-send marker): the
    request prepares only what it carries, and the rest follow in later rounds.
    Preparing all of them first is what killed an Android tablet's page. */
