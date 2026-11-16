@@ -25,6 +25,51 @@ try {
   put('alice','c','수정된 내용',2);
   assert.equal(searchRecords('alice',secret).hits.length,0);
   assert.equal(searchRecords('alice','수정된').hits.length,1);
+  // A save rewrites only the tokens that changed, and the index ends up exactly the chat's own.
+  const { searchGrams, chatText } = await import('../server/storageSecurity.js');
+  const gramsOf = text => searchGrams(chatText(JSON.stringify({title:'테스트',messages:[{content:text}]}))).length;
+  const indexed = () => db.prepare("SELECT COUNT(*) n FROM record_search WHERE user_id='bob' AND id='d'").get().n;
+  put('bob','d','가나다라',1);
+  assert.equal(indexed(),gramsOf('가나다라'));
+  const kept = db.prepare("SELECT token FROM record_search WHERE user_id='bob' AND id='d' ORDER BY token").all().map(r=>r.token);
+  put('bob','d','가나다라마바',2);
+  assert.equal(indexed(),gramsOf('가나다라마바'));
+  assert.equal(searchRecords('bob','라마바').hits.length,1);
+  const after = new Set(db.prepare("SELECT token FROM record_search WHERE user_id='bob' AND id='d'").all().map(r=>r.token));
+  assert.ok(kept.every(token=>after.has(token)),'tokens the chat still has stay in place');
+  put('bob','d','가나',3);
+  assert.equal(indexed(),gramsOf('가나'));
+  assert.equal(searchRecords('bob','다라').hits.length,0);
+  assert.equal(searchRecords('bob','가나').hits.length,1);
+  applyChanges('bob',{records:[{kind:'chat',id:'d',updatedAt:4,deleted:true}]});
+  assert.equal(indexed(),0,'a deleted chat leaves the index');
+  // The one-pass gram function is the old one, set for set -- including beyond the BMP.
+  const { gramSet } = await import('../server/storageSecurity.js');
+  const reference = text => { const chars=[...text.normalize('NFKC').toLowerCase()], out=new Set(); for(const size of [1,2,3]) for(let i=0;i<=chars.length-size;i++) out.add(chars.slice(i,i+size).join('')); return out; };
+  for (const sample of ['', 'a', 'ab', 'abc', '가나다라마 ABC abc', '😀a😀😀b\n줄 바꿈\tＡＢＣ ①②', 'aaaaaaa']) {
+    const got=gramSet(sample), want=reference(sample);
+    assert.ok(got.size===want.size && [...want].every(g=>got.has(g)),`grams of ${JSON.stringify(sample)}`);
+  }
+  // What the server remembers about the index is not trusted past a rollback, a restart, or a row it did not write.
+  const { transaction } = await import('../server/db.js');
+  const exact = (id,text) => assert.equal(db.prepare("SELECT COUNT(*) n FROM record_search WHERE user_id='bob' AND id=?").get(id).n,gramsOf(text),`index of ${id} is exactly "${text}"`);
+  put('bob','e','하나 둘 셋',10); exact('e','하나 둘 셋');
+  assert.throws(()=>transaction(h=>{
+    h.prepare("UPDATE records SET payload=?, updated_at=11 WHERE user_id='bob' AND id='e'").run(JSON.stringify({title:'테스트',messages:[{role:'user',content:'하나 둘 셋 넷 다섯'}]}));
+    assert.equal(h.prepare("SELECT COUNT(*) n FROM record_search WHERE user_id='bob' AND id='e'").get().n,gramsOf('하나 둘 셋 넷 다섯'));
+    throw new Error('undone');
+  }),/undone/);
+  exact('e','하나 둘 셋');
+  put('bob','e','하나 둘 여섯',12); exact('e','하나 둘 여섯');
+  assert.equal(searchRecords('bob','여섯').hits.length,1);
+  assert.equal(searchRecords('bob','셋').hits.length,0);
+  db.prepare("DELETE FROM record_search WHERE user_id='bob' AND id='e' AND token IN (SELECT token FROM record_search WHERE user_id='bob' AND id='e' LIMIT 3)").run();
+  put('bob','e','하나 둘 여섯 일곱',13); exact('e','하나 둘 여섯 일곱');
+  closeDatabase(); db=database();
+  put('bob','e','하나 일곱 여덟',14); exact('e','하나 일곱 여덟');
+  assert.equal(searchRecords('bob','여덟').hits.length,1);
+  assert.equal(searchRecords('bob','여섯').hits.length,0);
+  assert.equal(db.prepare("SELECT COUNT(*) n FROM sqlite_master WHERE type='trigger' AND name LIKE 'search_record_%' AND name<>'search_record_delete'").get().n,0,'the save triggers are not stored in the file');
   assert.equal(readRevision('alice','chat','c',1).payload.messages[0].content,secret);
   assert.ok(!db.prepare('SELECT payload FROM record_history').get().payload.includes(secret));
   assert.ok(db.prepare('EXPLAIN QUERY PLAN SELECT id FROM record_search WHERE user_id=? AND token=?').all('alice','x').some(r=>/PRIMARY KEY|INDEX/.test(r.detail)));

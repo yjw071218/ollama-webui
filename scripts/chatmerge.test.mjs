@@ -118,7 +118,7 @@ const a = (content, at) => ({ role: 'assistant', content, at });
 
 const db = database();
 db.exec("INSERT INTO users (id, name, provider, created_at, rev) VALUES ('u1', 'A', 'password', 1, 0)");
-const stored = () => JSON.parse(db.prepare("SELECT payload FROM records WHERE user_id='u1' AND id='c1'").get().payload);
+const stored = () => JSON.parse(db.prepare("SELECT payload FROM readable_records WHERE user_id='u1' AND id='c1'").get().payload);
 try {
   // Both devices in step at v100.
   applyChanges('u1', { records: [{ kind: 'chat', id: 'c1', updatedAt: 100, payload: { title: 'T', messages: [u('q1', 1), a('r1', 2)] } }] });

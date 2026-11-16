@@ -54,6 +54,9 @@ export const installGlobalCrashLog = () => {
   window.addEventListener('error', (event) => {
     // A resource that failed to load (an <img>) is not an error in the app.
     if (!event?.error && event?.target && event.target !== window) return;
+    // The browser saying a layout took more than one pass. Nothing failed, and
+    // logged every time it filled the crash log until a real error scrolled out.
+    if (!event?.error && /^ResizeObserver loop /.test(String(event?.message || ''))) return;
     recordCrash('window.onerror', event?.error || event?.message);
   });
   window.addEventListener('unhandledrejection', (event) => {

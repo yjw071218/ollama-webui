@@ -24,7 +24,7 @@
 // for a week downloads exactly what changed and nothing else.
 
 import { database, transaction } from './db.js';
-import { packPayload, unpackPayload } from './recordHistory.js';
+import { blobStateOf, packPayload, trimRecordHistory, unpackPayload } from './recordHistory.js';
 import { mergeChats, foldNewerFields } from './chatMerge.js';
 import { collectTombstones, syncFloor } from './syncRetention.js';
 
@@ -233,8 +233,8 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
       `);
       const history = handle.prepare(`
         INSERT OR IGNORE INTO record_history
-          (user_id, kind, id, rev, updated_at, deleted, payload)
-        VALUES (?,?,?,?,?,?,?)
+          (user_id, kind, id, rev, updated_at, deleted, payload, packed)
+        VALUES (?,?,?,?,?,?,?,?)
       `);
       const upsert = handle.prepare(`
         INSERT INTO records (user_id, kind, id, rev, updated_at, deleted, payload)
@@ -331,10 +331,13 @@ export const applyChanges = (userId, { since = 0, records = [], ownerId = null, 
         if (current) {
           // Pictures inside the payload go to history_blobs once rather than
           // once per edit; see server/recordHistory.js.
+          const kept = packPayload(handle, current.payload);
           history.run(
             userId, record.kind, record.id, current.rev,
-            current.updated_at, current.deleted, packPayload(handle, current.payload),
+            current.updated_at, current.deleted, kept, blobStateOf(kept),
           );
+          // Keep this one record near the policy now, not at the daily sweep.
+          trimRecordHistory(handle, userId, record.kind, record.id, record.updatedAt);
         }
         upsert.run(
           userId, record.kind, record.id, rev,

@@ -40,11 +40,18 @@ try {
   }
   const liveBefore = db.prepare("SELECT payload FROM records WHERE user_id='u1' AND id='c1'").get().payload;
   const total = db.prepare("SELECT COUNT(*) n FROM record_history WHERE user_id='u1'").get().n;
-  check('history recorded every replaced version', total === edits.length - 1, String(total));
+  // 1999 versions were replaced; the record is trimmed as it is written, so
+  // what is held is near the policy (50 newest + a day each + the slack
+  // between trims), not all of them.
+  check('a busy record is trimmed while it is written', total >= 50 && total <= 170, String(total));
+  check('new history rows say what they hold',
+    db.prepare("SELECT COUNT(*) n FROM record_history WHERE packed <> 1").get().n === 0);
+  const othersBefore = db.prepare("SELECT COUNT(*) n FROM record_history WHERE user_id='u2'").get().n;
+  check('the trim is per record', othersBefore >= 50 && othersBefore < 79, String(othersBefore));
 
   const r = pruneRecordHistory({ keepRecent: 50, keepDays: 90, tzOffsetMs: 9 * 3600 * 1000, now, userId: 'u1' });
   const left = db.prepare("SELECT rev, updated_at FROM record_history WHERE user_id='u1' ORDER BY rev DESC").all();
-  check('pruning removed rows', r.removed > 0 && r.rowsAfter === left.length);
+  check('pruning reports what is left', r.rowsBefore === total && r.rowsAfter === left.length && r.removed === total - left.length);
   check('the newest 50 revisions are all kept',
     left.slice(0, 50).every((row, i) => i === 0 || left[i - 1].rev - row.rev === 1));
   const olderDays = new Set(left.slice(50).map(row => Math.floor((row.updated_at + 9 * 3600 * 1000) / DAY)));
@@ -54,7 +61,7 @@ try {
   check('the live record is untouched',
     db.prepare("SELECT payload FROM records WHERE user_id='u1' AND id='c1'").get().payload === liveBefore);
   check('another account is not touched by a scoped prune',
-    db.prepare("SELECT COUNT(*) n FROM record_history WHERE user_id='u2'").get().n === 79);
+    db.prepare("SELECT COUNT(*) n FROM record_history WHERE user_id='u2'").get().n === othersBefore);
 
   const again = pruneRecordHistory({ keepRecent: 50, keepDays: 90, tzOffsetMs: 9 * 3600 * 1000, now, userId: 'u1' });
   check('pruning twice is a no-op', again.removed === 0);
@@ -76,6 +83,8 @@ try {
   check('history of a chat with a picture holds the picture once',
     hist.n === 11 && hist.b < 11 * 1000 &&
     db.prepare('SELECT COUNT(*) n FROM history_blobs').get().n === 1, JSON.stringify(hist));
+  check('and those rows are marked as holding one',
+    db.prepare("SELECT COUNT(*) n FROM record_history WHERE id='img' AND packed = 2").get().n === 11);
   const imgRevs = listRevisions('u1', 'chat', 'img');
   const back = readRevision('u1', 'chat', 'img', imgRevs[5].rev);
   check('an old revision with a picture reads back byte-for-byte',
@@ -86,12 +95,51 @@ try {
   db.prepare(`INSERT INTO record_history (user_id, kind, id, rev, updated_at, deleted, payload)
               VALUES ('u1','chat','old',1,?,0,?), ('u1','chat','old',2,?,0,?)`).run(now, legacy, now + 1, legacy);
   const { packExistingHistory, collectBlobs } = await import('../server/recordHistory.js');
+  // ...and a row from before the column that is already packed, and one with nothing to pack.
+  db.prepare(`INSERT INTO record_history (user_id, kind, id, rev, updated_at, deleted, payload)
+              SELECT user_id, kind, 'old', 3, updated_at, 0, payload FROM readable_record_history WHERE id='img' LIMIT 1`).run();
+  db.prepare(`INSERT INTO record_history (user_id, kind, id, rev, updated_at, deleted, payload)
+              VALUES ('u1','chat','old',4,?,0,?), ('u1','chat','old',5,?,1,NULL)`).run(now, '{"title":"small"}', now);
   check('existing rows are packed', packExistingHistory({ batch: 1 }) === 2);
+  check('every row has been looked at, and marked by what it holds',
+    db.prepare("SELECT group_concat(packed, '') s FROM (SELECT packed FROM record_history WHERE id='old' ORDER BY rev)").get().s === '22211');
+  check('a second pass has nothing to do', packExistingHistory() === 0);
+  // A byte budget ends a batch early without losing its place.
+  db.prepare("UPDATE record_history SET packed = 0 WHERE id='old'").run();
+  const { packHistoryStep } = await import('../server/recordHistory.js');
+  const first = packHistoryStep({ batch: 50, maxBytes: 1 });
+  check('a batch stops at its byte budget', first.done === false && first.after > 0);
+  packExistingHistory();
+  check('and the rest follows',
+    db.prepare("SELECT COUNT(*) n FROM record_history WHERE packed = 0").get().n === 0);
   check('and still read back whole',
     readRevision('u1', 'chat', 'old', 2).payload.messages[0].images[0] === picture + 'B');
   db.prepare("DELETE FROM record_history WHERE id IN ('img','old')").run();
   check('unreferenced pictures are collected', collectBlobs() === 2
     && db.prepare('SELECT COUNT(*) n FROM history_blobs').get().n === 0);
+
+  // The paced collector decides the same, and counts what is written while it scans.
+  const { collectBlobsAsync } = await import('../server/recordHistory.js');
+  const pic = (n) => 'iVBORw0KGgo' + String(n).repeat(40_000);
+  const hold = (id, rev, image) => db.prepare(`INSERT INTO record_history (user_id, kind, id, rev, updated_at, deleted, payload)
+    VALUES ('u1','chat',?,?,?,0,?)`).run(id, rev, now, JSON.stringify({ messages: [{ images: [image] }] }));
+  hold('g1', 1, pic(1)); hold('g2', 1, pic(2)); hold('g3', 1, pic(3));
+  packExistingHistory();
+  db.prepare("DELETE FROM record_history WHERE id='g2'").run();
+  let pauses = 0;
+  const swept = await collectBlobsAsync({ slice: 1, pause: async () => {
+    // After the scan has read g3: g3 goes, and a new revision takes its rowid.
+    if (++pauses !== 2) return;
+    db.prepare("DELETE FROM record_history WHERE id='g3'").run();
+    hold('g4', 2, pic(4));
+    packExistingHistory();
+  } });
+  check('the paced collector removes only what nothing refers to',
+    swept === 1 && db.prepare('SELECT COUNT(*) n FROM history_blobs').get().n === 3, String(swept));
+  check('a revision written during the scan keeps its picture',
+    readRevision('u1', 'chat', 'g4', 2).payload.messages[0].images[0] === pic(4)
+    && readRevision('u1', 'chat', 'g1', 1).payload.messages[0].images[0] === pic(1));
+  check('what the scan counted for a row since deleted goes at the next sweep', collectBlobs() === 1);
 
   // Backups: newest N plus one per day.
   const dir = path.join(data, 'b');

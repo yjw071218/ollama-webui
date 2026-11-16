@@ -24,7 +24,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import { createRequire } from 'node:module';
 import { fileURLToPath } from 'node:url';
-import { initialiseStorageSecurity } from './storageSecurity.js';
+import { forgetSearchState, initialiseStorageSecurity } from './storageSecurity.js';
 import { initialiseSyncRetention } from './syncRetention.js';
 
 // Required rather than imported, and at first use rather than at load.
@@ -60,6 +60,10 @@ const SCHEMA = `
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
 PRAGMA busy_timeout = 5000;
+-- The write-ahead log is reused, never shrunk, so without a limit it stays the
+-- size of the largest transaction it ever held: half a gigabyte beside the
+-- database, after one large sweep. Past this it is cut back at a checkpoint.
+PRAGMA journal_size_limit = 67108864;
 
 CREATE TABLE IF NOT EXISTS users (
   id           TEXT PRIMARY KEY,
@@ -161,6 +165,10 @@ CREATE TABLE IF NOT EXISTS record_history (
   updated_at INTEGER NOT NULL,
   deleted    INTEGER NOT NULL,
   payload    TEXT,
+  -- What the payload holds, so that maintenance does not have to decrypt it to
+  -- find out: 0 not looked at, 1 no blob marker, 2 blob markers. See
+  -- server/recordHistory.js.
+  packed     INTEGER NOT NULL DEFAULT 0,
   CHECK (
     (deleted = 1 AND payload IS NULL)
     OR
@@ -412,6 +420,10 @@ export const database = () => {
   // New-device confirmation; see server/devices.js.
   addColumn('sessions', 'pending', 'INTEGER NOT NULL DEFAULT 0');
   addColumn('sessions', 'device_id', "TEXT NOT NULL DEFAULT ''");
+  // What a history row holds, without decrypting it; see server/recordHistory.js.
+  // The index is only the rows maintenance still has a reason to open.
+  addColumn('record_history', 'packed', 'INTEGER NOT NULL DEFAULT 0');
+  db.exec('CREATE INDEX IF NOT EXISTS record_history_blob_state ON record_history (packed) WHERE packed <> 1');
   migrateRecordIntegrity();
   runMigrations();
   importLegacyJson();
@@ -438,6 +450,9 @@ export const transaction = (fn) => {
     return result;
   } catch (e) {
     try { handle.exec('ROLLBACK'); } catch (rollbackError) { /* already unwound */ }
+    // What was remembered about the search index describes writes that are
+    // now undone; see webui_search_delta in storageSecurity.js.
+    forgetSearchState();
     throw e;
   }
 };
