@@ -11571,3 +11571,17 @@ body .main-header .header-tools > .model-selector-container:not(.header-secondar
   .main-header .header-tools .header-search:not(.is-open),
   .main-header .header-tools .header-search.is-open { display: flex !important; flex: 1 1 auto !important; min-width: 0 !important; width: auto !important; max-width: none !important; height: 34px !important; }
 }
+/* ==== Phone: system monitor on the left, search folded ====
+   With the header model picker gone the free room goes to the system
+   monitor (bars only, values in its tooltip) right after the menu button.
+   Search is the magnifier again; opened, its field takes the monitor's place. */
+@container mainpane (max-width: 599px) {
+  .main-header .header-tools > .sys-strip.in-header { display: inline-flex !important; order: -1 !important; align-items: center; flex: 1 1 auto !important; min-width: 0 !important; height: 34px; gap: 6px; padding: 0 8px; overflow: hidden !important; border-radius: 10px; justify-content: flex-start; }
+  .main-header .header-tools > .sys-strip.in-header .sys-chip { display: inline-flex !important; flex-shrink: 1; min-width: 0; }
+  .main-header .header-tools > .sys-strip.in-header .sys-chip-track { display: block !important; width: 14px; }
+  .main-header .header-tools > .sys-strip.in-header .sys-chip-value { display: none !important; }
+  .main-header .header-tools > .icon-btn.bordered.header-compact-only { display: inline-flex !important; flex: none !important; order: 0 !important; }
+  .main-header .header-tools .header-search:not(.is-open) { display: none !important; }
+  .main-header .header-tools .header-search.is-open { display: flex !important; flex: 1 1 auto !important; min-width: 0 !important; }
+  .main-header .header-tools:has(.header-search.is-open) > .sys-strip.in-header { display: none !important; }
+}
