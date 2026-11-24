@@ -11644,9 +11644,23 @@ body .main-header .header-tools > .model-selector-container:not(.header-secondar
   body .main-header .header-tools > .icon-btn.bordered.header-compact-only { display: none !important; margin-left: 0 !important; }
   body .main-header .header-tools .header-search,
   body .main-header .header-tools .header-search:not(.is-open) { display: flex !important; flex: 1 1 0 !important; min-width: 0 !important; width: auto !important; max-width: none !important; height: 34px !important; }
-  body .main-header .header-tools:has(.header-search.is-open) > .sys-strip.in-header { display: inline-flex !important; }
 }
 @container mainpane (max-width: 419px) {
   body .main-header .header-tools > .icon-btn.bordered.header-compact-only { margin-left: 0 !important; }
   body .main-header .header-tools > .sys-strip.in-header { flex: 1 1 auto !important; justify-content: space-evenly !important; }
+}
+/* ==== Narrow header: typing gets the whole row ====
+   The field next to the monitor and badge was too short once the 0/0
+   counter and arrows appeared, so the typed text was hidden. While the
+   field is focused or holds a query, the monitor and usage badge step
+   aside and the field takes their room. */
+@container mainpane (max-width: 599px) {
+  body .main-header .header-tools:has(.header-search:focus-within) > .sys-strip.in-header,
+  body .main-header .header-tools:has(.header-search input:not(:placeholder-shown)) > .sys-strip.in-header,
+  body .main-header .header-tools:has(.header-search:focus-within) > .cli-limit-badge,
+  body .main-header .header-tools:has(.header-search input:not(:placeholder-shown)) > .cli-limit-badge { display: none !important; }
+  body .main-header .header-tools .header-search:focus-within,
+  body .main-header .header-tools .header-search:has(input:not(:placeholder-shown)) { display: flex !important; flex: 1 1 auto !important; min-width: 0 !important; }
+  body .main-header .header-search input { flex: 1 1 auto; min-width: 60px !important; }
+  body .main-header .header-search .search-nav { flex: none; }
 }
