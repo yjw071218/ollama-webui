@@ -74,7 +74,7 @@ const Column = ({ run, onCopy, copied }) => {
         {thinking && showThinking && <pre className="compare-thinking">{thinking}</pre>}
 
         {answer
-          ? <div className="markdown-body"><ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkFriendly]}>{answer}</ReactMarkdown></div>
+          ? <div className="markdown-body"><ReactMarkdown remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkCjkFriendly]}>{answer}</ReactMarkdown></div>
           : run.status === 'running'
             ? <div className="stream-dots"><span /><span /><span /></div>
             : !run.error && <div className="compare-empty">{t('compare.noOutput')}</div>}
@@ -428,7 +428,7 @@ export const ModelCompare = ({ models, defaultPrompt, systemPrompt, options, lan
             {consensus?.content
               ? (
                 <div className="markdown-body">
-                  <ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkFriendly]}>{consensus.content}</ReactMarkdown>
+                  <ReactMarkdown remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkCjkFriendly]}>{consensus.content}</ReactMarkdown>
                 </div>
               )
               : consensus?.status === 'running'

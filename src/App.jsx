@@ -1279,7 +1279,7 @@ const MarkdownCodeBlock = memo(({ className, children, onOpenArtifact, ...props 
    streamed token, a scroll button appearing -- parsed every answer in the
    chat again with remark/rehype/KaTeX, and remounted each code block because
    `components` was a new object each time. On a phone that was the lag. */
-const ANSWER_REMARK = [remarkGfm, remarkCjkFriendly, remarkMath, remarkTableBreaks];
+const ANSWER_REMARK = [[remarkGfm, { singleTilde: false }], remarkCjkFriendly, remarkMath, remarkTableBreaks];
 const isLocalAnswerPath = value => /^(?:[a-z]:[\\/]|file:\/\/)/i.test(value || '') || /^\/(?!api\/)[^?#]+\.(?:pdf|pptx?|odp|docx?|odt|rtf|txt|md|tex|xlsx?|ods|csv|tsv|hwpx?|html?|svg|png|jpe?g|webp|json|zip)(?::\d+)?$/i.test(value || '');
 const answerUrlTransform = (url, key) => key === 'href' && isLocalAnswerPath(url) ? url : defaultUrlTransform(url);
 const AnswerLink = ({ node, ...props }) => {

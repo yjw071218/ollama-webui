@@ -288,7 +288,7 @@ export const AgentActivity = ({ text, live = false, markdownProps = {}, stepsOnl
         )
         : (
           <div key={n} className="agent-prose">
-            <ReactMarkdown remarkPlugins={[remarkGfm, remarkCjkFriendly]} {...markdownProps}>{group.text}</ReactMarkdown>
+            <ReactMarkdown remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkCjkFriendly]} {...markdownProps}>{group.text}</ReactMarkdown>
           </div>
         )))}
     </div>

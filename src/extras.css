@@ -11540,3 +11540,34 @@ body .main-header .header-tools > .model-selector-container:not(.header-secondar
   font-size: 12px; cursor: pointer; opacity: 0.7;
 }
 .sidebar-more:hover { opacity: 1; }
+
+/* ==== Phone (<380px of column): header stays one row ====
+   The single-row rules above start at 380px, so on phones the tools wrapped
+   and the limit badge, palette and theme buttons fell onto a second line.
+   Here the search is the magnifier, the picker takes the free room, the
+   badge shows only its percentage and secondary buttons give way. */
+@container mainpane (max-width: 379px) {
+  .main-header { flex-wrap: nowrap !important; align-items: center !important; height: 52px !important; min-height: 52px !important; padding-block: 0 !important; gap: 4px !important; }
+  .main-header > .toggle-sidebar { align-self: center !important; min-height: 0 !important; flex: none !important; }
+  .main-header .header-tools { display: flex !important; flex: 1 1 auto !important; min-width: 0 !important; flex-wrap: nowrap !important; align-items: center !important; justify-content: flex-start !important; gap: 4px !important; }
+  .main-header .header-tools > .icon-btn.bordered.header-compact-only { display: inline-flex !important; flex: none !important; }
+  .main-header .header-tools .header-search:not(.is-open) { display: none !important; }
+  .main-header .header-tools .header-search.is-open { flex: 1 1 auto !important; min-width: 0 !important; }
+  .main-header .header-tools > .model-selector-container:not(.header-secondary) { flex: 1 1 auto !important; min-width: 0 !important; max-width: none !important; }
+  .main-header .header-tools > .model-selector-container > .dropdown-trigger { width: 100% !important; min-width: 0 !important; }
+  .main-header .header-tools > .model-selector-container .model-name { max-width: none !important; min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .main-header .header-tools .header-secondary:not(.cli-limit-badge) { display: none !important; }
+  .main-header .cli-limit-badge > .dropdown-trigger { padding: 0 8px !important; gap: 4px !important; white-space: nowrap; }
+  .main-header .cli-limit-window { display: none !important; }
+  .main-header .cli-limit-text { max-width: none !important; white-space: nowrap; }
+}
+/* ==== Phone: no model picker in the header ====
+   The composer already has its own model picker, so on phone widths the
+   header one is hidden and the search box takes the free room instead. */
+@container mainpane (max-width: 599px) {
+  .main-header .header-tools > .model-selector-container:not(.header-secondary):not(.cli-limit-badge) { display: none !important; }
+  .main-header .header-tools > .icon-btn.bordered.header-compact-only { display: none !important; }
+  .main-header .header-tools .header-search,
+  .main-header .header-tools .header-search:not(.is-open),
+  .main-header .header-tools .header-search.is-open { display: flex !important; flex: 1 1 auto !important; min-width: 0 !important; width: auto !important; max-width: none !important; height: 34px !important; }
+}

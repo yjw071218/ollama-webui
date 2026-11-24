@@ -42,7 +42,7 @@ const Bubble = ({ message, rich }) => (
       {message.role === 'assistant' ? (
         <div className="markdown-body">
           <ReactMarkdown
-            remarkPlugins={[remarkGfm, remarkCjkFriendly, remarkMath]}
+            remarkPlugins={[[remarkGfm, { singleTilde: false }], remarkCjkFriendly, remarkMath]}
             rehypePlugins={rich}
           >
             {message.content}

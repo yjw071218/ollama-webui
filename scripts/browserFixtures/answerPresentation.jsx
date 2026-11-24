@@ -16,7 +16,7 @@ const graphic={title:'자료 비교 · 예시 데이터',blocks:[
  {type:'panel',title:'처리 결과',blocks:[{type:'stats',items:[{label:'전체',value:100},{label:'유지',value:25}]},{type:'progress',items:[{label:'유지',value:25},{label:'기타',value:75}]}],note:'시각 검증을 위한 가상 데이터입니다.'},
  {type:'chart',chart:{type:'bar',labels:['A','B'],data:[1,4],title:'예시 비교'}},
 ],sources:[{title:'출처 예시',url:'https://example.org'}]};
-window.presentationTest={render:()=>root.render(<I18nProvider><InfoBlocks source={JSON.stringify(graphic)}/><ReactMarkdown remarkPlugins={[remarkGfm,remarkTableBreaks]}>{'| 구분 | 설명 |\n|---|---|\n|줄바꿈|첫 줄<br>둘째 줄<BR />셋째 줄|\n|코드|`<br>`|'}</ReactMarkdown><ChatOfficeCard source={JSON.stringify({format:'pptx',title:'다음 장을 만드는 이야기',slides:[{title:'생각을\n경험으로 바꾸다',body:'프로젝트의 문제와 해결을 중심으로',kicker:'PORTFOLIO · 2026',layout:'title',theme:'forest'}]})}/></I18nProvider>),malformed:()=>root.render(<InfoBlocks source={'{"type":"stats","items":'}/>)};
+window.presentationTest={render:()=>root.render(<I18nProvider><InfoBlocks source={JSON.stringify(graphic)}/><ReactMarkdown remarkPlugins={[[remarkGfm, { singleTilde: false }],remarkTableBreaks]}>{'| 구분 | 설명 |\n|---|---|\n|줄바꿈|첫 줄<br>둘째 줄<BR />셋째 줄|\n|코드|`<br>`|'}</ReactMarkdown><ChatOfficeCard source={JSON.stringify({format:'pptx',title:'다음 장을 만드는 이야기',slides:[{title:'생각을\n경험으로 바꾸다',body:'프로젝트의 문제와 해결을 중심으로',kicker:'PORTFOLIO · 2026',layout:'title',theme:'forest'}]})}/></I18nProvider>),malformed:()=>root.render(<InfoBlocks source={'{"type":"stats","items":'}/>)};
 window.presentationTest.render();
 
 window.presentationTest.design=()=>root.render(<I18nProvider><ChatOfficeCard source={JSON.stringify({format:'pptx',title:'생각을 경험으로 바꾸다',slides:[{title:'생각을 경험으로 바꾸다',layout:'freeform',theme:'paper',elements:[
