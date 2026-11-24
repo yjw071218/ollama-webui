@@ -1,7 +1,7 @@
 {
   "name": "ollama-webui",
   "private": true,
-  "version": "2.0.19",
+  "version": "2.0.20",
   "type": "module",
   "scripts": {
     "office:setup": "powershell.exe -NoProfile -ExecutionPolicy Bypass -File scripts/setup-office-runtime.ps1",

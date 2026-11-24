@@ -11635,3 +11635,18 @@ body .main-header .header-tools > .model-selector-container:not(.header-secondar
   body .main-header .header-tools > .icon-btn.bordered.header-compact-only { margin-left: auto !important; }
   body .main-header .header-tools:has(.header-search.is-open) > .icon-btn.bordered.header-compact-only { margin-left: 0 !important; }
 }
+/* ==== No empty gap in the narrow header (final) ====
+   Right-aligning the buttons only moved the gap between the monitor and
+   the magnifier. From 420px of column the search field itself fills that
+   room; below it the magnifier stays and the monitor spreads its meters
+   over the free width instead of leaving it blank. */
+@container mainpane (min-width: 420px) and (max-width: 599px) {
+  body .main-header .header-tools > .icon-btn.bordered.header-compact-only { display: none !important; margin-left: 0 !important; }
+  body .main-header .header-tools .header-search,
+  body .main-header .header-tools .header-search:not(.is-open) { display: flex !important; flex: 1 1 0 !important; min-width: 0 !important; width: auto !important; max-width: none !important; height: 34px !important; }
+  body .main-header .header-tools:has(.header-search.is-open) > .sys-strip.in-header { display: inline-flex !important; }
+}
+@container mainpane (max-width: 419px) {
+  body .main-header .header-tools > .icon-btn.bordered.header-compact-only { margin-left: 0 !important; }
+  body .main-header .header-tools > .sys-strip.in-header { flex: 1 1 auto !important; justify-content: space-evenly !important; }
+}
