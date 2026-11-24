@@ -11626,3 +11626,12 @@ body .main-header .header-tools > .model-selector-container:not(.header-secondar
 @container mainpane (max-width: 399px) {
   body .main-header .header-tools:has(.cli-limit-badge) > .sys-strip.in-header .sys-chip.sys-chip--vram { display: none !important; }
 }
+/* ==== Phone / tablet split: no gap on the right ====
+   The monitor is as wide as its meters now, so the buttons after it stopped
+   short and left the right end of the header empty. The monitor stays on
+   the left and the rest (search, usage, palette, theme) sits at the right. */
+@container mainpane (max-width: 599px) {
+  body .main-header .header-tools { justify-content: flex-start !important; }
+  body .main-header .header-tools > .icon-btn.bordered.header-compact-only { margin-left: auto !important; }
+  body .main-header .header-tools:has(.header-search.is-open) > .icon-btn.bordered.header-compact-only { margin-left: 0 !important; }
+}
