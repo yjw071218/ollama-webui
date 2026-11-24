@@ -11590,20 +11590,39 @@ body .main-header .header-tools > .model-selector-container:not(.header-secondar
    panel open) the GPU-only pill shrank to its text. 34px like its neighbours. */
 .main-header .header-tools > .sys-strip.in-header { height: 34px !important; box-sizing: border-box; align-self: center !important; border-radius: 10px; }
 
-/* ==== Phone: the monitor uses the room it is given ====
-   The header model picker is gone on phones, so the GPU-only rule (made to
-   save room for it) left a long empty pill. Now every meter shows; with no
-   usage badge (local model) each also shows its value, and with a badge
-   (CLI model) they are bars only so the badge still fits. */
+/* ==== Phone: meters by width, never overlapping ====
+   As on the PC, what the monitor shows depends on the room left. The pill
+   is as wide as its meters (no empty stretch), clips instead of pushing the
+   buttons, and meters drop by priority: GPU > VRAM > CPU > RAM (VM never).
+   With no usage badge (local model) each meter shows its value; with the
+   badge (CLI model) bars only, and fewer of them. */
 @container mainpane (max-width: 599px) {
-  body .main-header .header-tools > .sys-strip.in-header { flex: 1 1 auto !important; justify-content: space-between !important; gap: 8px !important; padding: 0 10px !important; }
-  body .main-header .header-tools > .sys-strip.in-header .sys-chip.sys-chip { display: inline-flex !important; align-items: center; gap: 4px; flex: 0 1 auto; min-width: 0; }
+  body .main-header .header-tools > .sys-strip.in-header { flex: 0 1 auto !important; min-width: 0 !important; overflow: hidden !important; justify-content: flex-start !important; gap: 8px !important; padding: 0 10px !important; }
+  body .main-header .header-tools > .sys-strip.in-header .sys-chip.sys-chip { display: inline-flex !important; align-items: center; gap: 4px; flex: none; }
   body .main-header .header-tools > .sys-strip.in-header .sys-chip-label { font-size: .68rem; }
   body .main-header .header-tools > .sys-strip.in-header .sys-chip-track { display: block !important; width: 16px !important; }
   body .main-header .header-tools > .sys-strip.in-header .sys-chip-value { display: none !important; font-size: .7rem; font-variant-numeric: tabular-nums; }
   body .main-header .header-tools:not(:has(.cli-limit-badge)) > .sys-strip.in-header .sys-chip-value { display: inline !important; }
   body .main-header .header-tools:not(:has(.cli-limit-badge)) > .sys-strip.in-header .sys-chip-track { display: none !important; }
-}
-@container mainpane (max-width: 359px) {
   body .main-header .header-tools > .sys-strip.in-header .sys-chip.sys-chip--commit { display: none !important; }
+}
+/* Local model (values): all four from 480px, three, two, then GPU alone. */
+@container mainpane (max-width: 479px) {
+  body .main-header .header-tools:not(:has(.cli-limit-badge)) > .sys-strip.in-header .sys-chip.sys-chip--ram { display: none !important; }
+}
+@container mainpane (max-width: 409px) {
+  body .main-header .header-tools:not(:has(.cli-limit-badge)) > .sys-strip.in-header .sys-chip.sys-chip--cpu { display: none !important; }
+}
+@container mainpane (max-width: 339px) {
+  body .main-header .header-tools:not(:has(.cli-limit-badge)) > .sys-strip.in-header .sys-chip.sys-chip--vram { display: none !important; }
+}
+/* CLI model (bars, badge beside): three from 520px, two from 400px, else GPU. */
+@container mainpane (max-width: 599px) {
+  body .main-header .header-tools:has(.cli-limit-badge) > .sys-strip.in-header .sys-chip.sys-chip--ram { display: none !important; }
+}
+@container mainpane (max-width: 519px) {
+  body .main-header .header-tools:has(.cli-limit-badge) > .sys-strip.in-header .sys-chip.sys-chip--cpu { display: none !important; }
+}
+@container mainpane (max-width: 399px) {
+  body .main-header .header-tools:has(.cli-limit-badge) > .sys-strip.in-header .sys-chip.sys-chip--vram { display: none !important; }
 }
